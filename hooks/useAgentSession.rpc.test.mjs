@@ -74,7 +74,7 @@ function jsonResponse(status, value) {
 const world = {
   esInstances: [],
   calls: [],
-  holds: [], // { match(method, url), produce: () => Promise<{ status, value }> }
+  holds: [], // { match(method, url, body), produce: () => Promise<{ status, value }> }
   sessions: new Map(), // sid -> { leafId, messages, entryIds }
   agents: new Map(), // sid -> { running, state }
   subagentSnapshots: new Map(), // sid -> SubagentSnapshotLike[]
@@ -88,10 +88,11 @@ const world = {
 async function fetchStub(url, init = {}) {
   const method = (init.method ?? "GET").toUpperCase();
   const u = String(url);
-  world.calls.push({ method, url: u, body: typeof init.body === "string" ? safeParse(init.body) : null });
+  const body = typeof init.body === "string" ? safeParse(init.body) : null;
+  world.calls.push({ method, url: u, body });
 
   for (let i = 0; i < world.holds.length; i++) {
-    if (world.holds[i].match(method, u)) {
+    if (world.holds[i].match(method, u, body)) {
       const h = world.holds.splice(i, 1)[0];
       const { status = 200, value } = await h.produce();
       return jsonResponse(status, value);
@@ -150,7 +151,6 @@ async function fetchStub(url, init = {}) {
       return jsonResponse(200, { running: a.running, state: a.state });
     }
     if (method === "POST") {
-      const body = typeof init.body === "string" ? safeParse(init.body) : null;
       if (body?.type === "get_subagents") {
         return jsonResponse(200, { success: true, data: { subagents: world.subagentSnapshots.get(sid) ?? [] } });
       }
@@ -236,11 +236,25 @@ function sessionInfo(sid) {
   };
 }
 
+<<<<<<< HEAD
 async function mountSession(sid, onAgentEnd, options = {}) {
   const session = sid === null ? null : sessionInfo(sid);
   const { result, unmount } = renderHook(() => useAgentSession({
     session, newSessionCwd: null, ...(onAgentEnd ? { onAgentEnd } : {}), ...options,
   }));
+=======
+async function mountSession(sid, onAgentEnd, strictMode = false) {
+  let latest = null;
+  function Chat({ session }) {
+    latest = useAgentSession({ session, newSessionCwd: null, ...(onAgentEnd ? { onAgentEnd } : {}) });
+    return null;
+  }
+  let renderer;
+  await act(async () => {
+    const chat = React.createElement(Chat, { session: sessionInfo(sid) });
+    renderer = TestRenderer.create(strictMode ? React.createElement(React.StrictMode, null, chat) : chat);
+  });
+>>>>>>> 4c6391c (fix: promote queued follow-ups through native RPC)
   await settle(); // hydration: loadSession + /state + models + subagents
   return {
     unmount,
@@ -326,7 +340,182 @@ async function startRun(sid, message) {
 // Tests
 // ---------------------------------------------------------------------------
 
+<<<<<<< HEAD
 test("full run over fake SSE: optimistic bubble, coalesced streaming, terminal reload", async () => {
+=======
+test("queued promotion waits for native acknowledgement and moves only the first matching follow-up", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("promotion", [userMsg("u0", "q")]);
+  const w = await mountSession("promotion", undefined, true);
+  await act(async () => {
+    await w.latest.handleSteer("existing steer");
+    await w.latest.handleFollowUp("other");
+    await w.latest.handleFollowUp("target");
+    await w.latest.handleFollowUp("target");
+  });
+  const before = { steering: ["existing steer"], followUp: ["other", "target", "target"] };
+  let release;
+  const acknowledgement = new Promise((resolve) => { release = resolve; });
+  world.holds.push({
+    match: (method, url, body) => method === "POST" && url === "/api/agent/promotion" && body?.type === "promote_queued_message",
+    produce: () => acknowledgement,
+  });
+  const callsBefore = world.calls.length;
+  let promotion;
+  await act(async () => { promotion = w.latest.promoteQueuedToSteer("target"); });
+  assert.deepEqual(w.latest.queuedMessages, before, "pending RPC must not relabel the chip");
+  assert.deepEqual(world.calls.slice(callsBefore), [{
+    method: "POST", url: "/api/agent/promotion", body: { type: "promote_queued_message", message: "target" },
+  }], "promotion must not enqueue a separate steer or follow-up");
+  await act(async () => {
+    release({ value: { success: true, data: { promoted: true } } });
+    await promotion;
+  });
+  assert.deepEqual(w.latest.queuedMessages, {
+    steering: ["existing steer", "target"], followUp: ["other", "target"],
+  });
+  assert.deepEqual(w.latest.notices, []);
+});
+
+test("queued promotion preserves the follow-up and reports native refusal or rejection", async (t) => {
+  for (const outcome of [
+    { name: "not-found", response: { value: { success: true, data: { promoted: false } } }, noticeType: "warning" },
+    { name: "unsupported", response: { status: 400, value: { error: "Unknown RPC command: promote_queued_message" } }, noticeType: "error" },
+  ]) {
+    await t.test(outcome.name, async (t) => {
+      t.after(unmountAll);
+      resetWorld();
+      primeSession(outcome.name, [userMsg("u0", "q")]);
+      const w = await mountSession(outcome.name);
+      await act(async () => { await w.latest.handleFollowUp("target"); });
+      let release;
+      const acknowledgement = new Promise((resolve) => { release = resolve; });
+      world.holds.push({
+        match: (method, _url, body) => method === "POST" && body?.type === "promote_queued_message",
+        produce: () => acknowledgement,
+      });
+      let promotion;
+      await act(async () => { promotion = w.latest.promoteQueuedToSteer("target"); });
+      assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: ["target"] });
+      await act(async () => {
+        release(outcome.response);
+        await promotion;
+      });
+      assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: ["target"] });
+      assert.equal(w.latest.notices.length, 1);
+      assert.equal(w.latest.notices[0].type, outcome.noticeType);
+      if (outcome.response.value.error) {
+        assert.equal(w.latest.notices[0].message, outcome.response.value.error);
+      }
+
+      // A settled failure releases the overlap guard so a deliberate retry works.
+      world.holds.push({
+        match: (method, _url, body) => method === "POST" && body?.type === "promote_queued_message",
+        produce: async () => ({ value: { success: true, data: { promoted: true } } }),
+      });
+      await act(async () => { await w.latest.promoteQueuedToSteer("target"); });
+      assert.deepEqual(w.latest.queuedMessages, { steering: ["target"], followUp: [] });
+    });
+  }
+});
+
+test("overlapping same-text promotion clicks send one command and promote one occurrence", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("double-promotion", [userMsg("u0", "q")]);
+  const w = await mountSession("double-promotion");
+  await act(async () => {
+    await w.latest.handleFollowUp("target");
+    await w.latest.handleFollowUp("target");
+  });
+  let release;
+  const acknowledgement = new Promise((resolve) => { release = resolve; });
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "promote_queued_message",
+    produce: () => acknowledgement,
+  });
+  let first;
+  let second;
+  await act(async () => {
+    first = w.latest.promoteQueuedToSteer("target");
+    second = w.latest.promoteQueuedToSteer("target");
+  });
+  assert.equal(world.calls.filter((call) => call.body?.type === "promote_queued_message").length, 1);
+  assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: ["target", "target"] });
+  await act(async () => {
+    release({ value: { success: true, data: { promoted: true } } });
+    await Promise.all([first, second]);
+  });
+  assert.deepEqual(w.latest.queuedMessages, { steering: ["target"], followUp: ["target"] });
+});
+
+test("delivery before promotion acknowledgement does not relabel the next duplicate or resurrect the delivered chip", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("delivered-promotion", [userMsg("u0", "q")]);
+  const { w, es } = await startRun(t, "delivered-promotion", "run");
+  await act(async () => {
+    es.emit({ type: "agent_start" });
+    await w.latest.handleFollowUp("target");
+    await w.latest.handleFollowUp("target");
+  });
+  let release;
+  const acknowledgement = new Promise((resolve) => { release = resolve; });
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "promote_queued_message",
+    produce: () => acknowledgement,
+  });
+  let promotion;
+  await act(async () => { promotion = w.latest.promoteQueuedToSteer("target"); });
+  await act(async () => { es.emit({ type: "message_end", message: userMsg("delivered", "target") }); });
+  assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: ["target"] });
+  assert.equal(w.latest.messages.filter((message) => message.role === "user" && message.content === "target").length, 1);
+  await act(async () => {
+    release({ value: { success: true, data: { promoted: true } } });
+    await promotion;
+  });
+  assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: ["target"] });
+});
+
+test("promotion acknowledgements after navigation cannot change the newly mounted session", async (t) => {
+  for (const response of [
+    { value: { success: true, data: { promoted: true } } },
+    { status: 400, value: { error: "Native promotion failed" } },
+  ]) {
+    await t.test(response.status ? "error" : "success", async (t) => {
+      t.after(unmountAll);
+      resetWorld();
+      primeSession("old-promotion", [userMsg("u0", "old")]);
+      primeSession("new-promotion", [userMsg("u1", "new")]);
+      const old = await mountSession("old-promotion");
+      await act(async () => { await old.latest.handleFollowUp("target"); });
+      let release;
+      const acknowledgement = new Promise((resolve) => { release = resolve; });
+      world.holds.push({
+        match: (method, _url, body) => method === "POST" && body?.type === "promote_queued_message",
+        produce: () => acknowledgement,
+      });
+      let promotion;
+      await act(async () => { promotion = old.latest.promoteQueuedToSteer("target"); });
+      await act(async () => { old.renderer.unmount(); });
+      activeRenderers.delete(old.renderer);
+      const current = await mountSession("new-promotion");
+      await act(async () => { await current.latest.handleFollowUp("target"); });
+      await act(async () => {
+        release(response);
+        await promotion;
+      });
+      assert.deepEqual(current.latest.queuedMessages, { steering: [], followUp: ["target"] });
+      assert.deepEqual(current.latest.notices, []);
+      assert.equal(world.calls.some((call) => call.url === "/api/agent/new-promotion" && call.body?.type === "promote_queued_message"), false);
+    });
+  }
+});
+
+test("full run over fake SSE: optimistic bubble, coalesced streaming, terminal reload", async (t) => {
+  t.after(unmountAll);
+>>>>>>> 4c6391c (fix: promote queued follow-ups through native RPC)
   resetWorld();
   primeSession("s1", [userMsg("u0", "loaded question")]);
   const { w, es } = await startRun("s1", "hello agent");
