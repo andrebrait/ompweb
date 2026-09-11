@@ -8,6 +8,7 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 ### Fixes & Improvements
 
+- Center the workspace/session breadcrumb over the conversation column, and keep mobile generation speed and file-panel controls clear of the panel toggle. Explorer actions now have a separate touch-sized toolbar on mobile.
 - Restore the complete deployed patch stack, including ANSI-colored extension widgets and statuses, after a deployment snapshot used an older source baseline.
 - Keep session action menus visible on touch devices beside fixed-width, right-aligned timestamps, with larger tap targets.
 - Keep workspace header action menus visible on touch devices without first selecting or expanding the workspace.
