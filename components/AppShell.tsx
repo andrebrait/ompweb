@@ -1868,8 +1868,8 @@ export function AppShell() {
               session={selectedSession}
               newSessionCwd={effectiveNewSessionCwd}
               newSessionWorkspace={effectiveNewSessionCwd && (
-                <div className="mb-2 flex min-w-0 flex-col gap-1">
-                  <label htmlFor="new-session-workspace" className="sr-only">
+                <div className="mb-4 flex min-w-0 flex-col gap-2">
+                  <label htmlFor="new-session-workspace" style={{ fontSize: 13, fontWeight: 500, color: "var(--text-muted)" }}>
                     {t("settingsConfig.chipWorkspace")}
                   </label>
                   <select
