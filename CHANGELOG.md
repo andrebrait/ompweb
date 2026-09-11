@@ -4,6 +4,14 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- Choose the destination workspace directly above the new-session composer. The selector stays in sync with the sidebar, shows workspace names and the exact destination path, and preserves the selected worktree.
+
+---
+
 ## [v0.3.6] - 2026-08-28
 
 This release adds workspace renaming and reordering, improved context compaction views, prompt queue expansion, and clear network startup banners.
