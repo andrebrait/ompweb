@@ -4,6 +4,14 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 ---
 
+## Unreleased
+
+### Fixes & Improvements
+
+- Keep long custom-provider URLs and hostnames inside their cards, with provider actions wrapping on narrow screens.
+
+---
+
 ## [v0.3.6] - 2026-08-28
 
 This release adds workspace renaming and reordering, improved context compaction views, prompt queue expansion, and clear network startup banners.
