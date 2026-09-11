@@ -4,6 +4,14 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 ---
 
+## Unreleased
+
+### Fixes & Improvements
+
+- Keep session action menus visible on touch devices beside fixed-width, right-aligned timestamps, with larger tap targets and titles using the remaining row width.
+
+---
+
 ## [v0.3.6] - 2026-08-28
 
 This release adds workspace renaming and reordering, improved context compaction views, prompt queue expansion, and clear network startup banners.
