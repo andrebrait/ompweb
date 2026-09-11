@@ -9,6 +9,56 @@ After the initial bootstrap release, publishing is performed by GitHub Actions
 with npm trusted publishing. No npm access token is stored in this repository
 or in GitHub secrets.
 
+## Downstream deployment branch
+
+The `andrebrait/ompweb` fork uses `deploy/integration` as the single source
+for patched deployments. Keep individual fixes on separate pull-request
+branches, then cherry-pick their reviewed commits onto this branch. Do not
+deploy a feature branch, a dirty working tree, or a manually combined source
+directory. The integration branch retains the upstream fixes and all local
+patches, including the PWA, queue, ANSI, sidebar, workspace, and provider fixes.
+
+### Refresh from upstream
+
+Use the dedicated integration worktree with a clean working tree:
+
+```bash
+git fetch upstream main
+git fetch origin deploy/integration
+git merge --ff-only origin/deploy/integration
+git branch backup/deploy-integration-<unique-name>
+git rebase upstream/main
+```
+
+Git can drop patch-equivalent commits automatically. When upstream squashes
+or changes a patch, remove a local commit only after confirming upstream
+preserves its complete behavior. Never resolve an integration conflict by
+taking an entire old or new file without reviewing the other patches in it.
+Compare the rebased series with the backup, run the checks below, and push
+with `git push --force-with-lease origin deploy/integration`. Normal patch
+additions use a regular push. Keep the deployed release available for rollback
+throughout a rebase; rebasing a branch does not change the running release.
+
+### Build and deploy a committed snapshot
+
+Resolve `origin/deploy/integration` to its full commit SHA and create a fresh,
+detached build worktree at that exact commit. Run `npm ci`, `npm run build`,
+`npm run lint`, and `npm test` there, then package with
+`npm pack --ignore-scripts`. Never run the production build in a development
+worktree. Verify the affected UI in a browser before switching releases.
+
+Production provenance lives in `/opt/omp-deployment/current.json`: record the
+branch, full commit SHA, build ID, source worktree, release directory, and
+source-file checksum manifest. Refuse a deployment if its tracked source
+differs from that commit. Do not infer source provenance from a directory name.
+
+The web deployment has separate services: `ompweb-pwa.service` serves the
+frontend on port 30179; `ompweb-patched.service` owns live RPC sessions on
+port 30178. Frontend-only changes must not restart the RPC service or replace
+the native OMP binary. Retain previous hashed static assets for open tabs,
+back up the frontend service and deployment metadata, switch only the frontend,
+and verify the public page and API health. Keep the previous release for rollback.
+
 ## Bootstrap the first release
 
 `@kahme247/ompweb` is not registered on npm yet. npm exposes trusted-publisher settings
