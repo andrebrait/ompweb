@@ -9,6 +9,7 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 ### Fixes & Improvements
 
 - Keep long custom-provider URLs and hostnames inside their cards, with provider actions wrapping on narrow screens.
+- Keep provider navigation labels fully visible and wrap the Add Provider and Save controls inside narrow settings panels.
 
 ---
 
