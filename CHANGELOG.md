@@ -8,7 +8,7 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 ### Added
 
-- Choose the destination workspace directly above the new-session composer. The selector stays in sync with the sidebar, shows workspace names and the exact destination path, and preserves the selected worktree.
+- Choose the destination workspace directly above the new-session composer. The selector stays in sync with the sidebar, shows workspace names and the exact destination path, preserves the selected worktree, and opens the existing Add workspace dialog.
 
 ---
 
