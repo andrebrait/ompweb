@@ -11,7 +11,7 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 - Restore the complete deployed patch stack, including ANSI-colored extension widgets and statuses, after a deployment snapshot used an older source baseline.
 - Keep session action menus visible on touch devices beside fixed-width, right-aligned timestamps, with larger tap targets.
 - Keep workspace header action menus visible on touch devices without first selecting or expanding the workspace.
-- Allow choosing a workspace when creating a new session.
+- Choose the destination workspace directly above the new-session composer. The selector stays in sync with the sidebar, shows workspace names and the exact destination path, preserves the selected worktree, and opens the existing Add workspace dialog.
 - Keep long provider URLs, provider navigation, and Save controls inside narrow settings panels.
 - Hide the Steer action when the only queued message is already a steer, matching the expanded queue while keeping Edit and Delete available.
 - Keep the theme picker inside the mobile viewport by opening it to the right of its toolbar anchor.

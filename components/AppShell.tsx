@@ -102,6 +102,7 @@ export function AppShell() {
   // When user clicks +, we only store the cwd — no fake session id
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null);
   const [workspaceOptions, setWorkspaceOptions] = useState<{ projects: ManagedProject[]; selectedProject: string | null; cwd: string | null }>({ projects: [], selectedProject: null, cwd: null });
+  const [addProjectOpen, setAddProjectOpen] = useState(false);
   const handleWorkspaceOptionsChange = useCallback((projects: ManagedProject[], selectedProject: string | null, cwd: string | null) => {
     setWorkspaceOptions({ projects, selectedProject, cwd });
   }, []);
@@ -1388,6 +1389,8 @@ export function AppShell() {
       selectedCwd={selectedSession?.cwd ?? newSessionCwd ?? null}
       onCwdChange={handleCwdChange}
       onWorkspaceOptionsChange={handleWorkspaceOptionsChange}
+      addProjectOpen={addProjectOpen}
+      setAddProjectOpen={setAddProjectOpen}
       usageVisible={providerUsageVisible}
       settingsOpen={Boolean(settingsTab)}
       onOpenSettings={() => setSettingsTab((prev) => prev ? null : "general")}
@@ -1903,6 +1906,10 @@ export function AppShell() {
                     value={effectiveNewSessionCwd}
                     onChange={(event) => {
                       const cwd = event.target.value;
+                      if (!cwd) {
+                        setAddProjectOpen(true);
+                        return;
+                      }
                       if (cwd === effectiveNewSessionCwd) return;
                       suppressCwdRef.current = cwd;
                       setActiveCwd(cwd);
@@ -1923,6 +1930,7 @@ export function AppShell() {
                         </option>
                       );
                     })}
+                    <option value="">+ {t("projects.add")}</option>
                   </select>
                   <div id="new-session-workspace-path" style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-mono)", overflowWrap: "anywhere" }}>
                     {effectiveNewSessionCwd}
