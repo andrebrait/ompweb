@@ -2776,8 +2776,20 @@ html.dark .dropdown-surface :is(select, option) {
 }
 
 .shell-topbar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, min(400px, calc(100% - 480px))) minmax(0, 1fr);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+.shell-topbar-center {
+  position: absolute;
+  top: 4.5px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: clamp(0px, calc(100% - 480px), 400px);
+  pointer-events: none;
+}
+.shell-topbar-center > .shell-topbar-breadcrumb {
+  pointer-events: auto;
 }
 
 /* Hide only the breadcrumb when the sidebars leave too little title space. */
@@ -2788,10 +2800,6 @@ html.dark .dropdown-surface :is(select, option) {
 }
 
 @media (max-width: 960px) {
-  .shell-topbar {
-    display: flex;
-    justify-content: space-between;
-  }
   .shell-topbar-center {
     display: none !important;
   }
@@ -2799,23 +2807,16 @@ html.dark .dropdown-surface :is(select, option) {
 
 @media (max-width: 640px) {
   .shell-topbar {
-    height: auto !important;
-    min-height: 44px;
-    flex-wrap: wrap;
     gap: 0 4px !important;
     padding-right: 48px !important;
   }
   .shell-topbar-tools {
-    height: 44px !important;
     gap: 2px !important;
-    flex-shrink: 0;
   }
   .shell-topbar .shell-toolbar-divider {
     margin: 0;
   }
   .shell-topbar [data-topbar-right-group] {
-    height: auto !important;
-    margin-left: auto;
     padding: 0 0 4px !important;
   }
 }

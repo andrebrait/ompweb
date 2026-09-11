@@ -1593,14 +1593,14 @@ export function AppShell() {
           alignItems: "center",
           flexShrink: 0,
           borderBottom: "1px solid var(--border)",
-          height: isMobile ? 44 : 36,
+          minHeight: isMobile ? 44 : 36,
           background: "var(--bg-panel)",
           padding: isMobile ? "0 4px" : "0 8px",
-          gap: 8,
+          gap: "0 8px",
           minWidth: 0,
         }}>
           {/* Left Zone: Utility group (sidebar, theme, language) & session controls (history, branches, system) */}
-          <div className="shell-topbar-tools" style={{ display: "flex", alignItems: "center", gap: 4, height: "100%", minWidth: 0 }}>
+          <div className="shell-topbar-tools" style={{ display: "flex", alignItems: "center", gap: 4, height: isMobile ? 43 : 35, minWidth: 0, flexShrink: 0 }}>
             <button
               onClick={handleSidebarToggle}
               title={sidebarOpen ? t("appShell.hideSidebar") : t("appShell.showSidebar")}
@@ -1784,12 +1784,10 @@ export function AppShell() {
           <div
             data-topbar-right-group
             style={{
-              gridColumn: 3,
-              justifySelf: "end",
+              marginLeft: "auto",
               display: "flex",
               alignItems: "center",
               gap: 6,
-              height: "100%",
               paddingRight: rightPanelOpen ? 8 : 44,
               flexShrink: 0,
             }}
