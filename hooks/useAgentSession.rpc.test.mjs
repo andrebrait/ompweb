@@ -1,79 +1,15 @@
+import "../tests/setup-dom.mjs";
 import assert from "node:assert/strict";
-import test from "node:test";
-import { createRequire } from "node:module";
+import test, { afterEach, beforeEach } from "node:test";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
+import { act, cleanup, renderHook } from "@testing-library/react/pure.js";
 
 // useAgentSession is the chat state machine. These tests drive it through a
-// controllable fake EventSource + fetch router mounted via react-test-renderer
-// (TODO §5): connection, streaming, terminal events, late/duplicate frames,
+// controllable fake EventSource + fetch router mounted via React Testing Library:
+// connection, streaming, terminal events, late/duplicate frames,
 // reconnect, and unmount — not source-string checks.
 
-const require = createRequire(import.meta.url);
-const React = require("react");
-const { act } = React;
-const TestRenderer = require("react-test-renderer");
-
-// ---------------------------------------------------------------------------
-// Browser-global stubs (installed once; the hook guards most DOM access).
-// ---------------------------------------------------------------------------
-globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-const kvStore = new Map();
-globalThis.localStorage = {
-  getItem: (k) => kvStore.get(k) ?? null,
-  setItem: (k, v) => kvStore.set(k, String(v)),
-  removeItem: (k) => kvStore.delete(k),
-  clear: () => kvStore.clear(),
-};
-globalThis.sessionStorage = {
-  getItem: () => null,
-  setItem: () => {},
-  removeItem: () => {},
-};
-// Listeners are capturable so tests can fire visibilitychange/online.
-function makeEventTarget() {
-  const map = new Map();
-  return {
-    addEventListener: (type, fn) => {
-      if (!map.has(type)) map.set(type, []);
-      map.get(type).push(fn);
-    },
-    removeEventListener: (type, fn) => {
-      const list = map.get(type);
-      if (list) map.set(type, list.filter((f) => f !== fn));
-    },
-    fire: (type) => {
-      for (const fn of [...(map.get(type) ?? [])]) fn({ type });
-    },
-  };
-}
-const docTarget = makeEventTarget();
-const winTarget = makeEventTarget();
-globalThis.document = {
-  // hidden: the message-update coalescer then flushes on a 50ms timer instead
-  // of requestAnimationFrame, which is deterministic with real timers here.
-  hidden: true,
-  visibilityState: "visible",
-  title: "",
-  ...docTarget,
-};
-globalThis.window = {
-  ...winTarget,
-  open() {},
-  matchMedia: () => ({
-    matches: false,
-    addEventListener() {},
-    removeEventListener() {},
-    addListener() {},
-    removeListener() {},
-  }),
-};
-Object.defineProperty(globalThis, "navigator", {
-  value: { onLine: true, clipboard: undefined },
-  configurable: true,
-});
-globalThis.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
-globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
 
 // ---------------------------------------------------------------------------
 // Fake EventSource + fetch router
@@ -111,7 +47,6 @@ class FakeEventSource {
     this.readyState = FakeEventSource.CLOSED;
   }
 }
-globalThis.EventSource = FakeEventSource;
 
 function safeParse(text) {
   try {
@@ -184,7 +119,42 @@ async function fetchStub(url, init = {}) {
   return jsonResponse(404, {});
 }
 
-globalThis.fetch = fetchStub;
+// Keep real DOM event targets and storage; only browser state and network
+// boundaries need doubles. Hidden tabs use the coalescer's 50ms timer.
+let visibilityState = "hidden";
+const overrides = [
+  [globalThis, "EventSource", { value: FakeEventSource }],
+  [globalThis, "fetch", { value: fetchStub }],
+  [document, "hidden", { get: () => visibilityState === "hidden" }],
+  [document, "visibilityState", { get: () => visibilityState }],
+  [window, "matchMedia", {
+    value: (media) => Object.assign(new window.EventTarget(), { matches: false, media }),
+  }],
+].map(([target, key, replacement]) => ({
+  target, key, replacement, original: Object.getOwnPropertyDescriptor(target, key),
+}));
+
+beforeEach(() => {
+  visibilityState = "hidden";
+  localStorage.clear();
+  sessionStorage.clear();
+  for (const { target, key, replacement } of overrides) {
+    Object.defineProperty(target, key, { configurable: true, ...replacement });
+  }
+});
+
+afterEach(() => {
+  try {
+    cleanup();
+  } finally {
+    for (const { target, key, original } of overrides) {
+      if (original) Object.defineProperty(target, key, original);
+      else delete target[key];
+    }
+    localStorage.clear();
+    sessionStorage.clear();
+  }
+});
 
 // The hook chain includes components/ui/toast.tsx, whose JSX jiti cannot parse
 // in this environment and whose DOM toasts must never fire inside Node tests.
@@ -222,36 +192,17 @@ function sessionInfo(sid) {
 }
 
 async function mountSession(sid, onAgentEnd) {
-  let latest = null;
-  function Chat({ session }) {
-    latest = useAgentSession({ session, newSessionCwd: null, ...(onAgentEnd ? { onAgentEnd } : {}) });
-    return null;
-  }
-  let renderer;
-  await act(async () => {
-    renderer = TestRenderer.create(React.createElement(Chat, { session: sessionInfo(sid) }));
-  });
+  const session = sessionInfo(sid);
+  const { result, unmount } = renderHook(() => useAgentSession({
+    session, newSessionCwd: null, ...(onAgentEnd ? { onAgentEnd } : {}),
+  }));
   await settle(); // hydration: loadSession + /state + models + subagents
-  activeRenderers.add(renderer);
   return {
-    renderer,
+    unmount,
     get latest() {
-      return latest;
+      return result.current;
     },
   };
-}
-// Unmounted renderers must not leak intervals/timers that keep the test
-// process alive.
-const activeRenderers = new Set();
-function unmountAll() {
-  for (const r of [...activeRenderers]) {
-    try {
-      act(() => r.unmount());
-    } catch {
-      // already unmounted
-    }
-  }
-  activeRenderers.clear();
 }
 
 function lastEs() {
@@ -290,9 +241,8 @@ const assistantMsg = (id, text) => ({
 });
 
 /** Mount + hydrate, then send a prompt and open the stream. Returns the ES. */
-async function startRun(t, sid, message) {
+async function startRun(sid, message) {
   const w = await mountSession(sid);
-  if (t) t.after(unmountAll);
   assert.equal(w.latest.loading, false, "hydration must complete");
   assert.equal(w.latest.agentRunning, false);
 
@@ -310,18 +260,17 @@ async function startRun(t, sid, message) {
   });
   assert.equal(w.latest.agentRunning, true, "optimistic running state");
   assert.equal(callsTo("POST", "/api/agent/").some((c) => c.body?.type === "prompt" && c.body?.message === message), true, "prompt command must be sent");
-  return { w, es, renderer: w.renderer };
+  return { w, es };
 }
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-test("full run over fake SSE: optimistic bubble, coalesced streaming, terminal reload", async (t) => {
-  t.after(unmountAll);
+test("full run over fake SSE: optimistic bubble, coalesced streaming, terminal reload", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "loaded question")]);
-  const { w, es } = await startRun(t, "s1", "hello agent");
+  const { w, es } = await startRun("s1", "hello agent");
 
   // Run starts.
   await act(async () => {
@@ -377,11 +326,10 @@ test("full run over fake SSE: optimistic bubble, coalesced streaming, terminal r
   );
 });
 
-test("provider error on the assistant message is shown instead of ending silently", async (t) => {
-  t.after(unmountAll);
+test("provider error on the assistant message is shown instead of ending silently", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "q")]);
-  const { w, es } = await startRun(t, "s1", "q1");
+  const { w, es } = await startRun("s1", "q1");
 
   const providerError = "The provider rejected the request (HTTP 429)";
   await act(async () => {
@@ -404,17 +352,16 @@ test("provider error on the assistant message is shown instead of ending silentl
   assert.ok(w.latest.notices.some((notice) => notice.message === providerError), "the provider error must be visible");
 });
 
-test("a silent idle transition shows a fallback error instead of disappearing", async (t) => {
-  t.after(unmountAll);
+test("a silent idle transition shows a fallback error instead of disappearing", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "q")]);
-  const { w } = await startRun(t, "s1", "q1");
+  const { w } = await startRun("s1", "q1");
 
   // Simulate the SSE terminal frame being lost while the server has already
   // gone idle. The online recovery path must still explain the empty stop.
   world.agents.set("s1", { running: false, state: {} });
   await act(async () => {
-    winTarget.fire("online");
+    window.dispatchEvent(new Event("online"));
     await sleep(60);
   });
   await settle();
@@ -424,11 +371,10 @@ test("a silent idle transition shows a fallback error instead of disappearing", 
 });
 
 for (const completion of ["visibilitychange", "agent_end"]) {
-  test(`a saved response missed by SSE is recovered on ${completion} without a failure notice`, async (t) => {
-    t.after(unmountAll);
+  test(`a saved response missed by SSE is recovered on ${completion} without a failure notice`, async () => {
     resetWorld();
     primeSession("s1", [userMsg("u0", "old question")]);
-    const { w, es } = await startRun(t, "s1", "new question");
+    const { w, es } = await startRun("s1", "new question");
     primeSession("s1", [
       userMsg("u0", "old question"),
       userMsg("u1", "new question"),
@@ -436,7 +382,10 @@ for (const completion of ["visibilitychange", "agent_end"]) {
     ]);
     await act(async () => {
       if (completion === "agent_end") es.emit({ type: "agent_end", isTerminal: true });
-      else docTarget.fire("visibilitychange");
+      else {
+        visibilityState = "visible";
+        document.dispatchEvent(new Event("visibilitychange"));
+      }
       await sleep(60);
     });
     await settle();
@@ -447,18 +396,18 @@ for (const completion of ["visibilitychange", "agent_end"]) {
   });
 }
 
-test("an older answer does not hide a current run with only tool activity", async (t) => {
-  t.after(unmountAll);
+test("an older answer does not hide a current run with only tool activity", async () => {
   resetWorld();
   const history = [userMsg("u0", "question"), assistantMsg("a0", "Old answer")];
   primeSession("s1", history);
-  const { w } = await startRun(t, "s1", "question");
+  const { w } = await startRun("s1", "question");
   primeSession("s1", [...history, userMsg("u1", "question"), {
     ...assistantMsg("a1", ""),
     content: [{ type: "toolCall", toolCallId: "tc1", toolName: "read", input: {} }],
   }]);
   await act(async () => {
-    docTarget.fire("visibilitychange");
+    visibilityState = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
     await sleep(60);
   });
   await settle();
@@ -466,13 +415,13 @@ test("an older answer does not hide a current run with only tool activity", asyn
   assert.equal(w.latest.notices.filter((n) => n.type === "error").length, 1);
 });
 
-test("a repeated prompt cannot reuse an old saved answer when the new prompt was not persisted", async (t) => {
-  t.after(unmountAll);
+test("a repeated prompt cannot reuse an old saved answer when the new prompt was not persisted", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "question"), assistantMsg("a0", "Old answer")]);
-  const { w } = await startRun(t, "s1", "question");
+  const { w } = await startRun("s1", "question");
   await act(async () => {
-    docTarget.fire("visibilitychange");
+    visibilityState = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
     await sleep(60);
   });
   await settle();
@@ -480,11 +429,10 @@ test("a repeated prompt cannot reuse an old saved answer when the new prompt was
   assert.equal(w.latest.notices.filter((n) => n.type === "error").length, 1);
 });
 
-test("recovery preserves a saved provider failure even after partial response content", async (t) => {
-  t.after(unmountAll);
+test("recovery preserves a saved provider failure even after partial response content", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "old question")]);
-  const { w } = await startRun(t, "s1", "new question");
+  const { w } = await startRun("s1", "new question");
   const providerError = "Provider disconnected during generation";
   primeSession("s1", [
     userMsg("u0", "old question"),
@@ -492,7 +440,8 @@ test("recovery preserves a saved provider failure even after partial response co
     { ...assistantMsg("a1", "Partial answer"), stopReason: "error", errorMessage: providerError },
   ]);
   await act(async () => {
-    docTarget.fire("visibilitychange");
+    visibilityState = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
     await sleep(60);
   });
   await settle();
@@ -500,18 +449,18 @@ test("recovery preserves a saved provider failure even after partial response co
   assert.deepEqual(w.latest.notices.filter((n) => n.type === "error").map((n) => n.message), [providerError]);
 });
 
-test("a failed transcript reload is retried instead of being classified as an empty response", async (t) => {
-  t.after(unmountAll);
+test("a failed transcript reload is retried instead of being classified as an empty response", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "old question")]);
-  const { w } = await startRun(t, "s1", "new question");
+  const { w } = await startRun("s1", "new question");
   primeSession("s1", [userMsg("u0", "old question"), userMsg("u1", "new question"), assistantMsg("a1", "Saved answer")]);
   world.holds.push({
     match: (method, url) => method === "GET" && url.startsWith("/api/sessions/s1?"),
     produce: async () => ({ status: 503, value: {} }),
   });
   await act(async () => {
-    docTarget.fire("visibilitychange");
+    visibilityState = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
     await sleep(60);
   });
   await settle();
@@ -519,7 +468,7 @@ test("a failed transcript reload is retried instead of being classified as an em
   assert.deepEqual(w.latest.notices.filter((n) => n.type === "error"), []);
 
   await act(async () => {
-    winTarget.fire("online");
+    window.dispatchEvent(new Event("online"));
     await sleep(60);
   });
   await settle();
@@ -529,11 +478,10 @@ test("a failed transcript reload is retried instead of being classified as an em
 });
 
 for (const nextRun of ["send", "interrupt"]) {
-  test(`${nextRun} captures saved entries newer than the last rendered transcript`, async (t) => {
-    t.after(unmountAll);
+  test(`${nextRun} captures saved entries newer than the last rendered transcript`, async () => {
     resetWorld();
     primeSession("s1", [userMsg("u0", "old question")]);
-    const { w, es } = await startRun(t, "s1", "question");
+    const { w, es } = await startRun("s1", "question");
     primeSession("s1", [userMsg("u0", "old question"), userMsg("u1", "question"), assistantMsg("a1", "Previous answer")]);
     let releaseTerminalReload;
     if (nextRun === "send") {
@@ -570,7 +518,8 @@ for (const nextRun of ["send", "interrupt"]) {
     });
     // The replacement never persisted a new user entry or answer.
     await act(async () => {
-      docTarget.fire("visibilitychange");
+      visibilityState = "visible";
+      document.dispatchEvent(new Event("visibilitychange"));
       await sleep(60);
     });
     await settle();
@@ -579,11 +528,10 @@ for (const nextRun of ["send", "interrupt"]) {
   });
 }
 
-test("tool activity and turn_end errors do not count as a successful answer", async (t) => {
-  t.after(unmountAll);
+test("tool activity and turn_end errors do not count as a successful answer", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "q")]);
-  const { w, es } = await startRun(t, "s1", "q1");
+  const { w, es } = await startRun("s1", "q1");
 
   const toolOnlyAssistant = {
     ...assistantMsg("a1", ""),
@@ -604,11 +552,10 @@ test("tool activity and turn_end errors do not count as a successful answer", as
   assert.equal(w.latest.agentRunning, false);
 });
 
-test("tool output streams live before the toolResult message lands", async (t) => {
-  t.after(unmountAll);
+test("tool output streams live before the toolResult message lands", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "q")]);
-  const { w, es } = await startRun(t, "s1", "q1");
+  const { w, es } = await startRun("s1", "q1");
 
   const toolCallAssistant = {
     ...assistantMsg("a1", ""),
@@ -674,11 +621,10 @@ test("tool output streams live before the toolResult message lands", async (t) =
   assert.equal(w.latest.liveToolResults.size, 0, "a finished run leaves no live tool state");
 });
 
-test("late frames after the run finished are ignored (no ghost bubble, no double completion)", async (t) => {
-  t.after(unmountAll);
+test("late frames after the run finished are ignored (no ghost bubble, no double completion)", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "q")]);
-  const { w, es } = await startRun(t, "s1", "q1");
+  const { w, es } = await startRun("s1", "q1");
   await act(async () => {
     es.emit({ type: "agent_start" });
     es.emit({ type: "message_end", message: userMsg("u1", "q1") });
@@ -708,11 +654,10 @@ test("late frames after the run finished are ignored (no ghost bubble, no double
   assert.equal(w.latest.messages.length, 3, "late message_end must not duplicate the message");
 });
 
-test("agent_end with isTerminal=false is an async delivery pause, not a completion", async (t) => {
-  t.after(unmountAll);
+test("agent_end with isTerminal=false is an async delivery pause, not a completion", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "q")]);
-  const { w, es } = await startRun(t, "s1", "q1");
+  const { w, es } = await startRun("s1", "q1");
   await act(async () => {
     es.emit({ type: "agent_start" });
     es.emit({ type: "message_update", message: assistantMsg("a1", "partial") });
@@ -729,11 +674,10 @@ test("agent_end with isTerminal=false is an async delivery pause, not a completi
   assert.equal(w.latest.streamState.isStreaming, true);
 });
 
-test("abort_and_prompt: the aborted run's terminal agent_end is consumed, the new run keeps streaming", async (t) => {
-  t.after(unmountAll);
+test("abort_and_prompt: the aborted run's terminal agent_end is consumed, the new run keeps streaming", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "q")]);
-  const { w, es } = await startRun(t, "s1", "q1");
+  const { w, es } = await startRun("s1", "q1");
   await act(async () => {
     es.emit({ type: "agent_start" });
     es.emit({ type: "message_update", message: assistantMsg("a1", "old run streaming") });
@@ -780,11 +724,10 @@ test("abort_and_prompt: the aborted run's terminal agent_end is consumed, the ne
   assert.equal(w.latest.streamState.streamingMessage?.content?.[0]?.text, "new run streaming");
 });
 
-test("a reconcile response that straddles a run boundary is dropped by the run-id fence", async (t) => {
-  t.after(unmountAll);
+test("a reconcile response that straddles a run boundary is dropped by the run-id fence", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "q")]);
-  const { w, es } = await startRun(t, "s1", "q1");
+  const { w, es } = await startRun("s1", "q1");
   await act(async () => {
     es.emit({ type: "agent_start" });
     es.emit({ type: "message_update", message: assistantMsg("a1", "streaming") });
@@ -839,11 +782,10 @@ test("a reconcile response that straddles a run boundary is dropped by the run-i
   assert.equal(w.latest.agentRunning, false);
 });
 
-test("fatal SSE error mid-run reconnects after 1s and the new stream delivers events", async (t) => {
-  t.after(unmountAll);
+test("fatal SSE error mid-run reconnects after 1s and the new stream delivers events", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "q")]);
-  const { w, es: es1 } = await startRun(t, "s1", "q1");
+  const { w, es: es1 } = await startRun("s1", "q1");
   await act(async () => {
     es1.emit({ type: "agent_start" });
     await Promise.resolve();
@@ -866,20 +808,16 @@ test("fatal SSE error mid-run reconnects after 1s and the new stream delivers ev
   assert.equal(w.latest.agentRunning, false, "events must flow through the replacement stream");
 });
 
-test("unmount mid-run closes the stream and late frames cannot resurrect state", async (t) => {
-  t.after(unmountAll);
+test("unmount mid-run closes the stream and late frames cannot resurrect state", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "q")]);
-  const { w, es, renderer } = await startRun(t, "s1", "q1");
+  const { w, es } = await startRun("s1", "q1");
   await act(async () => {
     es.emit({ type: "agent_start" });
     await Promise.resolve();
   });
 
-  await act(async () => {
-    renderer.unmount();
-  });
-  activeRenderers.delete(renderer);
+  w.unmount();
   assert.equal(es.closedByCaller, true, "unmount must close the EventSource");
 
   // Frames arriving over the (closed) stream after unmount must be no-ops.
@@ -891,12 +829,12 @@ test("unmount mid-run closes the stream and late frames cannot resurrect state",
 
 // ---------------------------------------------------------------------------
 // Recovery nets: visibilitychange / online reconcile + subagent roster
-// restoration (TODO §5 leftovers).
+// restoration.
 // ---------------------------------------------------------------------------
 
 /** Mid-run baseline used by the recovery tests. */
-async function startStreamingRun(t, sid) {
-  const { w, es } = await startRun(t, sid, "q1");
+async function startStreamingRun(sid) {
+  const { w, es } = await startRun(sid, "q1");
   await act(async () => {
     es.emit({ type: "agent_start" });
     es.emit({ type: "message_update", message: assistantMsg("a1", "streaming") });
@@ -907,17 +845,17 @@ async function startStreamingRun(t, sid) {
   return { w, es };
 }
 
-test("tab returns to foreground: visibilitychange fires a mid-run reconcile poll", async (t) => {
-  t.after(unmountAll);
+test("tab returns to foreground: visibilitychange fires a mid-run reconcile poll", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "q")]);
-  const { w } = await startStreamingRun(t, "s1");
+  const { w } = await startStreamingRun("s1");
 
   const before = callsTo("GET", "/api/agent/s1").length;
   // Server still mid-run: the poll must observe busy and NOT finish the run.
   world.agents.set("s1", { running: true, state: { isStreaming: true } });
   await act(async () => {
-    docTarget.fire("visibilitychange");
+    visibilityState = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
     await sleep(30);
   });
   assert.ok(
@@ -928,18 +866,17 @@ test("tab returns to foreground: visibilitychange fires a mid-run reconcile poll
   assert.equal(w.latest.agentRunning, true);
 });
 
-test("network returns while agent_end was missed: the online reconcile recovers the UI", async (t) => {
-  t.after(unmountAll);
+test("network returns while agent_end was missed: the online reconcile recovers the UI", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "q")]);
-  const { w } = await startStreamingRun(t, "s1");
+  const { w } = await startStreamingRun("s1");
 
   // Half-open SSE: no agent_end frame ever arrived, but omp already finished.
   world.sessions.get("s1").messages = [userMsg("u0", "q"), userMsg("u1", "q1"), assistantMsg("a1", "streaming")];
   world.agents.set("s1", { running: false, state: {} });
 
   await act(async () => {
-    winTarget.fire("online");
+    window.dispatchEvent(new Event("online"));
     await sleep(60);
   });
   await settle();
@@ -948,11 +885,10 @@ test("network returns while agent_end was missed: the online reconcile recovers 
   assert.equal(w.latest.messages.length, 3, "transcript reloaded from the session file");
 });
 
-test("subagent roster is restored from the get_subagents snapshot after reconnect", async (t) => {
-  t.after(unmountAll);
+test("subagent roster is restored from the get_subagents snapshot after reconnect", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "q")]);
-  const { w, es: es1 } = await startStreamingRun(t, "s1");
+  const { w, es: es1 } = await startStreamingRun("s1");
 
   // Trigger a mid-run roster refresh: visibilitychange → reconcile (still
   // busy server-side) → refreshSubagentRoster against the configured snapshot.
@@ -961,7 +897,8 @@ test("subagent roster is restored from the get_subagents snapshot after reconnec
     { id: "sub-1", agent: "explore", status: "started", index: 0, task: "search the codebase" },
   ]);
   await act(async () => {
-    docTarget.fire("visibilitychange");
+    visibilityState = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
     await sleep(60);
   });
   await settle();
