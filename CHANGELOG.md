@@ -12,8 +12,8 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 ### Fixes & Improvements
 
-- Cancel queued messages in OMP before removing their chips or recalling them for editing. Requires native `remove_queued_message` support; failed cancellation leaves the message visible.
-- Preserve question-dialog answers and selections when an SSE reconnect replays the same pending request.
+- Cancel queued messages in OMP before removing their chips or recalling them for editing. Failed or timed-out cancellation leaves the message visible; successful recall survives composer remounts without losing newer typing. Requires native `remove_queued_message` support.
+- Preserve question-dialog answers and selections when an SSE reconnect replays the same pending request or answer submission fails.
 - Keep composer controls on one line, shrink the model picker on narrow screens, and size Send, Queue, and Stop buttons to fit their full labels.
 - Keep Send, Stop, and Queue equally wide, truncate the model name before short effort labels, and align the + button with the primary action.
 - Clearly dim Attach files while the agent is running; queued messages remain text-only.
