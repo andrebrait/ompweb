@@ -327,6 +327,8 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", maxWidth: "85%", minWidth: 0 }}>
         <div
           className="chat-message-card"
+          data-selection-scope="message"
+          tabIndex={-1}
           style={{
             maxWidth: "100%",
             minWidth: 0,
@@ -659,7 +661,7 @@ function AssistantMessageView({
         })()}
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      <div data-selection-scope="message" tabIndex={-1} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
         {groupAdjacentBlocks(blockItems).map((group, groupIdx) => {
           if (group.type === "single") {
             const { block, originalIndex } = group.item;
@@ -1165,7 +1167,7 @@ function CompactionMessageView({ message }: { message: CustomMessage }) {
           <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 650 }}>{t("messageView.compactionLabel")}</span>
           {time && <span style={{ marginLeft: "auto", color: "var(--text-dim)", fontSize: 10 }}>{time}</span>}
         </div>
-        <div style={{ padding: "11px 13px 12px" }}>
+        <div data-selection-scope="message" tabIndex={-1} style={{ padding: "11px 13px 12px" }}>
           <div style={{ color: "var(--text)", fontSize: 15, fontWeight: 700, lineHeight: 1.35 }}>{t("messageView.conversationCompacted")}</div>
           {(method || (tokensBefore !== null && tokensAfter !== null)) && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
@@ -1323,7 +1325,7 @@ function HiddenExtensionView({ message, cwd, onOpenFile }: { message: CustomMess
               background: "var(--bg-subtle)",
             }}
           >
-            <div style={{ padding: "8px 10px" }}>
+            <div data-selection-scope="message" tabIndex={-1} style={{ padding: "8px 10px" }}>
               {images.length > 0 && (
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: cleanText ? 8 : 0 }}>
                   {images.map((img, i) => {
@@ -1489,7 +1491,7 @@ function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessag
         </div>
 
         {contentExpanded ? (
-          <div style={{ padding: "6px 9px" }}>
+          <div data-selection-scope="message" tabIndex={-1} style={{ padding: "6px 9px" }}>
             {images.length > 0 && (
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: displayText ? 8 : 0 }}>
                 {images.map((img, i) => {
@@ -1719,7 +1721,7 @@ function BashExecutionView({ message, sessionId }: { message: BashExecutionMessa
     : null;
 
   return (
-    <div style={{ margin: "6px 0" }}>
+    <div data-selection-scope="message" tabIndex={-1} style={{ margin: "6px 0" }}>
       <ToolCallBlock block={block} result={result} />
       {downloadUrl && (
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 6 }}>

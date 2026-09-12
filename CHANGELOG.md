@@ -6,6 +6,10 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 ## Unreleased
 
+### Added
+
+- Scope Ctrl+A / Cmd+A to the selected message, currently loaded chat, or active file contents instead of the whole page. Text fields retain native Select All behavior; browser-menu commands and embedded viewers remain browser-controlled.
+
 ### Fixes & Improvements
 
 - Keep composer controls on one line, shrink the model picker on narrow screens, and size Send, Queue, and Stop buttons to fit their full labels.
