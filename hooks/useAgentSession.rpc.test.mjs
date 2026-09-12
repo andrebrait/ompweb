@@ -25,10 +25,11 @@ globalThis.localStorage = {
   removeItem: (k) => kvStore.delete(k),
   clear: () => kvStore.clear(),
 };
+const queueStore = new Map();
 globalThis.sessionStorage = {
-  getItem: () => null,
-  setItem: () => {},
-  removeItem: () => {},
+  getItem: (key) => queueStore.get(key) ?? null,
+  setItem: (key, value) => queueStore.set(key, String(value)),
+  removeItem: (key) => queueStore.delete(key),
 };
 // Listeners are capturable so tests can fire visibilitychange/online.
 function makeEventTarget() {
@@ -270,6 +271,7 @@ function resetWorld() {
   world.sessions.clear();
   world.agents.clear();
   world.subagentSnapshots.clear();
+  queueStore.clear();
 }
 
 function primeSession(sid, messages) {
@@ -397,6 +399,82 @@ test("successful cancellation after unmount still reports success for draft reco
   });
   assert.deepEqual(current.latest.queuedMessages, { steering: [], followUp: ["target"] });
   assert.deepEqual(current.latest.notices, []);
+});
+
+for (const remaining of ["other", "target"]) {
+  test(`cancellation acknowledgement updates a remounted session without removing its ${remaining} remainder`, async (t) => {
+    t.after(unmountAll);
+    resetWorld();
+    const sid = `cancel-remount-${remaining}`;
+    primeSession(sid, [userMsg("u0", "q")]);
+    primeSession("cancel-unrelated", [userMsg("u1", "other session")]);
+    const old = await mountSession(sid);
+    await act(async () => {
+      await old.latest.handleFollowUp("target");
+      await old.latest.handleFollowUp(remaining);
+    });
+    world.agents.set(sid, { running: true, state: { queuedMessageCount: 2, isStreaming: true } });
+    let release;
+    const acknowledgement = new Promise((resolve) => { release = resolve; });
+    world.holds.push({
+      match: (method, url, body) => method === "POST" && url === `/api/agent/${sid}` && body?.type === "remove_queued_message",
+      produce: () => acknowledgement,
+    });
+    let cancellation;
+    await act(async () => { cancellation = old.latest.removeQueuedMessage("target", "followUp"); });
+    await act(() => old.renderer.unmount());
+    activeRenderers.delete(old.renderer);
+
+    const current = await mountSession(sid, undefined, true);
+    await act(() => lastEs().open());
+    const observer = await mountSession(sid);
+    await act(() => lastEs().open());
+    const unrelated = await mountSession("cancel-unrelated");
+    await act(async () => { await unrelated.latest.handleFollowUp("target"); });
+    assert.deepEqual(current.latest.queuedMessages, { steering: [], followUp: ["target", remaining] });
+    assert.deepEqual(observer.latest.queuedMessages, current.latest.queuedMessages);
+    await act(async () => {
+      // Native still has one pending item, so count-only reconciliation cannot
+      // discover which text was cancelled.
+      world.agents.set(sid, { running: true, state: { queuedMessageCount: 1, isStreaming: true } });
+      release({ value: { success: true, data: { removed: true } } });
+      assert.equal(await cancellation, true);
+    });
+    const after = { steering: [], followUp: [remaining] };
+    assert.deepEqual(current.latest.queuedMessages, after);
+    assert.deepEqual(observer.latest.queuedMessages, after, "subscribers adopt one removal, not one each");
+    assert.deepEqual(JSON.parse(queueStore.get(`omp-queue-${sid}`)), after);
+    assert.deepEqual(unrelated.latest.queuedMessages, { steering: [], followUp: ["target"] });
+    assert.deepEqual(JSON.parse(queueStore.get("omp-queue-cancel-unrelated")), unrelated.latest.queuedMessages);
+  });
+}
+
+test("an answered dialog handoff cannot clear the next unanswered request", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("dialog-handoff", [userMsg("u0", "q")]);
+  const { w, es } = await startRun(null, "dialog-handoff", "ask me");
+  const first = { type: "extension_ui_request", id: "first", method: "editor", title: "First question" };
+  const next = { ...first, id: "next", title: "Next question" };
+  await act(() => es.emit(first));
+  await settle(300);
+  assert.equal(w.latest.extensionDialog?.id, first.id, "unanswered requests have no clear timer");
+
+  let release;
+  const acknowledgement = new Promise((resolve) => { release = resolve; });
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "extension_ui_response",
+    produce: () => acknowledgement,
+  });
+  let response;
+  await act(async () => { response = w.latest.respondToExtensionUi(first, { value: "My answer" }); });
+  await act(() => es.emit(next));
+  await act(async () => {
+    release({ value: { success: true, data: {} } });
+    await response;
+  });
+  await settle(300);
+  assert.equal(w.latest.extensionDialog?.id, next.id, "a delayed response timer only clears its own request");
 });
 
 
