@@ -83,6 +83,7 @@ const PASSTHROUGH_COMMANDS = new Set([
   "abort",
   "abort_and_prompt",
   "promote_queued_message",
+  "remove_queued_message",
   "set_thinking_level",
   "cycle_thinking_level",
   "cycle_model",

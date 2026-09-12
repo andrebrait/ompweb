@@ -22,6 +22,7 @@
   "agentSession.sessionRenamed": "Session renamed to {name}",
   "agentSession.shellSessionFailed": "Unable to create a session for the shell command",
   "agentSession.queuedPromotionUnavailable": "The queued follow-up is no longer available to steer.",
+  "agentSession.queuedRemovalUnavailable": "This message is no longer pending in that queue and could not be cancelled.",
   "agentSession.startingAgent": "Starting omp… the first launch of a session can take a while.",
   "agentSession.toolPresetNotice": "Tool presets apply when a session starts; this session keeps its current tools.",
   "archiveBrowser.title": "Archived Sessions",

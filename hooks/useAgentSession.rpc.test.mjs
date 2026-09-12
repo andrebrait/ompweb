@@ -317,6 +317,88 @@ async function startRun(t, sid, message, strictMode = false) {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+for (const queue of ["steering", "followUp"]) {
+  test(`queued cancellation waits for acknowledgement and removes one ${queue} duplicate`, async (t) => {
+    t.after(unmountAll);
+    resetWorld();
+    primeSession("cancellation", [userMsg("u0", "q")]);
+    const w = await mountSession("cancellation", undefined, true);
+    await act(async () => {
+      await w.latest.handleSteer("target");
+      await w.latest.handleFollowUp("target");
+      await w.latest.handleFollowUp("target");
+    });
+    const before = { steering: ["target"], followUp: ["target", "target"] };
+    let release;
+    const acknowledgement = new Promise((resolve) => { release = resolve; });
+    world.holds.push({
+      match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
+      produce: () => acknowledgement,
+    });
+    let cancellation;
+    await act(async () => { cancellation = w.latest.removeQueuedMessage("target", queue); });
+    assert.deepEqual(w.latest.queuedMessages, before);
+    const sent = world.calls.filter((call) => call.body?.type === "remove_queued_message");
+    assert.deepEqual(sent.map((call) => call.body), [{ type: "remove_queued_message", message: "target", queue }]);
+    await act(async () => {
+      release({ value: { success: true, data: { removed: true } } });
+      assert.equal(await cancellation, true);
+    });
+    assert.deepEqual(w.latest.queuedMessages, {
+      ...before, [queue]: before[queue].slice(1),
+    });
+  });
+}
+
+test("queued cancellation preserves pending messages on refusal and unsupported runtimes", async (t) => {
+  for (const response of [
+    { value: { success: true, data: { removed: false } } },
+    { status: 400, value: { error: "Unknown RPC command: remove_queued_message" } },
+  ]) {
+    await t.test(response.status ? "unsupported" : "not pending", async (t) => {
+      t.after(unmountAll);
+      resetWorld();
+      primeSession("cancel-failure", [userMsg("u0", "q")]);
+      const w = await mountSession("cancel-failure");
+      await act(async () => { await w.latest.handleFollowUp("target"); });
+      world.holds.push({
+        match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
+        produce: async () => response,
+      });
+      await act(async () => { assert.equal(await w.latest.removeQueuedMessage("target", "followUp"), false); });
+      assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: ["target"] });
+      assert.equal(w.latest.notices.length, 1);
+    });
+  }
+});
+
+test("successful cancellation after unmount still reports success for draft recovery", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("cancel-old", [userMsg("u0", "q")]);
+  primeSession("cancel-new", [userMsg("u1", "other")]);
+  const old = await mountSession("cancel-old");
+  await act(async () => { await old.latest.handleFollowUp("target"); });
+  let release;
+  const acknowledgement = new Promise((resolve) => { release = resolve; });
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
+    produce: () => acknowledgement,
+  });
+  let cancellation;
+  await act(async () => { cancellation = old.latest.removeQueuedMessage("target", "followUp"); });
+  await act(async () => { old.renderer.unmount(); });
+  activeRenderers.delete(old.renderer);
+  const current = await mountSession("cancel-new");
+  await act(async () => { await current.latest.handleFollowUp("target"); });
+  await act(async () => {
+    release({ value: { success: true, data: { removed: true } } });
+    assert.equal(await cancellation, true, "the caller must recover text already removed by native");
+  });
+  assert.deepEqual(current.latest.queuedMessages, { steering: [], followUp: ["target"] });
+  assert.deepEqual(current.latest.notices, []);
+});
+
 
 test("queued promotion waits for native acknowledgement and moves only the first matching follow-up", async (t) => {
   t.after(unmountAll);
@@ -453,7 +535,7 @@ test("delivery before promotion acknowledgement does not relabel the next duplic
   assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: ["target"] });
 });
 
-test("a batched local removal and promotion acknowledgement preserve the next duplicate in StrictMode", async (t) => {
+test("cancellation cannot race a pending promotion and remove the next duplicate", async (t) => {
   t.after(unmountAll);
   resetWorld();
   primeSession("removed-promotion", [userMsg("u0", "q")]);
@@ -471,11 +553,12 @@ test("a batched local removal and promotion acknowledgement preserve the next du
   let promotion;
   await act(async () => { promotion = w.latest.promoteQueuedToSteer("target"); });
   await act(async () => {
-    React.startTransition(() => w.latest.removeQueuedMessage("target"));
+    assert.equal(await w.latest.removeQueuedMessage("target", "followUp"), false);
     release({ value: { success: true, data: { promoted: true } } });
     await promotion;
   });
-  assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: ["target"] });
+  assert.deepEqual(w.latest.queuedMessages, { steering: ["target"], followUp: ["target"] });
+  assert.equal(world.calls.some((call) => call.body?.type === "remove_queued_message"), false);
   assert.deepEqual(w.latest.notices, []);
 });
 
