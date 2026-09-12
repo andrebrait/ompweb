@@ -9,6 +9,7 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 ### Fixes & Improvements
 
 - Keep the top bar on one row with a fixed-width speed readout: compact units such as t/s, kt/s, and Mt/s, and a same-width ~ marker for average speed. The full rate remains in the tooltip; the whole pill hides when it cannot fit, without clipping or scrolling.
+- Keep the fixed-width speed readout visible on mobile, including 320px screens, by placing theme, language, history, branches, and system controls in a More disclosure without shrinking their touch targets.
 
 ---
 
