@@ -48,7 +48,9 @@ import {
   clearPersistedQueue,
   isEmptyQueue,
   persistQueue,
+  publishQueueChange,
   readPersistedQueue,
+  subscribeQueueChanges,
 } from "./useAgentSession-queue";
 import type { QueuedMessages } from "./useAgentSession-queue";
 import {
@@ -399,6 +401,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // True once this mount has persisted a non-empty queue: gates removal so a
   // just-mounted empty state cannot wipe a stored queue before restore runs.
   const queuePersistDirtyRef = useRef(false);
+  const publishedQueueRef = useRef<QueuedMessages | null>(null);
   const eventCoalescerRef = useRef<MessageUpdateCoalescer | null>(null);
   if (eventCoalescerRef.current === null) {
     eventCoalescerRef.current = createMessageUpdateCoalescer((event) => {
@@ -1635,13 +1638,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         const index = prev[queue].indexOf(text);
         return index < 0 ? prev : { ...prev, [queue]: prev[queue].filter((_, i) => i !== index) };
       };
-      if (hookAliveRef.current && sessionIdRef.current === sid) {
-        queueMutatedAtRef.current = Date.now();
-        updateQueuedMessages(removeFromMirror);
-      } else {
-        const persisted = readPersistedQueue(sid);
-        if (persisted) persistQueue(sid, removeFromMirror(persisted));
-      }
+      const mirror = hookAliveRef.current && sessionIdRef.current === sid
+        ? queuedMessagesRef.current
+        : readPersistedQueue(sid);
+      if (mirror) publishQueueChange(sid, removeFromMirror(mirror));
       return true;
     } catch (error) {
       if (hookAliveRef.current && sessionIdRef.current === sid) {
@@ -1651,7 +1651,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       if (queuedRemovalRef.current === removal) queuedRemovalRef.current = null;
     }
-  }, [addNotice, queuedPromotions, updateQueuedMessages]);
+  }, [addNotice, queuedPromotions]);
 
   /** Move the first matching native follow-up into steering, then relabel its
    *  still-undelivered chip. Never enqueue a second copy via steer. */
@@ -1689,12 +1689,22 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [addNotice, queuedMessages.followUp, queuedPromotions, updateQueuedMessages]);
 
+  useEffect(() => subscribeQueueChanges((sid, queue) => {
+    if (!hookAliveRef.current || sessionIdRef.current !== sid) return;
+    queueMutatedAtRef.current = Date.now();
+    publishedQueueRef.current = queue;
+    queuePersistDirtyRef.current = !isEmptyQueue(queue);
+    updateQueuedMessages(queue);
+  }), [updateQueuedMessages]);
+
   // Mirror queued texts into sessionStorage so a reload can restore them.
   // The dirty gate keeps the initial empty state from wiping a stored queue
   // before the mount-time restore has run.
   useEffect(() => {
     const sid = sessionIdRef.current;
     if (!sid) return;
+    // A same-document notification already persisted this exact snapshot.
+    if (queuedMessages === publishedQueueRef.current) return;
     const empty = isEmptyQueue(queuedMessages);
     if (empty && !queuePersistDirtyRef.current) return;
     queuePersistDirtyRef.current = !empty;
