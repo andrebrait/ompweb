@@ -1027,35 +1027,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     });
   }, [eventCoalescer]);
 
-  const respondToExtensionUi = useCallback(async (
-    request: ExtensionUiDialogRequest,
-    response: { value: string } | { confirmed: boolean } | { cancelled: true },
-  ) => {
-    const sid = sessionIdRef.current;
-    if (!sid) {
-      setExtensionDialog((current) => current?.id === request.id ? null : current);
-      return;
-    }
-    try {
-      await sendAgentCommand(sid, {
-        type: "extension_ui_response",
-        id: request.id,
-        ...response,
-      });
-    } catch (e) {
-      console.error("Failed to send extension UI response:", e);
-    } finally {
-      // OMP commonly emits the next Ask select immediately after this response.
-      // Keep the current panel mounted for a short hand-off window so the composer
-      // never flashes empty between sequential questions.
-      if (extensionDialogClearTimerRef.current) clearTimeout(extensionDialogClearTimerRef.current);
-      extensionDialogClearTimerRef.current = setTimeout(() => {
-        setExtensionDialog((current) => current?.id === request.id ? null : current);
-        extensionDialogClearTimerRef.current = null;
-      }, 250);
-    }
-  }, []);
-
   // ---------------------------------------------------------------------
   // Host-tool bridge: omp-web registers tools the AGENT can call. The server
   // emits host_tool_call frames; this UI executes them and answers with
@@ -1269,6 +1240,36 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       },
     });
   }, []);
+
+  const respondToExtensionUi = useCallback(async (
+    request: ExtensionUiDialogRequest,
+    response: { value: string } | { confirmed: boolean } | { cancelled: true },
+  ) => {
+    const sid = sessionIdRef.current;
+    if (!sid) {
+      setExtensionDialog((current) => current?.id === request.id ? null : current);
+      return;
+    }
+    try {
+      await sendAgentCommand(sid, {
+        type: "extension_ui_response",
+        id: request.id,
+        ...response,
+      });
+      if (!hookAliveRef.current || sessionIdRef.current !== sid) return;
+      // Keep the answered panel mounted briefly while the next question arrives.
+      clearTimeout(extensionDialogClearTimerRef.current ?? undefined);
+      extensionDialogClearTimerRef.current = setTimeout(() => {
+        setExtensionDialog((current) => current?.id === request.id ? null : current);
+        extensionDialogClearTimerRef.current = null;
+      }, 250);
+    } catch (e) {
+      console.error("Failed to send extension UI response:", e);
+      if (hookAliveRef.current && sessionIdRef.current === sid) {
+        addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      }
+    }
+  }, [addNotice]);
 
   const dismissNotice = useCallback((id: string) => {
     dispatchNotice({ type: "remove", id });
@@ -1660,7 +1661,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   /** Only remove a chip after omp confirms cancellation of its queued payload. */
   const removeQueuedMessage = useCallback(async (text: string, queue: keyof QueuedMessages): Promise<boolean> => {
     const sid = sessionIdRef.current;
-    if (!hookAliveRef.current || !sid || !text || !queuedMessagesRef.current[queue].includes(text)) return false;
+    if (!hookAliveRef.current || !sid || !text) return false;
+    if (!queuedMessagesRef.current[queue].includes(text)) {
+      addNotice({ type: "warning", message: translate("agentSession.queuedRemovalUnavailable") });
+      return false;
+    }
     // Do not race another removal or promotion against the same queue mirror.
     if (queuedRemovalRef.current?.sessionId === sid || pendingQueuedPromotions.get(sid)?.has(text)) return false;
     const removal = { sessionId: sid };
