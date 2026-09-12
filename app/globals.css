@@ -1707,7 +1707,8 @@ pre, code {
   flex-shrink: 0;
 }
 .composer-model-control {
-  flex: 0 1 140px;
+  flex: 1 1 0;
+  max-width: 140px;
   min-width: 24px !important;
 }
 .composer-thinking-control {
@@ -1717,6 +1718,8 @@ pre, code {
 }
 .composer-primary-action {
   flex-shrink: 0;
+  min-width: 7em;
+  justify-content: center;
   white-space: nowrap;
   min-height: 28px;
   padding: 4px 10px;
