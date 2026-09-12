@@ -343,6 +343,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // get_state snapshots may lag behind the RPC round-trip, so a snapshot
   // reporting queuedMessageCount === 0 must not wipe a queue we just wrote.
   const queueMutatedAtRef = useRef(0);
+  const queuedRemovalRef = useRef<{ sessionId: string } | null>(null);
   const queuedPromotionsRef = useRef<Map<string, { sessionId: string; consumed: boolean }> | null>(null);
   if (queuedPromotionsRef.current === null) queuedPromotionsRef.current = new Map();
   const queuedPromotions = queuedPromotionsRef.current;
@@ -1612,25 +1613,45 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     });
   }, [queuedPromotions, updateQueuedMessages]);
 
-  /** Remove one queued message from the client-side queue mirror. omp's RPC
-   *  protocol has no queue-removal command, so this only affects the queue
-   *  panel: a message removed here may still be delivered by the running agent
-   *  (it then arrives in the chat like any delivered turn). */
-  const removeQueuedMessage = useCallback((text: string) => {
-    if (!text) return;
-    const promotion = queuedPromotions.get(text);
+  /** Only remove a chip after omp confirms cancellation of its queued payload. */
+  const removeQueuedMessage = useCallback(async (text: string, queue: keyof QueuedMessages): Promise<boolean> => {
     const sid = sessionIdRef.current;
-    updateQueuedMessages((prev) => {
-      const si = prev.steering.indexOf(text);
-      const fi = prev.followUp.indexOf(text);
-      if (si === -1 && fi === -1) return prev;
-      if (fi !== -1 && promotion?.sessionId === sid) promotion.consumed = true;
-      return {
-        steering: si === -1 ? prev.steering : prev.steering.filter((_, i) => i !== si),
-        followUp: fi === -1 ? prev.followUp : prev.followUp.filter((_, i) => i !== fi),
+    if (!hookAliveRef.current || !sid || !text || !queuedMessagesRef.current[queue].includes(text)) return false;
+    // Do not race another removal or promotion against the same queue mirror.
+    if (queuedRemovalRef.current?.sessionId === sid || queuedPromotions.get(text)?.sessionId === sid) return false;
+    const removal = { sessionId: sid };
+    queuedRemovalRef.current = removal;
+    try {
+      const result = await sendAgentCommand<{ removed: boolean }>(sid, {
+        type: "remove_queued_message", message: text, queue,
+      });
+      if (result?.removed !== true) {
+        if (hookAliveRef.current && sessionIdRef.current === sid) {
+          addNotice({ type: "warning", message: translate("agentSession.queuedRemovalUnavailable") });
+        }
+        return false;
+      }
+      const removeFromMirror = (prev: QueuedMessages): QueuedMessages => {
+        const index = prev[queue].indexOf(text);
+        return index < 0 ? prev : { ...prev, [queue]: prev[queue].filter((_, i) => i !== index) };
       };
-    });
-  }, [queuedPromotions, updateQueuedMessages]);
+      if (hookAliveRef.current && sessionIdRef.current === sid) {
+        queueMutatedAtRef.current = Date.now();
+        updateQueuedMessages(removeFromMirror);
+      } else {
+        const persisted = readPersistedQueue(sid);
+        if (persisted) persistQueue(sid, removeFromMirror(persisted));
+      }
+      return true;
+    } catch (error) {
+      if (hookAliveRef.current && sessionIdRef.current === sid) {
+        addNotice({ type: "error", message: error instanceof Error ? error.message : String(error) });
+      }
+      return false;
+    } finally {
+      if (queuedRemovalRef.current === removal) queuedRemovalRef.current = null;
+    }
+  }, [addNotice, queuedPromotions, updateQueuedMessages]);
 
   /** Move the first matching native follow-up into steering, then relabel its
    *  still-undelivered chip. Never enqueue a second copy via steer. */
@@ -1638,7 +1659,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const sid = sessionIdRef.current;
     if (!hookAliveRef.current || !sid || !text || !queuedMessages.followUp.includes(text)) return;
     // Text is the existing chip identity. Suppress overlap, not later retries.
-    if (queuedPromotions.get(text)?.sessionId === sid) return;
+    if (queuedPromotions.get(text)?.sessionId === sid || queuedRemovalRef.current?.sessionId === sid) return;
     const promotion = { sessionId: sid, consumed: false };
     queuedPromotions.set(text, promotion);
     try {
