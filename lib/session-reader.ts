@@ -29,6 +29,7 @@ import { taskResultRetryFailure, taskResultStructuredOutput, taskResultUsageCost
 import type { TodoPhase } from "./pi-types";
 import { projectIdentityKey, sessionPathKey } from "./paths";
 import { resolveProject, type ProjectInfo } from "./worktree";
+import { selectSessionHistory, type SessionHistoryCursor, type SessionHistoryPage } from "./session-sync";
 
 export { getAgentDir };
 
@@ -546,6 +547,34 @@ export async function getSessionEntriesForDisplayAsync(
     const map = getInFlightEntries();
     if (map.get(key) === parse) map.delete(key);
   }
+}
+
+/** Page raw display history before resolving images, so catch-up never reads
+ * blobs belonging to an already-delivered prefix or another branch. */
+export function getSessionHistoryPage(
+  filePath: string,
+  cursor: SessionHistoryCursor | null,
+  limit: number,
+  leafId?: string,
+  options: { deferThinking?: boolean; deferToolResultImages?: boolean; includePreCompaction?: boolean } = {},
+): { history: SessionHistoryPage; leafId: string | null; tipId: string | null } {
+  const entries = loadEntriesOrThrowTooLarge(filePath);
+  const context = buildSessionContext(entries, leafId, options);
+  const history = selectSessionHistory(context, cursor, limit);
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  const rawPageEntries = history.context.entryIds.map((id) => byId.get(id)!);
+  const pageEntries = toDisplayEntries(
+    rawPageEntries,
+    { skipToolResultImages: options.deferToolResultImages },
+  );
+  history.context.messages = pageEntries.map((entry, index) => (
+    // Reuse blob-free conversions and the selected active/superseded summary.
+    entry === rawPageEntries[index] || entry.type === "compaction"
+      ? history.context.messages[index]
+      : entryToUiMessage(entry, options)!
+  ));
+  const tipId = entries.at(-1)?.id ?? null;
+  return { history, leafId: leafId && byId.has(leafId) ? leafId : tipId, tipId };
 }
 
 function parseTodoPhases(value: unknown): TodoPhase[] | null {

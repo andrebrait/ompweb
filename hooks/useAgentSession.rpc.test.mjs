@@ -96,10 +96,20 @@ class FakeEventSource {
     if (this.closedByCaller) return;
     this.readyState = FakeEventSource.OPEN;
     this.onopen?.({});
+    const sid = this.url.match(/\/api\/agent\/([^/]+)/)?.[1];
+    this.onmessage?.({ data: JSON.stringify({ type: "connected", web: world.streams.get(sid) ?? { streamId: `stream-${sid}`, sequence: 0 } }) });
   }
-  emit(event) {
+  emit(event, { persist = true } = {}) {
     if (this.closedByCaller) return;
-    this.onmessage?.({ data: JSON.stringify(event) });
+    const sid = this.url.match(/\/api\/agent\/([^/]+)/)?.[1];
+    const previous = world.streams.get(sid) ?? { streamId: `stream-${sid}`, sequence: 0 };
+    const web = event.web ?? { ...previous, sequence: previous.sequence + 1 };
+    world.streams.set(sid, web);
+    if (event.type === "agent_start") this.running = true;
+    this.onmessage?.({ data: JSON.stringify({ ...event, web }) });
+    // Native message_end precedes appendMessage; make that persistence explicit.
+    if (event.type === "message_end" && persist && this.running) appendEntry(sid, event.message);
+    if (event.type === "agent_end" && event.isTerminal !== false) this.running = false;
   }
   failFatal() {
     // Browser-facing fatal error (404/500): readyState CLOSED + onerror.
@@ -134,6 +144,10 @@ const world = {
   sessions: new Map(), // sid -> { leafId, messages, entryIds }
   agents: new Map(), // sid -> { running, state }
   subagentSnapshots: new Map(), // sid -> SubagentSnapshotLike[]
+  streams: new Map(),
+  live: new Map(),
+  views: new Map(),
+  contextUnavailable: false,
 };
 
 async function fetchStub(url, init = {}) {
@@ -158,10 +172,28 @@ async function fetchStub(url, init = {}) {
   if (/\/api\/sessions\/[^/?#]+\/subagents/.test(u)) {
     return jsonResponse(200, { subagents: [] });
   }
+  if ((m = u.match(/\/api\/sessions\/([^/?#]+)\/context/)) && method === "GET") {
+    const sid = decodeURIComponent(m[1]);
+    if (world.contextUnavailable) return jsonResponse(503, {});
+    const params = new URL(u, "http://localhost").searchParams;
+    const f = world.views.get(`${sid}:${params.get("leafId") ?? ""}:${params.has("includePreCompaction")}`)
+      ?? world.sessions.get(sid);
+    if (!f) return jsonResponse(404, {});
+    const context = { ...f, todoPhases: [], thinkingLevel: "off", model: null };
+    if (!params.has("sync")) return jsonResponse(200, { context });
+    return jsonResponse(200, {
+      ...selectSessionHistory(context, params.has("cursor") ? JSON.parse(params.get("cursor")) : null),
+      sessionId: sid,
+      leafId: params.get("leafId") ?? f.leafId,
+      live: params.has("leafId") ? null : structuredClone(world.live.get(sid) ?? null),
+    });
+  }
   if ((m = u.match(/\/api\/sessions\/([^/?#]+)/)) && method === "GET") {
+    if (world.contextUnavailable) return jsonResponse(503, {});
     const f = world.sessions.get(decodeURIComponent(m[1]));
     if (!f) return jsonResponse(404, {});
     return jsonResponse(200, {
+      sessionId: decodeURIComponent(m[1]), filePath: "/fixture/session.jsonl", tree: f.tree ?? [],
       leafId: f.leafId,
       context: { messages: f.messages, entryIds: f.entryIds, todoPhases: [] },
     });
@@ -192,10 +224,12 @@ globalThis.fetch = fetchStub;
 const jiti = createJiti(import.meta.url, {
   alias: {
     "@/components/ui/toast": fileURLToPath(new URL("./__fixtures__/toast-stub.mjs", import.meta.url)),
-    "@/": new URL("../", import.meta.url).pathname,
+    "@/": fileURLToPath(new URL("../", import.meta.url)),
   },
 });
 const { useAgentSession } = await jiti.import("../hooks/useAgentSession.ts");
+const { selectSessionHistory } = await jiti.import("../lib/session-sync.ts");
+const { publishSessionsChanged } = await jiti.import("../lib/session-change-bus.ts");
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -222,15 +256,15 @@ function sessionInfo(sid) {
   };
 }
 
-async function mountSession(sid, onAgentEnd, strictMode = false) {
+async function mountSession(sid, onAgentEnd, options = {}, strictMode = false) {
   let latest = null;
   function Chat({ session }) {
-    latest = useAgentSession({ session, newSessionCwd: null, ...(onAgentEnd ? { onAgentEnd } : {}) });
+    latest = useAgentSession({ session, newSessionCwd: null, ...(onAgentEnd ? { onAgentEnd } : {}), ...options });
     return null;
   }
   let renderer;
   await act(async () => {
-    const chat = React.createElement(Chat, { session: sessionInfo(sid) });
+    const chat = React.createElement(Chat, { session: sid === null ? null : sessionInfo(sid) });
     renderer = TestRenderer.create(strictMode ? React.createElement(React.StrictMode, null, chat) : chat);
   });
   await settle(); // hydration: loadSession + /state + models + subagents
@@ -272,6 +306,10 @@ function resetWorld() {
   world.agents.clear();
   world.subagentSnapshots.clear();
   queueStore.clear();
+  world.streams.clear();
+  world.live.clear();
+  world.views.clear();
+  world.contextUnavailable = false;
 }
 
 function primeSession(sid, messages) {
@@ -281,6 +319,15 @@ function primeSession(sid, messages) {
     entryIds: messages.map((_, i) => `e${i}`),
   });
   world.agents.set(sid, { running: false, state: {} });
+}
+
+function saveSession(sid, messages, entryIds = messages.map((_, i) => `e${i}`)) {
+  world.sessions.set(sid, { leafId: entryIds.at(-1) ?? null, messages, entryIds });
+}
+
+function appendEntry(sid, message) {
+  const previous = world.sessions.get(sid);
+  saveSession(sid, [...previous.messages, message], [...previous.entryIds, `e${previous.entryIds.length}`]);
 }
 
 const userMsg = (id, text) => ({ role: "user", id, content: text, timestamp: 1 });
@@ -324,7 +371,7 @@ for (const queue of ["steering", "followUp"]) {
     t.after(unmountAll);
     resetWorld();
     primeSession("cancellation", [userMsg("u0", "q")]);
-    const w = await mountSession("cancellation", undefined, true);
+    const w = await mountSession("cancellation", undefined, {}, true);
     await act(async () => {
       await w.latest.handleSteer("target");
       await w.latest.handleFollowUp("target");
@@ -425,7 +472,7 @@ for (const remaining of ["other", "target"]) {
     await act(() => old.renderer.unmount());
     activeRenderers.delete(old.renderer);
 
-    const current = await mountSession(sid, undefined, true);
+    const current = await mountSession(sid, undefined, {}, true);
     await act(() => lastEs().open());
     const observer = await mountSession(sid);
     await act(() => lastEs().open());
@@ -522,7 +569,7 @@ test("queued promotion waits for native acknowledgement and moves only the first
   t.after(unmountAll);
   resetWorld();
   primeSession("promotion", [userMsg("u0", "q")]);
-  const w = await mountSession("promotion", undefined, true);
+  const w = await mountSession("promotion", undefined, {}, true);
   await act(async () => {
     await w.latest.handleSteer("existing steer");
     await w.latest.handleFollowUp("other");
@@ -576,7 +623,7 @@ test("promotion acknowledgement updates remounted observers and Delete cancels s
   await act(() => old.renderer.unmount());
   activeRenderers.delete(old.renderer);
 
-  const current = await mountSession(sid, undefined, true);
+  const current = await mountSession(sid, undefined, {}, true);
   await act(() => lastEs().open());
   const observer = await mountSession(sid);
   await act(() => lastEs().open());
@@ -632,7 +679,7 @@ test("remounted delivery before promotion acknowledgement preserves the next dup
   await act(async () => { promotion = old.latest.promoteQueuedToSteer("target"); });
   await act(() => old.renderer.unmount());
   activeRenderers.delete(old.renderer);
-  const current = await mountSession(sid, undefined, true);
+  const current = await mountSession(sid, undefined, {}, true);
   const es = lastEs();
   await act(() => es.open());
   await act(async () => {
@@ -755,7 +802,7 @@ test("cancellation cannot race a pending promotion and remove the next duplicate
   t.after(unmountAll);
   resetWorld();
   primeSession("removed-promotion", [userMsg("u0", "q")]);
-  const w = await mountSession("removed-promotion", undefined, true);
+  const w = await mountSession("removed-promotion", undefined, {}, true);
   await act(async () => {
     await w.latest.handleFollowUp("target");
     await w.latest.handleFollowUp("target");
@@ -859,11 +906,11 @@ test("full run over fake SSE: optimistic bubble, coalesced streaming, terminal r
   assert.equal(w.latest.messages[2]?.content?.[0]?.text, "hello world");
 
   // agent_end terminates the run and triggers the terminal reload.
-  world.sessions.get("s1").messages = [
+  saveSession("s1", [
     userMsg("u0", "loaded question"),
     userMsg("u1", "hello agent"),
     assistantMsg("a1", "hello world"),
-  ];
+  ]);
   await act(async () => {
     es.emit({ type: "agent_end", isTerminal: true });
   });
@@ -1005,10 +1052,7 @@ test("a failed transcript reload is retried instead of being classified as an em
   primeSession("s1", [userMsg("u0", "old question")]);
   const { w } = await startRun(t, "s1", "new question");
   primeSession("s1", [userMsg("u0", "old question"), userMsg("u1", "new question"), assistantMsg("a1", "Saved answer")]);
-  world.holds.push({
-    match: (method, url) => method === "GET" && url.startsWith("/api/sessions/s1?"),
-    produce: async () => ({ status: 503, value: {} }),
-  });
+  world.contextUnavailable = true;
   await act(async () => {
     docTarget.fire("visibilitychange");
     await sleep(60);
@@ -1017,6 +1061,7 @@ test("a failed transcript reload is retried instead of being classified as an em
   assert.equal(w.latest.agentRunning, true, "unknown completion must remain recoverable");
   assert.deepEqual(w.latest.notices.filter((n) => n.type === "error"), []);
 
+  world.contextUnavailable = false;
   await act(async () => {
     winTarget.fire("online");
     await sleep(60);
@@ -1039,11 +1084,9 @@ for (const nextRun of ["send", "interrupt"]) {
       world.holds.push({
         match: (method, url) => method === "GET" && url.startsWith("/api/sessions/s1?"),
         produce: () => new Promise((resolve) => {
-          releaseTerminalReload = () => resolve({ value: {
-            sessionId: "s1",
-            leafId: "3",
-            context: { ...world.sessions.get("s1"), todoPhases: [] },
-          } });
+          const file = world.sessions.get("s1");
+          const snapshot = { sessionId: "s1", leafId: file.leafId, tree: [], context: { ...file, todoPhases: [] } };
+          releaseTerminalReload = () => resolve({ value: snapshot });
         }),
       });
       await act(async () => {
@@ -1115,6 +1158,7 @@ test("tool output streams live before the toolResult message lands", async (t) =
   };
   await act(async () => {
     es.emit({ type: "agent_start" });
+    es.emit({ type: "message_end", message: userMsg("u1", "q1") });
     es.emit({ type: "message_end", message: toolCallAssistant });
     await Promise.resolve();
   });
@@ -1165,7 +1209,7 @@ test("tool output streams live before the toolResult message lands", async (t) =
     await Promise.resolve();
   });
   assert.equal(w.latest.liveToolResults.size, 1);
-  world.sessions.get("s1").messages = [userMsg("u0", "q"), userMsg("u1", "q1"), toolCallAssistant];
+  saveSession("s1", [userMsg("u0", "q"), userMsg("u1", "q1"), toolCallAssistant]);
   await act(async () => {
     es.emit({ type: "agent_end", isTerminal: true });
   });
@@ -1184,7 +1228,7 @@ test("late frames after the run finished are ignored (no ghost bubble, no double
     es.emit({ type: "message_end", message: assistantMsg("a1", "done") });
     // Disk snapshot in sync BEFORE agent_end: the terminal reload replaces
     // in-memory messages with the session file's content.
-    world.sessions.get("s1").messages = [userMsg("u0", "q"), userMsg("u1", "q1"), assistantMsg("a1", "done")];
+    saveSession("s1", [userMsg("u0", "q"), userMsg("u1", "q1"), assistantMsg("a1", "done")]);
     es.emit({ type: "agent_end", isTerminal: true });
     await Promise.resolve();
   });
@@ -1434,7 +1478,7 @@ test("network returns while agent_end was missed: the online reconcile recovers 
   const { w } = await startStreamingRun(t, "s1");
 
   // Half-open SSE: no agent_end frame ever arrived, but omp already finished.
-  world.sessions.get("s1").messages = [userMsg("u0", "q"), userMsg("u1", "q1"), assistantMsg("a1", "streaming")];
+  saveSession("s1", [userMsg("u0", "q"), userMsg("u1", "q1"), assistantMsg("a1", "streaming")]);
   world.agents.set("s1", { running: false, state: {} });
 
   await act(async () => {
@@ -1491,4 +1535,672 @@ test("subagent roster is restored from the get_subagents snapshot after reconnec
     "completed",
     "reconnect must restore the roster from the fresh snapshot",
   );
+});
+
+function liveSnapshot(sid, sequence, streamingMessage, toolEvents = []) {
+  return {
+    cursor: { streamId: `stream-${sid}`, sequence },
+    isStreaming: true, isPromptRunning: true, isCompacting: false,
+    streamingMessage, toolEvents,
+  };
+}
+
+function syncSnapshot(sid, live = null, cursor = null) {
+  const file = world.sessions.get(sid);
+  return {
+    ...selectSessionHistory({ ...file, todoPhases: [], thinkingLevel: "off", model: null }, cursor),
+    sessionId: sid, leafId: file.leafId, live,
+  };
+}
+
+function holdNextSync(sid, value) {
+  let release;
+  world.holds.push({
+    match: (method, url) => method === "GET" && url.startsWith(`/api/sessions/${sid}/context?`) && url.includes("sync=1"),
+    produce: () => new Promise((resolve) => { release = () => resolve({ value }); }),
+  });
+  return () => {
+    assert.ok(release, "sync must be in flight");
+    release();
+  };
+}
+
+test("busy foreground catch-up restores missing middle messages without overwriting newer queued tokens", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "old question")]);
+  const { w, es } = await startStreamingRun(t, "s1");
+  world.agents.set("s1", { running: true, state: { isStreaming: true } });
+  saveSession("s1", [
+    userMsg("u0", "old question"), userMsg("u1", "q1"),
+    assistantMsg("middle1", "first missed answer"),
+    { role: "toolResult", toolCallId: "middle-tool", toolName: "read", content: [{ type: "text", text: "missed output" }] },
+    assistantMsg("middle2", "second missed answer"),
+  ]);
+  const release = holdNextSync("s1", syncSnapshot("s1", liveSnapshot("s1", 2, assistantMsg("current", "old HTTP partial"))));
+  await act(async () => {
+    docTarget.fire("visibilitychange");
+    await sleep(20);
+    es.emit({ type: "extension_ui_request", id: "question", method: "confirm", title: "Keep going?" });
+    es.emit({ type: "message_update", message: assistantMsg("current", "newer tokens") });
+    release();
+  });
+  await settle(90);
+  assert.deepEqual(w.latest.entryIds, ["e0", "e1", "e2", "e3", "e4"]);
+  assert.deepEqual(w.latest.messages.filter((m) => m.role === "assistant").map((m) => m.content[0].text), ["first missed answer", "second missed answer"]);
+  assert.equal(w.latest.streamState.streamingMessage?.content[0].text, "newer tokens");
+  assert.equal(w.latest.agentRunning, true);
+  assert.equal(w.latest.extensionDialog?.id, "question", "sync must not discard non-message events");
+});
+
+test("reopen hydrates a current partial and active tools even when no new token arrives", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w, es } = await startStreamingRun(t, "s1");
+  world.agents.set("s1", { running: true, state: { isStreaming: true } });
+  world.live.set("s1", liveSnapshot("s1", 10, assistantMsg("current", "recovered partial"), [{
+    type: "tool_execution_update", toolCallId: "read-1", toolName: "read", args: { path: "x" },
+    partialResult: { content: [{ type: "text", text: "recovered tool output" }] },
+  }]));
+  await act(async () => {
+    // This token is still in the display coalescer when the newer HTTP state lands.
+    es.open();
+    es.emit({ type: "message_update", message: assistantMsg("current", "queued old partial") });
+  });
+  await settle(90);
+  assert.equal(w.latest.streamState.streamingMessage?.content[0].text, "recovered partial");
+  assert.equal(w.latest.liveToolResults.get("read-1")?.content[0].text, "recovered tool output");
+  assert.deepEqual(w.latest.agentPhase?.tools, [{ id: "read-1", name: "read" }]);
+  await act(async () => {
+    es.emit({ type: "message_update", message: assistantMsg("current", "late pre-snapshot frame"), web: { streamId: "stream-s1", sequence: 9 } });
+  });
+  await settle(90);
+  assert.equal(w.latest.streamState.streamingMessage?.content[0].text, "recovered partial");
+});
+
+test("a terminal event fences a held busy snapshot and does not revive streaming", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w, es } = await startStreamingRun(t, "s1");
+  const release = holdNextSync("s1", syncSnapshot("s1", liveSnapshot("s1", 2, assistantMsg("current", "stale busy partial"))));
+  await act(async () => {
+    publishSessionsChanged(["s1"]);
+    await sleep(20);
+    saveSession("s1", [userMsg("u0", "q"), userMsg("u1", "q1"), assistantMsg("a1", "final answer")]);
+    es.emit({ type: "agent_end", isTerminal: true });
+    release();
+  });
+  await settle();
+  assert.equal(w.latest.agentRunning, false);
+  assert.equal(w.latest.streamState.streamingMessage, null);
+  assert.equal(w.latest.messages.at(-1).content[0].text, "final answer");
+});
+
+test("a replacement prompt fences held history and keeps its optimistic user until disk confirms an ID", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w } = await startStreamingRun(t, "s1");
+  const release = holdNextSync("s1", syncSnapshot("s1", liveSnapshot("s1", 2, assistantMsg("a1", "old run"))));
+  await act(async () => {
+    publishSessionsChanged(["s1"]);
+    await sleep(20);
+    const interrupt = w.latest.handleInterruptAndReply("new prompt");
+    await sleep(20);
+    const replacement = lastEs();
+    replacement.open();
+    await interrupt;
+    replacement.emit({ type: "agent_end", isTerminal: true });
+    replacement.emit({ type: "agent_start" });
+    replacement.emit({ type: "message_update", message: assistantMsg("a2", "new run") });
+    release();
+  });
+  await settle(90);
+  assert.equal(w.latest.agentRunning, true);
+  assert.equal(w.latest.streamState.streamingMessage?.content[0].text, "new run");
+  assert.equal(w.latest.messages.at(-1).content, "new prompt");
+  assert.deepEqual(w.latest.entryIds, ["e0"], "optimistic messages have no invented entry ID");
+  await act(async () => {
+    appendEntry("s1", userMsg("native", "new prompt (expanded by native)"));
+    publishSessionsChanged(["s1"]);
+  });
+  await settle();
+  assert.equal(w.latest.messages.at(-1).content, "new prompt (expanded by native)");
+  assert.equal(w.latest.messages.length, 2);
+});
+
+test("branch navigation fences held catch-up and preserves the selected pre-compaction view", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("live", "live branch")]);
+  const w = await mountSession("s1");
+  const branch = { leafId: "branch", messages: [userMsg("b", "selected branch")], entryIds: ["branch-entry"] };
+  const expanded = { leafId: "branch", messages: [userMsg("pre", "before compaction"), ...branch.messages], entryIds: ["pre-entry", "branch-entry"] };
+  world.views.set("s1:branch:false", branch);
+  world.views.set("s1:branch:true", expanded);
+  const release = holdNextSync("s1", syncSnapshot("s1"));
+  await act(async () => {
+    winTarget.fire("online");
+    await sleep(20);
+    await w.latest.handleNavigate("branch");
+    release();
+  });
+  await settle();
+  assert.deepEqual(w.latest.entryIds, ["branch-entry"]);
+  assert.equal(w.latest.activeLeafId, "branch");
+  await act(async () => {
+    w.latest.togglePreCompactionHistory();
+  });
+  await settle();
+  await act(async () => {
+    publishSessionsChanged(["s1"]);
+    winTarget.fire("online");
+  });
+  await settle();
+  assert.deepEqual(w.latest.entryIds, ["pre-entry", "branch-entry"]);
+  assert.equal(w.latest.showPreCompactionHistory, true);
+  assert.equal(w.latest.activeLeafId, "branch");
+  assert.deepEqual(callsTo("POST", "/api/agent/"), [], "reading a historical/file-only session must not start native");
+});
+
+test("file-only catch-up drains pages, deduplicates IDs, and keeps identical messages with distinct IDs", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const w = await mountSession("s1");
+  const repeated = assistantMsg("not-a-persisted-id", "identical answer");
+  const saved = [userMsg("u0", "q"), ...Array.from({ length: 205 }, () => repeated)];
+  const ids = saved.map((_, i) => `e${i}`);
+  saveSession("s1", [...saved, repeated], [...ids, "e205"]);
+  await act(async () => { winTarget.fire("online"); });
+  await settle();
+  assert.deepEqual(w.latest.entryIds, ids);
+  assert.equal(w.latest.messages.filter((m) => m.role === "assistant").length, 205);
+  await act(async () => { publishSessionsChanged(["s1"]); });
+  await settle();
+  assert.deepEqual(w.latest.entryIds, ids, "the same persisted ID cannot commit twice");
+  assert.deepEqual(callsTo("POST", "/api/agent/"), []);
+  // Compaction changed the context prefix and invalidates the old cursor.
+  saveSession("s1", [assistantMsg("summary", "compacted history"), userMsg("tip", "new question")], ["summary", "new-tip"]);
+  await act(async () => { publishSessionsChanged(["s1"]); });
+  await settle();
+  assert.deepEqual(w.latest.entryIds, ["summary", "new-tip"]);
+  assert.equal(w.latest.messages[0].content[0].text, "compacted history");
+});
+
+test("failed idle catch-up preserves history and cursor for the next online trigger", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const w = await mountSession("s1");
+  saveSession("s1", [userMsg("u0", "q"), assistantMsg("a1", "saved answer")]);
+  world.holds.push({
+    match: (method, url) => method === "GET" && url.includes("/api/sessions/s1/context?"),
+    produce: async () => ({ status: 503, value: {} }),
+  });
+  await act(async () => { publishSessionsChanged(["s1"]); });
+  await settle();
+  assert.deepEqual(w.latest.entryIds, ["e0"]);
+  assert.equal(w.latest.messages[0].content, "q");
+  assert.equal(w.latest.error, null);
+  await act(async () => { winTarget.fire("online"); });
+  await settle();
+  assert.deepEqual(w.latest.entryIds, ["e0", "e1"]);
+  assert.equal(w.latest.messages[1].content[0].text, "saved answer");
+});
+
+test("file notification after delayed native persistence catches up even with SSE still attached", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w, es } = await startStreamingRun(t, "s1");
+  world.agents.set("s1", { running: true, state: { isStreaming: true } });
+  await act(async () => {
+    es.emit({ type: "message_end", message: userMsg("u1", "q1") });
+    es.emit({ type: "message_end", message: assistantMsg("a1", "saved later") }, { persist: false });
+  });
+  await settle();
+  assert.equal(w.latest.messages.some((m) => m.role === "assistant"), false, "raw message_end has no durable identity");
+  await act(async () => {
+    appendEntry("s1", assistantMsg("a1", "saved later"));
+    publishSessionsChanged(["s1"]);
+  });
+  await settle();
+  assert.equal(es.closedByCaller, false);
+  assert.equal(w.latest.agentRunning, true);
+  assert.equal(w.latest.messages.at(-1).content[0].text, "saved later");
+  assert.deepEqual(w.latest.entryIds, ["e0", "e1", "e2"]);
+});
+
+test("wrapper epoch changes reject an old HTTP snapshot and hydrate the replacement stream", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w, es } = await startStreamingRun(t, "s1");
+  const release = holdNextSync("s1", syncSnapshot("s1", liveSnapshot("s1", 20, assistantMsg("old", "old wrapper"))));
+  await act(async () => {
+    publishSessionsChanged(["s1"]);
+    await sleep(20);
+    world.live.set("s1", { ...liveSnapshot("s1", 1, assistantMsg("new", "replacement wrapper")), cursor: { streamId: "replacement", sequence: 1 } });
+    es.emit({ type: "connected", web: { streamId: "replacement", sequence: 0 } });
+    release();
+  });
+  await settle();
+  assert.equal(w.latest.streamState.streamingMessage?.content[0].text, "replacement wrapper");
+  assert.equal(w.latest.agentRunning, true);
+});
+
+test("an abandoned new-chat send delivers its prompt without promoting or attaching a stream", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  let release;
+  world.holds.push({
+    match: (method, url) => method === "POST" && url === "/api/agent/new",
+    produce: () => new Promise((resolve) => { release = () => resolve({ value: { sessionId: "created" } }); }),
+  });
+  const promoted = [];
+  const w = await mountSession(null, undefined, { newSessionCwd: "/workspace", onSessionCreated: (session) => promoted.push(session.id) });
+  let send;
+  await act(async () => {
+    send = w.latest.handleSend("deliver after navigation");
+    await sleep(20);
+    w.renderer.unmount();
+  });
+  activeRenderers.delete(w.renderer);
+  await act(async () => {
+    release();
+    assert.equal(await send, true);
+  });
+  assert.deepEqual(promoted, []);
+  assert.deepEqual(world.esInstances, []);
+  assert.ok(world.calls.some((call) => call.url.startsWith("/api/agent/created") && call.body?.message === "deliver after navigation"));
+});
+
+test("forking carries the advisor choice to the child's next native command", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("advisor-parent", [userMsg("u0", "q")]);
+  const forked = [];
+  const w = await mountSession("advisor-parent", undefined, { onSessionForked: (id) => forked.push(id) });
+  await act(async () => { w.latest.handleAdvisorChange(true); });
+  world.holds.push({
+    match: (method, url) => method === "POST" && url.startsWith("/api/agent/advisor-parent"),
+    produce: async () => ({ value: { success: true, data: { newSessionId: "advisor-child" } } }),
+  });
+  await act(async () => { await w.latest.handleFork("e0"); });
+  assert.deepEqual(forked, ["advisor-child"]);
+  assert.equal(localStorage.getItem("omp-advisor-enabled:advisor-child"), "true");
+  const { sendAgentCommand } = await jiti.import("../lib/agent-client.ts");
+  await sendAgentCommand("advisor-child", { type: "get_state" });
+  assert.ok(world.calls.some((call) => call.url === "/api/agent/advisor-child?advisor=1"));
+});
+
+test("catch-up metadata cannot overwrite a newer live todo snapshot during a run", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w, es } = await startStreamingRun(t, "s1");
+  const newerTodos = [{ id: "current", title: "Current plan", tasks: [] }];
+  world.agents.set("s1", { running: true, state: { isStreaming: true, todoPhases: newerTodos } });
+  const response = syncSnapshot("s1", liveSnapshot("s1", 10, assistantMsg("current", "current partial")));
+  response.context.todoPhases = [{ id: "old", title: "Old disk plan", tasks: [] }];
+  const release = holdNextSync("s1", response);
+  await act(async () => {
+    publishSessionsChanged(["s1"]);
+    await sleep(20);
+    es.emit({ type: "todo_reminder" });
+    await sleep(20);
+    release();
+  });
+  await settle();
+  assert.deepEqual(w.latest.todoPhases, newerTodos);
+  assert.equal(w.latest.streamState.streamingMessage?.content[0].text, "current partial");
+});
+
+test("a late full branch context cannot replace a newer incremental history commit", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("live", "live branch")]);
+  const w = await mountSession("s1");
+  const branch = { leafId: "branch", messages: [userMsg("b", "branch question")], entryIds: ["b1"] };
+  world.views.set("s1:branch:false", branch);
+  let release;
+  world.holds.push({
+    match: (method, url) => method === "GET" && url.includes("/api/sessions/s1/context?") && !url.includes("sync=1"),
+    produce: () => new Promise((resolve) => { release = () => resolve({ value: { context: branch } }); }),
+  });
+  let navigation;
+  await act(async () => {
+    navigation = w.latest.handleNavigate("branch");
+    await sleep(20);
+    world.views.set("s1:branch:false", { ...branch, messages: [...branch.messages, assistantMsg("new", "new branch answer")], entryIds: ["b1", "b2"] });
+    publishSessionsChanged(["s1"]);
+  });
+  await settle();
+  assert.deepEqual(w.latest.entryIds, ["b1", "b2"]);
+  await act(async () => {
+    release();
+    await navigation;
+  });
+  await settle();
+  assert.deepEqual(w.latest.entryIds, ["b1", "b2"]);
+  assert.equal(w.latest.messages.at(-1).content[0].text, "new branch answer");
+});
+
+test("same-text queued delivery is consumed live and committed only when its distinct ID is saved", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w, es } = await startRun(t, "s1", "same");
+  const delivered = userMsg("raw-without-persisted-identity", "same");
+  await act(async () => {
+    es.emit({ type: "agent_start" });
+    es.emit({ type: "message_end", message: delivered });
+  });
+  await settle();
+  await act(async () => { await w.latest.handleFollowUp("same"); });
+  assert.deepEqual(w.latest.queuedMessages.followUp, ["same"]);
+  await act(async () => {
+    es.emit({ type: "message_end", message: delivered }, { persist: false });
+  });
+  await settle();
+  assert.deepEqual(w.latest.queuedMessages.followUp, []);
+  assert.deepEqual(w.latest.messages.map((message) => message.content), ["q", "same"]);
+  await act(async () => {
+    appendEntry("s1", delivered);
+    publishSessionsChanged(["s1"]);
+  });
+  await settle();
+  assert.deepEqual(w.latest.entryIds, ["e0", "e1", "e2"]);
+  assert.deepEqual(w.latest.messages.map((message) => message.content), ["q", "same", "same"]);
+});
+
+test("an orphaned tail cursor resets history even when the branch prefix still matches", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q"), assistantMsg("old", "orphaned answer")]);
+  const w = await mountSession("s1");
+  saveSession("s1", [userMsg("u0", "q"), assistantMsg("new", "replacement branch")], ["e0", "branch-tail"]);
+  await act(async () => { winTarget.fire("online"); });
+  await settle();
+  assert.deepEqual(w.latest.entryIds, ["e0", "branch-tail"]);
+  assert.equal(w.latest.messages[1].content[0].text, "replacement branch");
+});
+
+test("file triggers coalesce while a sync is held and rerun to recover later persistence", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w } = await startStreamingRun(t, "s1");
+  saveSession("s1", [userMsg("u0", "q"), userMsg("u1", "q1"), assistantMsg("a1", "first saved answer")]);
+  const release = holdNextSync("s1", syncSnapshot("s1"));
+  const before = callsTo("GET", "/api/sessions/s1/context?").length;
+  await act(async () => {
+    publishSessionsChanged(["s1"]);
+    await sleep(20);
+    appendEntry("s1", assistantMsg("a2", "later saved answer"));
+    publishSessionsChanged(["s1"]);
+    publishSessionsChanged(["s1"]);
+    release();
+  });
+  await settle();
+  assert.deepEqual(w.latest.entryIds, ["e0", "e1", "e2", "e3"]);
+  assert.deepEqual(w.latest.messages.filter((message) => message.role === "assistant").map((message) => message.content[0].text), ["first saved answer", "later saved answer"]);
+  assert.equal(callsTo("GET", "/api/sessions/s1/context?").length - before, 2, "one in-flight read plus one coalesced reread");
+  assert.equal(w.latest.streamState.streamingMessage?.content[0].text, "streaming");
+});
+
+for (const persistBeforeReply of [true, false]) {
+  test(`a concurrent completed message is fetched once when persistence is ${persistBeforeReply ? "before" : "after"} the held reply`, async (t) => {
+    t.after(unmountAll);
+    resetWorld();
+    primeSession("s1", [userMsg("u0", "q")]);
+    const { w, es } = await startStreamingRun(t, "s1");
+    world.agents.set("s1", { running: true, state: { isStreaming: true } });
+    saveSession("s1", [userMsg("u0", "q"), userMsg("u1", "q1"), assistantMsg("a1", "first saved answer")]);
+    await act(async () => { publishSessionsChanged(["s1"]); });
+    await settle();
+    assert.deepEqual(w.latest.entryIds, ["e0", "e1", "e2"]);
+
+    appendEntry("s1", assistantMsg("a2", "repeated saved answer"));
+    const release = holdNextSync("s1", syncSnapshot("s1", null, { firstEntryId: "e0", lastEntryId: "e2" }));
+    const before = callsTo("GET", "/api/sessions/s1/context?").length;
+    const concurrent = assistantMsg("a3", "repeated saved answer");
+    await act(async () => {
+      docTarget.fire("visibilitychange");
+      await sleep(20);
+      es.emit({ type: "message_end", message: concurrent }, { persist: persistBeforeReply });
+      es.emit({ type: "message_update", message: assistantMsg("a4", "new partial after completion") });
+      release();
+    });
+    await settle();
+    const reads = callsTo("GET", "/api/sessions/s1/context?").slice(before);
+    assert.equal(reads.length, 2, "one in-flight fetch plus one completion-triggered reread");
+    assert.equal(JSON.parse(new URL(reads[1].url, "http://localhost").searchParams.get("cursor")).lastEntryId, "e3", "the reread starts after the returned cursor");
+
+    if (!persistBeforeReply) {
+      assert.deepEqual(w.latest.entryIds, ["e0", "e1", "e2", "e3"], "an unpersisted event cannot advance the durable cursor");
+      await act(async () => {
+        appendEntry("s1", concurrent);
+        publishSessionsChanged(["s1"]);
+      });
+      await settle();
+    }
+    assert.deepEqual(w.latest.entryIds, ["e0", "e1", "e2", "e3", "e4"]);
+    assert.deepEqual(w.latest.messages.filter((message) => message.role === "assistant").map((message) => message.content[0].text), [
+      "first saved answer", "repeated saved answer", "repeated saved answer",
+    ]);
+    assert.equal(w.latest.streamState.streamingMessage?.content[0].text, "new partial after completion");
+    assert.equal(w.latest.agentRunning, true);
+  });
+}
+
+test("a saved provider failure still surfaces when its SSE completion arrives behind a newer snapshot", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w, es } = await startStreamingRun(t, "s1");
+  const providerError = "Provider rejected the resumed request";
+  const failed = { ...assistantMsg("failed", ""), stopReason: "error", errorMessage: providerError };
+  saveSession("s1", [userMsg("u0", "q"), userMsg("u1", "q1"), failed]);
+  world.agents.set("s1", { running: true, state: { isStreaming: true } });
+  world.live.set("s1", liveSnapshot("s1", 50, null));
+  await act(async () => { docTarget.fire("visibilitychange"); });
+  await settle();
+  await act(async () => {
+    es.emit({ type: "message_end", message: failed, web: { streamId: "stream-s1", sequence: 40 } }, { persist: false });
+    world.agents.set("s1", { running: false, state: {} });
+    world.live.set("s1", { ...liveSnapshot("s1", 51, null), isStreaming: false, isPromptRunning: false });
+    winTarget.fire("online");
+  });
+  await settle();
+  assert.equal(w.latest.agentRunning, false);
+  assert.ok(w.latest.notices.some((notice) => notice.type === "error" && notice.message === providerError));
+  assert.deepEqual(w.latest.entryIds, ["e0", "e1", "e2"]);
+  assert.equal(w.latest.messages.filter((message) => message.role === "assistant" && message.errorMessage === providerError).length, 1);
+});
+
+test("terminal full refresh updates branch metadata as well as cursor-owned history", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w, es } = await startStreamingRun(t, "s1");
+  const tree = [{ id: "new-branch", children: [] }];
+  saveSession("s1", [userMsg("u0", "q"), userMsg("u1", "q1"), assistantMsg("a1", "finished")]);
+  world.sessions.get("s1").tree = tree;
+  await act(async () => { es.emit({ type: "agent_end", isTerminal: true }); });
+  await settle();
+  assert.deepEqual(w.latest.data.tree, tree);
+  assert.deepEqual(w.latest.entryIds, ["e0", "e1", "e2"]);
+  assert.equal(w.latest.activeLeafId, "e2");
+  assert.equal(w.latest.agentRunning, false);
+});
+
+test("an unrelated newer notice does not prevent recovering a held partial and tool snapshot", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w, es } = await startStreamingRun(t, "s1");
+  const snapshot = liveSnapshot("s1", 10, assistantMsg("missed", "recovered without another token"), [{
+    type: "tool_execution_update", toolCallId: "missed-tool", toolName: "read",
+    partialResult: { content: [{ type: "text", text: "recovered tool output" }] },
+  }]);
+  world.streams.set("s1", snapshot.cursor);
+  const release = holdNextSync("s1", syncSnapshot("s1", snapshot));
+  await act(async () => {
+    publishSessionsChanged(["s1"]);
+    await sleep(20);
+    es.emit({ type: "notice", level: "info", message: "A newer unrelated notice" });
+    release();
+  });
+  await settle();
+  assert.equal(w.latest.streamState.streamingMessage?.content[0].text, "recovered without another token");
+  assert.equal(w.latest.liveToolResults.get("missed-tool")?.content[0].text, "recovered tool output");
+  assert.ok(w.latest.notices.some((notice) => notice.message === "A newer unrelated notice"));
+});
+
+test("selective hydration preserves newer queued tokens and per-tool progress while recovering another tool", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w, es } = await startStreamingRun(t, "s1");
+  const snapshot = liveSnapshot("s1", 10, assistantMsg("old", "stale snapshot tokens"), [
+    { type: "tool_execution_update", toolCallId: "newer-tool", toolName: "bash", partialResult: { content: [{ type: "text", text: "stale tool output" }] } },
+    { type: "tool_execution_update", toolCallId: "missed-tool", toolName: "read", partialResult: { content: [{ type: "text", text: "recovered missed output" }] } },
+  ]);
+  world.streams.set("s1", snapshot.cursor);
+  const release = holdNextSync("s1", syncSnapshot("s1", snapshot));
+  await act(async () => {
+    publishSessionsChanged(["s1"]);
+    await sleep(20);
+    es.emit({ type: "tool_execution_start", toolCallId: "newer-tool", toolName: "bash" });
+    es.emit({ type: "tool_execution_update", toolCallId: "newer-tool", toolName: "bash", partialResult: { content: [{ type: "text", text: "newer queued tool output" }] } });
+    es.emit({ type: "message_update", message: assistantMsg("new", "newer queued tokens") });
+    release();
+  });
+  await settle(90);
+  assert.equal(w.latest.streamState.streamingMessage?.content[0].text, "newer queued tokens");
+  assert.equal(w.latest.liveToolResults.get("newer-tool")?.content[0].text, "newer queued tool output");
+  assert.equal(w.latest.liveToolResults.get("missed-tool")?.content[0].text, "recovered missed output");
+});
+
+test("HTTP discovery of a new wrapper replaces an old still-open stream before hydrating it", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w, es } = await startStreamingRun(t, "s1");
+  const snapshot = { ...liveSnapshot("s1", 1, assistantMsg("new", "new wrapper partial")), cursor: { streamId: "new-wrapper", sequence: 1 } };
+  world.live.set("s1", snapshot);
+  world.streams.set("s1", snapshot.cursor);
+  await act(async () => { publishSessionsChanged(["s1"]); });
+  await settle();
+  const replacement = lastEs();
+  assert.notEqual(replacement, es);
+  assert.equal(es.closedByCaller, true, "an old heartbeat-only connection must be replaced");
+  await act(async () => { replacement.open(); });
+  await settle();
+  assert.equal(w.latest.streamState.streamingMessage?.content[0].text, "new wrapper partial");
+  await act(async () => { replacement.emit({ type: "message_update", message: assistantMsg("new", "new wrapper live-only tokens") }); });
+  await settle(90);
+  assert.equal(w.latest.streamState.streamingMessage?.content[0].text, "new wrapper live-only tokens");
+});
+
+test("foreground catch-up replaces an idle CLOSED source and resumes later live-only updates", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w, es } = await startStreamingRun(t, "s1");
+  saveSession("s1", [userMsg("u0", "q"), userMsg("u1", "q1"), assistantMsg("done", "finished")]);
+  await act(async () => { es.emit({ type: "agent_end", isTerminal: true }); });
+  await settle();
+  assert.equal(w.latest.agentRunning, false);
+  es.failFatal();
+  const cursor = { streamId: "stream-s1", sequence: 10 };
+  world.streams.set("s1", cursor);
+  world.live.set("s1", { ...liveSnapshot("s1", 10, assistantMsg("resumed", "busy snapshot")), cursor });
+  world.agents.set("s1", { running: true, state: { isStreaming: true } });
+  await act(async () => { winTarget.fire("online"); });
+  await settle();
+  const replacement = lastEs();
+  assert.notEqual(replacement, es);
+  await act(async () => { replacement.open(); });
+  await settle();
+  assert.equal(w.latest.agentRunning, true);
+  assert.equal(w.latest.streamState.streamingMessage?.content[0].text, "busy snapshot");
+  await act(async () => { replacement.emit({ type: "message_update", message: assistantMsg("resumed", "live-only continuation") }); });
+  await settle(90);
+  assert.equal(w.latest.streamState.streamingMessage?.content[0].text, "live-only continuation");
+});
+
+test("newer tool progress does not block hydration of a missed assistant partial", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w, es } = await startStreamingRun(t, "s1");
+  const snapshot = liveSnapshot("s1", 10, assistantMsg("missed", "missed assistant partial"), [{
+    type: "tool_execution_update", toolCallId: "tool", toolName: "bash",
+    partialResult: { content: [{ type: "text", text: "old tool result" }] },
+  }]);
+  world.streams.set("s1", snapshot.cursor);
+  const release = holdNextSync("s1", syncSnapshot("s1", snapshot));
+  await act(async () => {
+    publishSessionsChanged(["s1"]);
+    await sleep(20);
+    es.emit({ type: "tool_execution_start", toolCallId: "tool", toolName: "bash" });
+    es.emit({ type: "tool_execution_update", toolCallId: "tool", toolName: "bash", partialResult: { content: [{ type: "text", text: "newer tool result" }] } });
+    release();
+  });
+  await settle(90);
+  assert.equal(w.latest.streamState.streamingMessage?.content[0].text, "missed assistant partial");
+  assert.equal(w.latest.liveToolResults.get("tool")?.content[0].text, "newer tool result");
+});
+
+test("idle closed streams retain capped backoff and a healthy replacement cancels pending retry", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w, es } = await startStreamingRun(t, "s1");
+  saveSession("s1", [userMsg("u0", "q"), userMsg("u1", "q1"), assistantMsg("a1", "finished")]);
+  await act(async () => { es.emit({ type: "agent_end", isTerminal: true }); });
+  await settle();
+  assert.equal(w.latest.agentRunning, false);
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+
+  let source = es;
+  for (const delay of [1000, 2000, 4000, 8000, 16000, 30000, 30000]) {
+    const before = world.esInstances.length;
+    await act(async () => {
+      source.failFatal();
+      t.mock.timers.tick(delay - 1);
+    });
+    assert.equal(world.esInstances.length, before);
+    await act(async () => { t.mock.timers.tick(1); });
+    assert.equal(world.esInstances.length, before + 1);
+    source = lastEs();
+  }
+
+  await act(async () => { source.open(); });
+  const beforeReset = world.esInstances.length;
+  await act(async () => {
+    source.failFatal();
+    t.mock.timers.tick(999);
+  });
+  assert.equal(world.esInstances.length, beforeReset);
+  await act(async () => { t.mock.timers.tick(1); });
+  assert.equal(world.esInstances.length, beforeReset + 1, "successful open resets the retry delay");
+
+  source = lastEs();
+  await act(async () => { source.open(); source.failFatal(); });
+  world.live.set("s1", { ...liveSnapshot("s1", 100, null), isStreaming: false, isPromptRunning: false });
+  await act(async () => { winTarget.fire("online"); });
+  const healthy = lastEs();
+  assert.notEqual(healthy, source, "foreground recovery replaces the closed source before its timer");
+  await act(async () => {
+    healthy.open();
+    t.mock.timers.tick(30000);
+  });
+  assert.equal(lastEs(), healthy, "an orphaned backoff timer must not replace the healthy stream");
+  assert.equal(healthy.closedByCaller, false);
 });
