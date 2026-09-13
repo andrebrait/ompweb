@@ -697,13 +697,19 @@ test("remounted delivery before promotion acknowledgement preserves the next dup
   await act(async () => {
     await current.latest.promoteQueuedToSteer("target");
     assert.equal(await current.latest.removeQueuedMessage("target", "followUp"), false);
-    es.emit({ type: "message_end", message: userMsg("delivered", "target") });
+    es.emit({ type: "message_end", message: userMsg("delivered", "target") }, { persist: false });
     release({ value: { success: true, data: { promoted: true } } });
     await promotion;
   });
   const remaining = { steering: [], followUp: ["target"] };
   assert.deepEqual(current.latest.queuedMessages, remaining);
   assert.deepEqual(JSON.parse(queueStore.get(`omp-queue-${sid}`)), remaining);
+  assert.equal(current.latest.messages.some((message) => message.role === "user" && message.content === "target"), false);
+  await act(async () => {
+    appendEntry(sid, userMsg("delivered", "target"));
+    publishSessionsChanged([sid]);
+  });
+  await settle();
   assert.equal(current.latest.messages.filter((message) => message.role === "user" && message.content === "target").length, 1);
   assert.equal(world.calls.filter((call) => call.body?.type === "promote_queued_message").length, 1);
   assert.equal(world.calls.some((call) => call.body?.type === "remove_queued_message"), false);
