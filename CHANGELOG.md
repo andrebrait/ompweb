@@ -15,6 +15,7 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 - Cancel queued messages in OMP before removing their chips or recalling them for editing. Failed or timed-out cancellation leaves the message visible; successful recall survives composer remounts without losing newer typing. Requires native `remove_queued_message` support.
 - Preserve question-dialog answers and selections when an SSE reconnect replays the same pending request or answer submission fails.
+- Keep sent-message copy, edit, and fork actions visible without hover or a reveal tap. Also keep file mention/download, Git open-file actions, and sidebar menus visible alongside their metadata; wrap message actions on narrow screens.
 - Expand complete tool inputs inline, including multiline code and edit patches, while keeping command previews compact and output visibility unchanged.
 - Keep composer controls on one line, with equally sized Send, Stop, and Queue buttons and model names truncating before short effort labels.
 - Align the + button and primary action with matching composer insets.
