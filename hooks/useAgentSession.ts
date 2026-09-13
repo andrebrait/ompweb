@@ -6,11 +6,13 @@ import type {
   CustomMessage,
   ExtensionStatusItem,
   ExtensionWidgetItem,
+  SessionContext,
   SessionInfo,
   SessionTreeNode,
   ToolResultMessage,
 } from "@/lib/types";
 import { normalizeToolCalls } from "@/lib/normalize";
+import { hasVisibleAssistantContent } from "@/lib/assistant-response";
 import type { ThinkingModelMeta } from "@/lib/thinking-levels";
 import { sendAgentCommand, setSessionAdvisorSpawn } from "@/lib/agent-client";
 import { translate } from "@/lib/i18n";
@@ -157,20 +159,6 @@ function readTerminalAgentError(event: AgentEvent): string | null {
     }
   }
   return null;
-}
-
-/** Tool calls and empty assistant envelopes are not a response. If the model
- * fails after starting a tool turn, the terminal fallback must still explain
- * the stop instead of treating the tool activity as a successful answer. */
-function hasVisibleAssistantContent(value: unknown): boolean {
-  if (!isRecord(value) || value.role !== "assistant") return false;
-  if (!Array.isArray(value.content)) return typeof value.content === "string" && value.content.trim().length > 0;
-  return value.content.some((block) => {
-    if (!isRecord(block)) return false;
-    if (block.type === "text") return typeof block.text === "string" && block.text.trim().length > 0;
-    if (block.type === "image") return true;
-    return false;
-  });
 }
 
 export interface UseAgentSessionOptions {
@@ -384,6 +372,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // until the terminal path can surface it exactly once.
   const lastRunErrorRef = useRef<string | null>(null);
   const runHadContentRef = useRef(false);
+  // Native starts/epoch changes also fence recovery, even without a local send.
+  const responseRunVersionRef = useRef(0);
   // Persisted entries preceding a locally submitted run cannot supply its answer.
   // Empty on mount; null while a submitted run's boundary is still being read.
   const runPreviousEntryIdsRef = useRef<string[] | null>([]);
@@ -403,15 +393,24 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     });
   }
   const eventCoalescer = eventCoalescerRef.current;
-  const syncActionsRef = useRef<{ live: (snapshot: SessionLiveSnapshot, fields: SessionLiveFields) => void; subscribe: (force: boolean) => boolean } | null>(null);
+  const authoritativeModelSeqRef = useRef(0);
+  const modelCommandPendingRef = useRef(0);
+  const syncActionsRef = useRef<{
+    live: (snapshot: SessionLiveSnapshot, fields: SessionLiveFields) => void;
+    subscribe: (force: boolean) => boolean;
+    metadata: (context: SessionContext, version: number, hasLive?: boolean) => void;
+  } | null>(null);
   const catchUpRef = useRef<SessionCatchUp | null>(null);
   if (catchUpRef.current === null) {
     catchUpRef.current = createSessionCatchUp({
       sessionId: () => sessionIdRef.current,
       scope: () => hookAliveRef.current ? `${sessionIdRef.current}:${promptRunIdRef.current}:${contextRequestSeqRef.current}` : null,
-      history: (context, leafId) => {
+      metadataVersion: () => authoritativeModelSeqRef.current,
+      history: (context, leafId, metadata) => {
         setMessages(context.messages);
         setEntryIds(context.entryIds);
+        setData((current) => current ? { ...current, context } : current);
+        if (metadata) syncActionsRef.current?.metadata(context, metadata.version, metadata.hasLive);
         if (!agentRunningRef.current) setTodoPhases(context.todoPhases ?? []);
         setActiveLeafId(leafId);
         const previous = runPreviousEntryIdsRef.current && new Set(runPreviousEntryIdsRef.current);
@@ -610,7 +609,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // run ended and a new prompt started, or the roster was cleared — its
       // snapshot belongs to a different roster generation and must not merge
       // or prune the new one.
-      if (sessionIdRef.current !== sid || promptRunIdRef.current !== runId || subagentRosterGenerationRef.current !== generation) return;
+      if (!hookAliveRef.current || sessionIdRef.current !== sid || promptRunIdRef.current !== runId || subagentRosterGenerationRef.current !== generation) return;
       const snapshots = (result.subagents ?? [])
         .map(parseSubagentSnapshot)
         .filter((subagent): subagent is SubagentInfo => subagent !== undefined);
@@ -656,7 +655,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // applies its snapshot if it is still the newest — a slow stale response
   // can never clobber a newer one (e.g. an old model_changed GET landing
   // after the user picked another model).
-  const authoritativeModelSeqRef = useRef(0);
   const beginAuthoritativeModelSync = useCallback((): number => {
     authoritativeModelSeqRef.current += 1;
     return authoritativeModelSeqRef.current;
@@ -718,6 +716,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     catchUp.invalidate();
     const requestRun = promptRunIdRef.current;
     const position = catchUp.position();
+    const metadataVersion = authoritativeModelSeqRef.current;
     let messagesLoaded = false;
     try {
       if (showLoading) setLoading(true);
@@ -757,11 +756,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // Recover on-disk subagent history (task toolResults) for this session —
       // populates the composer roster for finished/past runs.
       void refreshSubagentHistory(sid);
-      setCurrentModelOverride(null);
       setError(null);
-      if (d.context.thinkingLevel && d.context.thinkingLevel !== "off") {
-        setThinkingLevel(d.context.thinkingLevel as ThinkingLevelOption);
-      }
+      syncActionsRef.current?.metadata(d.context, metadataVersion);
 
       messagesLoaded = true;
       if (showLoading) setLoading(false);
@@ -1000,7 +996,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     });
   }, []);
 
-  const connectEvents = useCallback((sid: string): Promise<EventStreamConnectionResult> => {
+  const connectEvents = useCallback((sid: string, restoreWrapper = false): Promise<EventStreamConnectionResult> => {
     // A backoff timer from an earlier CLOSED stream may still be pending (e.g.
     // the user sent a message while it waited). It must not fire later and
     // tear down the healthy stream built here — drop it before replacing.
@@ -1015,9 +1011,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     catchUp.disconnect();
     const es = new EventSource(`/api/agent/${encodeURIComponent(sid)}/events`);
     eventSourceRef.current = es;
+    const runId = promptRunIdRef.current;
 
     return new Promise((resolve) => {
       let settled = false;
+      let restored = false;
+      const restore = () => {
+        if (!restoreWrapper || restored || !hookAliveRef.current || sessionIdRef.current !== sid
+          || promptRunIdRef.current !== runId || eventSourceRef.current !== es) return;
+        restored = true;
+        reconnectActionsRef.current?.(sid);
+      };
       const settle = (status: EventStreamConnectionStatus) => {
         if (settled) return;
         settled = true;
@@ -1032,6 +1036,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (eventSourceRef.current !== es || sessionIdRef.current !== sid) return;
         eventStreamRetryMsRef.current = EVENT_STREAM_RETRY_MIN_MS;
         settle("connected");
+        restore();
         void catchUp.request();
       };
 
@@ -1047,6 +1052,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             return;
           }
           if (order === "epoch") {
+            responseRunVersionRef.current += 1;
+            runHadContentRef.current = false;
+            lastQuotaErrorRef.current = null;
+            lastRunErrorRef.current = null;
             eventCoalescer.reset();
             dispatch({ type: "reset" });
             clearLiveToolResults();
@@ -1054,6 +1063,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           }
           if (event.type === "connected") {
             settle("connected");
+            restore();
             void catchUp.request();
           }
           // message_update frames arrive at network rate (often 30-100+/s);
@@ -1081,12 +1091,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             clearTimeout(reconnectTimerRef.current);
             reconnectTimerRef.current = setTimeout(() => {
               reconnectTimerRef.current = undefined;
-              if (sessionIdRef.current === sid) {
-                void connectEvents(sid);
-                // While the agent runs, the reconnect must also re-register
-                // host tools, URI schemes, and the subagent roster that were
-                // registered on the old connection.
-                if (agentRunningRef.current) reconnectActionsRef.current?.(sid);
+              if (hookAliveRef.current && sessionIdRef.current === sid) {
+                // Only an open observer stream proves a wrapper exists. Never
+                // let cold-read recovery spawn one via registration commands.
+                void connectEvents(sid, true);
               }
             }, delay);
           }
@@ -1447,6 +1455,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     // Bail out before loadSession too: a stale finish for a previous run
     // must not overwrite the messages of the run currently streaming.
     if (runId !== undefined && promptRunIdRef.current !== runId) return;
+    const responseVersion = responseRunVersionRef.current;
     let hadContent = runHadContentRef.current;
     const quotaMessage = lastQuotaErrorRef.current;
     let runError = lastRunErrorRef.current;
@@ -1454,6 +1463,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const previousEntryIds = runPreviousEntryIdsRef.current;
     if (previousEntryIds === null) return;
     let transcriptLoaded = false;
+    let stillBusy = false;
     try {
       // Pass the fence into loadSession: the pre-check above only guards the
       // start — a next prompt that begins while the reload is in flight must
@@ -1461,6 +1471,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const loaded = sid ? await loadSession(sid, false, true, runId) : null;
       if (loaded) {
         transcriptLoaded = true;
+        const state = loaded.agentState?.state;
+        stillBusy = !!(state?.isStreaming || state?.isPromptRunning || state?.isCompacting);
+        if (!promptDispatchPendingRef.current && state?.responseObserved) hadContent = true;
         const { messages, entryIds = [] } = loaded.context;
         // Only the latest user turn can answer the current prompt. Entry ids
         // distinguish repeated same-text prompts from the previous saved turn.
@@ -1476,7 +1489,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
       }
     } finally {
-      if (promptRunIdRef.current !== runId || sessionIdRef.current !== sid) return;
+      if (!hookAliveRef.current || promptRunIdRef.current !== runId || sessionIdRef.current !== sid
+        || responseRunVersionRef.current !== responseVersion || stillBusy) return;
       // Live frames can arrive while the snapshot is loading.
       hadContent ||= runHadContentRef.current;
       runError = lastRunErrorRef.current ?? runError;
@@ -1593,6 +1607,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const reconcileAgentState = useCallback(async (sid: string) => {
     if (!agentRunningRef.current) return;
     const runId = promptRunIdRef.current;
+    const responseVersion = responseRunVersionRef.current;
     // One request at a time per run: concurrent triggers coalesce into the
     // in-flight request and re-issue on its completion (see release below).
     const guard = reconcileGuardRef.current;
@@ -1606,8 +1621,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // A slow response can straddle a run boundary (previous run finished
       // and the user already started the next one while this request was in
       // flight) — everything in it is stale, drop it.
-      if (promptRunIdRef.current !== runId) return;
+      if (!hookAliveRef.current || sessionIdRef.current !== sid || promptRunIdRef.current !== runId
+        || responseRunVersionRef.current !== responseVersion) return;
       const state = data.state;
+      if (!promptDispatchPendingRef.current && state?.responseObserved) runHadContentRef.current = true;
       // Mirror compaction state unconditionally: a missed compaction_end
       // would otherwise leave the "Stop compaction" UI stuck. No state
       // (wrapper destroyed) means nothing is compacting.
@@ -1761,6 +1778,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     switch (event.type) {
       case "agent_start":
         catchUp.invalidate();
+        contextRequestSeqRef.current += 1;
+        responseRunVersionRef.current += 1;
         interruptReplyPendingRef.current = false;
         agentRunningRef.current = true;
         setAgentRunning(true);
@@ -1947,6 +1966,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         break;
       }
       case "thinking_level_changed":
+        authoritativeModelSeqRef.current += 1;
         setThinkingLevel(normalizeThinkingLevel(event.thinkingLevel as string | undefined));
         break;
       case "model_changed": {
@@ -1979,6 +1999,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // config-affecting slash command (e.g. /model).
         const model = event.model as { provider?: string; id?: string; name?: string; reasoning?: boolean; thinking?: { efforts?: string[] } } | undefined;
         if (model) applyAuthoritativeModel(toThinkingModelMeta(model));
+        else if (event.thinkingLevel !== undefined) authoritativeModelSeqRef.current += 1;
         if (event.thinkingLevel !== undefined) setThinkingLevel(normalizeThinkingLevel(event.thinkingLevel as string | undefined));
         break;
       }
@@ -2309,11 +2330,26 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [addNotice, catchUp, eventCoalescer, clearLiveToolResults, clearTerminalReconcileTimer, consumeQueuedMessage, finishPromptWithoutStream, handleExtensionUiRequest, handleHostToolCall, handleHostUriRequest, loadSession, mergeSubagents, onAgentEnd, reconcileAgentState, resetSubagentActivityState, applyAuthoritativeModel, beginAuthoritativeModelSync, setLiveToolResult, surfaceQuotaOnStream]);
   handleAgentEventRef.current = handleAgentEvent;
   syncActionsRef.current = {
+    metadata: (context, version, hasLive = liveModelMeta !== null || currentModelOverride !== null) => {
+      if (version !== authoritativeModelSeqRef.current || modelCommandPendingRef.current > 0
+        || agentRunningRef.current || hasLive || (isNew && pendingModel)) return;
+      // A current file-only snapshot is authoritative again after its wrapper
+      // disappears; a newer/pending RPC choice must never be rolled back.
+      setLiveModelMeta(null);
+      setCurrentModelOverride(null);
+      setThinkingLevel(normalizeThinkingLevel(context.thinkingLevel));
+    },
     subscribe: (force) => {
       const sid = sessionIdRef.current;
       const source = eventSourceRef.current;
-      if (sid && (force || !source || source.readyState === EventSource.CLOSED)) {
-        void connectEvents(sid);
+      if (hookAliveRef.current && sid && (force || !source || source.readyState === EventSource.CLOSED)) {
+        if (force) {
+          responseRunVersionRef.current += 1;
+          runHadContentRef.current = false;
+          lastQuotaErrorRef.current = null;
+          lastRunErrorRef.current = null;
+        }
+        void connectEvents(sid, true);
         return true;
       }
       return false;
@@ -2325,6 +2361,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       eventCoalescer.flush();
       const busy = snapshot.isStreaming || snapshot.isPromptRunning || snapshot.isCompacting;
       if (fields.lifecycle) {
+        if (busy && !agentRunningRef.current) {
+          responseRunVersionRef.current += 1;
+          runHadContentRef.current = false;
+          lastQuotaErrorRef.current = null;
+          lastRunErrorRef.current = null;
+        }
+        if (!promptDispatchPendingRef.current && snapshot.responseObserved) runHadContentRef.current = true;
         isCompactingRef.current = snapshot.isCompacting;
         setIsCompacting(snapshot.isCompacting);
         if (!busy && agentRunningRef.current) {
@@ -2341,7 +2384,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         dispatch(snapshot.streamingMessage
           ? { type: "update", message: normalizeToolCalls(snapshot.streamingMessage as AgentMessage) }
           : snapshot.isStreaming ? { type: "start" } : { type: "reset" });
-        if (hasVisibleAssistantContent(snapshot.streamingMessage)) runHadContentRef.current = true;
+        if (!promptDispatchPendingRef.current && hasVisibleAssistantContent(snapshot.streamingMessage)) runHadContentRef.current = true;
         const messageError = readAgentError(snapshot.streamingMessage);
         if (messageError) lastRunErrorRef.current = messageError;
       }
@@ -2407,6 +2450,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     else catchUp.invalidate();
     eventCoalescer.reset();
     promptRunIdRef.current = promptRunId;
+    runHadContentRef.current = false;
+    lastQuotaErrorRef.current = null;
+    lastRunErrorRef.current = null;
     runPreviousEntryIdsRef.current = sessionIdRef.current ? null : [];
     agentRunningRef.current = true;
     slashCommandRunRef.current = isSlashCommandPrompt;
@@ -2541,6 +2587,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     // loadSession from the aborted turn cannot stop or clobber the replacement.
     const promptRunId = ++promptRunIdRef.current;
     promptDispatchPendingRef.current = true;
+    runHadContentRef.current = false;
+    lastQuotaErrorRef.current = null;
+    lastRunErrorRef.current = null;
     const previousRunEntryIds = runPreviousEntryIdsRef.current;
     runPreviousEntryIdsRef.current = null;
 
@@ -2689,26 +2738,26 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [loadContext]);
 
   const handleModelChange = useCallback(async (provider: string, modelId: string) => {
-    if (isNew) {
-      setNewSessionModel({ provider, modelId });
-      setPendingModel({ provider, modelId });
-      const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
-      if (!sid) return;
-      try {
-        await sendAgentCommand(sid, { type: "set_model", provider, modelId });
-      } catch (e) {
-        console.error("Failed to set model:", e);
-      }
-      return;
-    }
-    const sid = sessionIdRef.current;
-    if (!sid) return;
+    authoritativeModelSeqRef.current += 1;
+    modelCommandPendingRef.current += 1;
     try {
+      if (isNew) {
+        setNewSessionModel({ provider, modelId });
+        setPendingModel({ provider, modelId });
+        const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
+        if (!sid) return;
+        await sendAgentCommand(sid, { type: "set_model", provider, modelId });
+        return;
+      }
+      const sid = sessionIdRef.current;
+      if (!sid) return;
       await sendAgentCommand(sid, { type: "set_model", provider, modelId });
       setCurrentModelOverride({ provider, modelId });
-      void refreshLiveModelState(sid);
+      await refreshLiveModelState(sid);
     } catch (e) {
       console.error("Failed to set model:", e);
+    } finally {
+      modelCommandPendingRef.current -= 1;
     }
   }, [isNew, setNewSessionModel, refreshLiveModelState]);
 
@@ -2798,12 +2847,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const handleCycleModel = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (!sid) return;
+    authoritativeModelSeqRef.current += 1;
+    modelCommandPendingRef.current += 1;
     try {
       await sendAgentCommand(sid, { type: "cycle_model" });
-      void refreshLiveModelState(sid);
+      await refreshLiveModelState(sid);
     } catch (error) {
       console.error("Failed to cycle model:", error);
       addNotice({ type: "error", message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      modelCommandPendingRef.current -= 1;
     }
   }, [addNotice, refreshLiveModelState]);
 
@@ -2811,12 +2864,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const handleCycleThinkingLevel = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (!sid) return;
+    authoritativeModelSeqRef.current += 1;
+    modelCommandPendingRef.current += 1;
     try {
       await sendAgentCommand(sid, { type: "cycle_thinking_level" });
-      void refreshLiveModelState(sid);
+      await refreshLiveModelState(sid);
     } catch (error) {
       console.error("Failed to cycle thinking level:", error);
       addNotice({ type: "error", message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      modelCommandPendingRef.current -= 1;
     }
   }, [addNotice, refreshLiveModelState]);
 
@@ -3106,15 +3163,19 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, []);
 
   const handleThinkingLevelChange = useCallback(async (level: ThinkingLevelOption) => {
+    authoritativeModelSeqRef.current += 1;
     setThinkingLevel(level);
     if (level === "auto") return; // "auto" leaves pi's current setting untouched
-    const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
-    if (!sid) return;
+    modelCommandPendingRef.current += 1;
     try {
+      const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
+      if (!sid) return;
       await sendAgentCommand(sid, { type: "set_thinking_level", level });
-      void refreshLiveModelState(sid);
+      await refreshLiveModelState(sid);
     } catch (e) {
       console.error("Failed to set thinking level:", e);
+    } finally {
+      modelCommandPendingRef.current -= 1;
     }
   }, [refreshLiveModelState]);
 
@@ -3181,6 +3242,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (mountedSessionLoadRef.current === session.id) return;
       mountedSessionLoadRef.current = session.id;
       sessionIdRef.current = session.id;
+      responseRunVersionRef.current += 1;
+      runHadContentRef.current = false;
+      lastQuotaErrorRef.current = null;
+      lastRunErrorRef.current = null;
       catchUp.select({ leafId: null, includePreCompaction: false });
       loadSession(session.id, true, true).then((loaded) => {
         if (!hookAliveRef.current || sessionIdRef.current !== session.id) return;

@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { existsSync, realpathSync } from "fs";
 import { homedir } from "os";
 import { validateAgentImages } from "./image-attachments";
+import { hasVisibleAssistantContent } from "./assistant-response";
 import { invalidateModelsCache } from "./models-cache";
 import { RpcCommandError, RpcCommandTimeoutError, RpcProcess, type RpcFrame } from "./omp/rpc-process";
 import { readNativeSettings } from "./omp/settings-config";
@@ -248,6 +249,9 @@ export class AgentSessionWrapper {
   private streamSequence = 0;
   private streamingMessage: Partial<AgentMessage> | null = null;
   private liveToolEvents = new Map<string, SessionLiveToolEvent>();
+  /** Positive evidence for this run, retained after native completion but before disk append. */
+  private responseObserved = false;
+  private responseRunActive = false;
   private fastModeEnabled = false;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private onDestroyCallback: (() => void) | null = null;
@@ -318,6 +322,7 @@ export class AgentSessionWrapper {
       isStreaming: this.streaming,
       isPromptRunning: this.promptRunning,
       isCompacting: this.compacting,
+      responseObserved: this.responseObserved,
       streamingMessage: this.streamingMessage ? { ...this.streamingMessage } : null,
       toolEvents: Array.from(this.liveToolEvents.values(), (event) => ({ ...event })),
     };
@@ -331,6 +336,8 @@ export class AgentSessionWrapper {
 
   private resetStream(): void {
     this.clearLiveSnapshots();
+    this.responseObserved = false;
+    this.responseRunActive = false;
     this.streamId = randomUUID();
     this.streamSequence = 0;
   }
@@ -704,10 +711,13 @@ export class AgentSessionWrapper {
     delete event.web;
     switch (event.type) {
       case "agent_start":
+        this.responseObserved = false;
+        this.responseRunActive = true;
         this.clearLiveSnapshots();
         break;
       case "agent_end":
         if (event.isTerminal === false) break;
+        this.responseRunActive = false;
         this.streaming = false;
         this.promptRunning = false;
         this.compacting = false;
@@ -715,6 +725,7 @@ export class AgentSessionWrapper {
         break;
       case "prompt_error":
       case "prompt_result":
+        this.responseRunActive = false;
         this.streaming = false;
         this.compacting = false;
         this.promptRunning = false;
@@ -724,10 +735,12 @@ export class AgentSessionWrapper {
       case "message_update": {
         const message = event.message as Partial<AgentMessage> | undefined;
         if (message && message.role !== "user") this.streamingMessage = message;
+        if (this.responseRunActive && hasVisibleAssistantContent(message)) this.responseObserved = true;
         break;
       }
       case "message_end": {
         const message = event.message as Partial<AgentMessage> | undefined;
+        if (this.responseRunActive && hasVisibleAssistantContent(message)) this.responseObserved = true;
         if (message?.role && message.role === this.streamingMessage?.role) this.streamingMessage = null;
         if (message?.role === "toolResult" && message.toolCallId) this.liveToolEvents.delete(message.toolCallId);
         break;
@@ -972,6 +985,7 @@ export class AgentSessionWrapper {
       isStreaming: state.isStreaming,
       isPromptRunning: this.promptRunning,
       isBashRunning: this.bashRunning,
+      responseObserved: this.responseObserved,
       isCompacting: state.isCompacting,
       autoCompactionEnabled: state.autoCompactionEnabled,
       autoRetryEnabled: state.autoRetryEnabled,
@@ -1115,6 +1129,8 @@ export class AgentSessionWrapper {
         }
         const streamingBehavior = command.streamingBehavior as "steer" | "followUp" | undefined;
         if (!streamingBehavior) {
+          this.responseObserved = false;
+          this.responseRunActive = false;
           if (!this.isRunning()) this.clearLiveSnapshots();
           this.streamSequence += 1;
           this.promptRunning = true;
@@ -1182,6 +1198,8 @@ export class AgentSessionWrapper {
       }
 
       case "abort":
+        this.responseObserved = false;
+        this.responseRunActive = false;
         await this.withFinalRunningNotification(async () => {
           await this.proc.sendCommand({ type: "abort" });
           // If the prompt was aborted before the agent loop started, no
@@ -1376,6 +1394,11 @@ export class AgentSessionWrapper {
 
       default: {
         if (PASSTHROUGH_COMMANDS.has(type)) {
+          if (type === "abort_and_prompt") {
+            this.responseObserved = false;
+            this.responseRunActive = false;
+            this.streamSequence += 1;
+          }
           const result: unknown = await this.proc.sendCommand(command as { type: string });
           if (type === "set_thinking_level") this.invalidateSessionLists();
           return result ?? null;
@@ -1401,6 +1424,8 @@ export class AgentSessionWrapper {
     this.streaming = false;
     this.promptRunning = false;
     this.compacting = false;
+    this.responseObserved = false;
+    this.responseRunActive = false;
     this.clearLiveSnapshots();
     if (this.idleTimer) clearTimeout(this.idleTimer);
     if (this.sessionFileSignalTimer) {
