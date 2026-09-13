@@ -180,6 +180,7 @@ async function fetchStub(url, init = {}) {
     const f = world.views.get(`${sid}:${params.get("leafId") ?? ""}:${params.has("includePreCompaction")}`)
       ?? world.sessions.get(sid);
     if (!f) return jsonResponse(404, {});
+    if (params.get("boundary") === "1") return jsonResponse(200, { entryIds: [...f.entryIds] });
     const context = { todoPhases: [], thinkingLevel: "off", model: null, ...f };
     if (!params.has("sync")) return jsonResponse(200, { context });
     return jsonResponse(200, {
@@ -584,6 +585,60 @@ test("a failed transcript reload is retried instead of being classified as an em
   assert.deepEqual(w.latest.notices.filter((n) => n.type === "error"), []);
 });
 
+for (const recovered of ["answer", "empty", "absent wrapper"]) {
+  test(`a failed state read stays retryable until recovery confirms ${recovered}`, async (t) => {
+    t.after(unmountAll);
+    resetWorld();
+    primeSession("s1", [userMsg("u0", "old question")]);
+    const { w } = await startRun(t, "s1", "new question");
+    world.holds.push({
+      match: (method, url) => method === "GET" && url === "/api/sessions/s1/state",
+      produce: async () => ({ status: 503, value: {} }),
+    });
+    await act(async () => { winTarget.fire("online"); });
+    await settle();
+    assert.equal(w.latest.agentRunning, true, "readable history does not prove the provider finished without a response");
+    assert.deepEqual(w.latest.notices.filter((n) => n.type === "error"), []);
+
+    if (recovered === "answer") {
+      saveSession("s1", [userMsg("u0", "old question"), userMsg("u1", "new question"), assistantMsg("a1", "Recovered answer")]);
+    } else if (recovered === "absent wrapper") {
+      world.agents.set("s1", { running: false });
+    }
+    await act(async () => { winTarget.fire("online"); });
+    await settle();
+    assert.equal(w.latest.agentRunning, false);
+    if (recovered === "answer") {
+      assert.equal(w.latest.messages.at(-1).content[0].text, "Recovered answer");
+      assert.deepEqual(w.latest.notices.filter((n) => n.type === "error"), []);
+    } else {
+      assert.equal(w.latest.notices.filter((n) => n.type === "error").length, 1);
+    }
+  });
+}
+
+for (const result of ["visible answer", "provider failure"]) {
+  test(`${result} still settles when the state request fails`, async (t) => {
+    t.after(unmountAll);
+    resetWorld();
+    primeSession("s1", [userMsg("u0", "old question")]);
+    const { w } = await startRun(t, "s1", "new question");
+    const answer = assistantMsg("a1", "Visible response");
+    if (result === "provider failure") Object.assign(answer, { stopReason: "error", errorMessage: "Provider rejected the request" });
+    saveSession("s1", [userMsg("u0", "old question"), userMsg("u1", "new question"), answer]);
+    world.holds.push({
+      match: (method, url) => method === "GET" && url === "/api/sessions/s1/state",
+      produce: async () => ({ status: 503, value: {} }),
+    });
+    await act(async () => { winTarget.fire("online"); });
+    await settle();
+    assert.equal(w.latest.agentRunning, false);
+    assert.equal(w.latest.messages.at(-1).content[0].text, "Visible response");
+    assert.deepEqual(w.latest.notices.filter((n) => n.type === "error").map((n) => n.message),
+      result === "provider failure" ? ["Provider rejected the request"] : []);
+  });
+}
+
 for (const nextRun of ["send", "interrupt"]) {
   test(`${nextRun} captures saved entries newer than the last rendered transcript`, async (t) => {
     t.after(unmountAll);
@@ -608,6 +663,18 @@ for (const nextRun of ["send", "interrupt"]) {
       });
       assert.equal(w.latest.agentRunning, false);
     }
+    const fullReads = () => world.calls.filter((c) => c.method === "GET" && c.url.startsWith("/api/sessions/s1?")).length;
+    const promptCommands = () => world.calls.filter((c) => c.method === "POST" && ["prompt", "abort_and_prompt"].includes(c.body?.type)).length;
+    const readsBefore = fullReads();
+    const promptsBefore = promptCommands();
+    let releaseBoundary;
+    world.holds.push({
+      match: (method, url) => method === "GET" && url === "/api/sessions/s1/context?boundary=1",
+      produce: () => new Promise((resolve) => {
+        const entryIds = [...world.sessions.get("s1").entryIds];
+        releaseBoundary = () => resolve({ value: { entryIds } });
+      }),
+    });
     let submission;
     await act(async () => {
       submission = nextRun === "send" ? w.latest.handleSend("question") : w.latest.handleInterruptAndReply("question");
@@ -616,6 +683,11 @@ for (const nextRun of ["send", "interrupt"]) {
     const replacement = lastEs();
     await act(async () => {
       replacement.open();
+      await sleep(20);
+      assert.ok(releaseBoundary, "the persisted-ID boundary must be read immediately before dispatch");
+      assert.equal(promptCommands(), promptsBefore, "dispatch waits for the boundary, including interrupt-and-reply");
+      assert.equal(fullReads(), readsBefore, "pre-prompt boundary capture must not request transcript bodies");
+      releaseBoundary();
       await submission;
       releaseTerminalReload?.();
       if (nextRun === "interrupt") replacement.emit({ type: "agent_end", isTerminal: true });
@@ -1478,6 +1550,7 @@ test("catch-up metadata cannot overwrite a newer live todo snapshot during a run
 });
 
 test("a late full branch context cannot replace a newer incremental history commit", async (t) => {
+  // The full response is older than the completed catch-up, not merely page one.
   t.after(unmountAll);
   resetWorld();
   primeSession("s1", [userMsg("live", "live branch")]);
@@ -1505,6 +1578,144 @@ test("a late full branch context cannot replace a newer incremental history comm
   await settle();
   assert.deepEqual(w.latest.entryIds, ["b1", "b2"]);
   assert.equal(w.latest.messages.at(-1).content[0].text, "new branch answer");
+});
+
+for (const selected of ["active", "branch", "pre-compaction"]) {
+  for (const order of ["full first", "pages first", "page two fails"]) {
+    test(`${selected} history stays complete when ${order} races the full response`, async (t) => {
+      t.after(unmountAll);
+      resetWorld();
+      primeSession("s1", [userMsg("u0", "existing view")]);
+      const w = await mountSession("s1");
+      if (selected === "pre-compaction") {
+        world.views.set("s1:branch:false", { messages: [userMsg("b0", "selected branch")], entryIds: ["b0"], leafId: "branch" });
+        await act(async () => { await w.latest.handleNavigate("branch"); });
+        await settle();
+      }
+      const previousIds = [...w.latest.entryIds];
+      const saved = {
+        messages: Array.from({ length: 205 }, (_, i) => assistantMsg(`m${i}`, `saved ${i}`)),
+        entryIds: Array.from({ length: 205 }, (_, i) => `saved-${i}`),
+        leafId: selected === "active" ? "saved-204" : "branch",
+        todoPhases: [], thinkingLevel: "off", model: null,
+      };
+      if (selected === "active") world.sessions.set("s1", saved);
+      else world.views.set(`s1:branch:${selected === "pre-compaction"}`, saved);
+      let releaseFull;
+      world.holds.push({
+        match: (method, url) => method === "GET" && (selected === "active"
+          ? url.startsWith("/api/sessions/s1?")
+          : url.startsWith("/api/sessions/s1/context?") && !url.includes("sync=1")),
+        produce: () => new Promise((resolve) => {
+          releaseFull = () => resolve({ value: { sessionId: "s1", tree: [], leafId: saved.leafId, context: saved } });
+        }),
+      });
+      let releasePage;
+      world.holds.push({
+        match: (method, url) => method === "GET" && url.includes("sync=1")
+          && JSON.parse(new URL(url, "http://localhost").searchParams.get("cursor") ?? "null")?.lastEntryId === "saved-199",
+        produce: () => new Promise((resolve) => {
+          releasePage = () => resolve(order === "page two fails" ? { status: 503, value: {} } : {
+            value: { ...selectSessionHistory(saved, { firstEntryId: "saved-0", lastEntryId: "saved-199" }), sessionId: "s1", leafId: saved.leafId, live: null },
+          });
+        }),
+      });
+      let fullLoad;
+      await act(async () => {
+        fullLoad = selected === "active" ? w.latest.handleHandoff()
+          : selected === "branch" ? w.latest.handleNavigate("branch") : w.latest.togglePreCompactionHistory();
+        await sleep(20);
+        publishSessionsChanged(["s1"]);
+      });
+      await settle();
+      assert.ok(releaseFull && releasePage, "both reads must be held");
+      assert.deepEqual(w.latest.entryIds, previousIds, "page one cannot truncate the selected view");
+
+      if (order === "full first") {
+        await act(async () => { releaseFull(); await fullLoad; });
+        assert.deepEqual(w.latest.entryIds, saved.entryIds, "the full history is visible while page two is stalled");
+      } else if (order === "page two fails") {
+        await act(async () => { releasePage(); });
+        await settle();
+        assert.deepEqual(w.latest.entryIds, previousIds, "a failed later page must leave the complete old view intact");
+        await act(async () => { releaseFull(); await fullLoad; });
+        await settle();
+        assert.deepEqual(w.latest.entryIds, saved.entryIds);
+      }
+      const newer = { ...saved, messages: [...saved.messages, assistantMsg("new", "arrived during fetch")], entryIds: [...saved.entryIds, "saved-new"], leafId: selected === "active" ? "saved-new" : "branch" };
+      if (selected === "active") world.sessions.set("s1", newer);
+      else world.views.set(`s1:branch:${selected === "pre-compaction"}`, newer);
+      await act(async () => {
+        publishSessionsChanged(["s1"]);
+        if (order !== "page two fails") releasePage();
+      });
+      await settle();
+      assert.deepEqual(w.latest.entryIds, newer.entryIds);
+      if (order === "pages first") {
+        await act(async () => { releaseFull(); await fullLoad; });
+        await settle();
+      }
+      assert.deepEqual(w.latest.entryIds, newer.entryIds, "an older complete response cannot remove a newer confirmed suffix");
+      assert.deepEqual(w.latest.messages, newer.messages, "history remains ordered and duplicate-free");
+      assert.equal(w.latest.activeLeafId, newer.leafId);
+      assert.equal(w.latest.showPreCompactionHistory, selected === "pre-compaction");
+    });
+  }
+}
+
+test("a late full load cannot overwrite a newly selected branch", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "old active branch")]);
+  const w = await mountSession("s1");
+  const old = structuredClone(world.sessions.get("s1"));
+  let release;
+  world.holds.push({
+    match: (method, url) => method === "GET" && url.startsWith("/api/sessions/s1?"),
+    produce: () => new Promise((resolve) => { release = () => resolve({ value: { sessionId: "s1", tree: [], leafId: old.leafId, context: old } }); }),
+  });
+  let refresh;
+  await act(async () => { refresh = w.latest.handleHandoff(); await sleep(20); });
+  const branch = { messages: [userMsg("b0", "new selected branch")], entryIds: ["branch-entry"], leafId: "branch" };
+  world.views.set("s1:branch:false", branch);
+  await act(async () => { await w.latest.handleNavigate("branch"); });
+  await settle();
+  await act(async () => { release(); await refresh; });
+  assert.deepEqual(w.latest.entryIds, branch.entryIds);
+  assert.deepEqual(w.latest.messages, branch.messages);
+  assert.equal(w.latest.activeLeafId, "branch");
+});
+
+test("a late full load cannot overwrite a newly started run", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "old question")]);
+  const w = await mountSession("s1");
+  const old = structuredClone(world.sessions.get("s1"));
+  let release;
+  world.holds.push({
+    match: (method, url) => method === "GET" && url.startsWith("/api/sessions/s1?"),
+    produce: () => new Promise((resolve) => { release = () => resolve({ value: { sessionId: "s1", tree: [], leafId: old.leafId, context: old } }); }),
+  });
+  let refresh;
+  await act(async () => { refresh = w.latest.handleHandoff(); await sleep(20); });
+  let sending;
+  await act(async () => { sending = w.latest.handleSend("new question"); await sleep(30); });
+  const es = lastEs();
+  await act(async () => {
+    es.open();
+    await sending;
+    world.agents.set("s1", { running: true, state: { isStreaming: true } });
+    es.emit({ type: "agent_start" });
+    es.emit({ type: "message_end", message: userMsg("u1", "new question") });
+    es.emit({ type: "message_update", message: assistantMsg("a1", "new run partial") });
+  });
+  await settle();
+  await act(async () => { release(); await refresh; });
+  assert.deepEqual(w.latest.entryIds, ["e0", "e1"]);
+  assert.deepEqual(w.latest.messages.map((message) => message.content), ["old question", "new question"]);
+  assert.equal(w.latest.streamState.streamingMessage?.content[0].text, "new run partial");
+  assert.equal(w.latest.agentRunning, true);
 });
 
 test("same-text queued delivery is consumed live and committed only when its distinct ID is saved", async (t) => {

@@ -652,18 +652,12 @@ function buildHistoryIndex(
   return { ...detached, pathKey: sessionPathKey(filePath), version, bytes, entryIds, positions };
 }
 
-/** Seek only page bodies. A file changed during indexing/reading must not
- * advance the browser cursor using offsets from a different file version. */
-export function getSessionHistoryPage(
-  filePath: string,
-  cursor: SessionHistoryCursor | null,
-  limit: number,
-  leafId?: string,
-  options: { deferThinking?: boolean; deferToolResultImages?: boolean; includePreCompaction?: boolean } = {},
-): { history: SessionHistoryPage; leafId: string | null; tipId: string | null } {
+/** Rebuild on any file-version change: growth alone cannot prove that old
+ * offsets survived a prefix rewrite. Both readers share the same bounded LRU. */
+function getSessionHistoryIndex(filePath: string, leafId?: string, includePreCompaction = false) {
   const cache = globalThis.__ompSessionHistoryIndexes ??= new Map();
   const pathKey = sessionPathKey(filePath);
-  const key = JSON.stringify([pathKey, leafId ?? null, !!options.includePreCompaction]);
+  const key = JSON.stringify([pathKey, leafId ?? null, includePreCompaction]);
   let stat: Stats | undefined;
   try { stat = statSync(filePath); } catch { /* Missing/unreadable: retain the lenient empty result. */ }
   if (stat && stat.size > MAX_SESSION_LOAD_BYTES) {
@@ -676,7 +670,7 @@ export function getSessionHistoryPage(
   }
   let index = cache.get(key);
   if (!index) {
-    index = buildHistoryIndex(filePath, version, leafId, options.includePreCompaction);
+    index = buildHistoryIndex(filePath, version, leafId, includePreCompaction);
     if (stat && historyFileVersion(statSync(filePath)) !== version) throw new Error("Session changed while indexing history");
     // An unusually metadata-heavy file still opens, but cannot evict every
     // peer or retain more than the entire index budget by itself.
@@ -692,6 +686,27 @@ export function getSessionHistoryPage(
     totalBytes -= cache.get(oldest)!.bytes;
     cache.delete(oldest);
   }
+  return { index, cache, key };
+}
+
+/** Current active context IDs only; no body seeks or blob hydration. The
+ * returned IDs are cached and immutable, like getSessionEntries results. */
+export function getSessionContextBoundary(filePath: string): { entryIds: string[] } {
+  const { index } = getSessionHistoryIndex(filePath);
+  return { entryIds: index.entryIds };
+}
+
+/** Seek only page bodies. A file changed during indexing/reading must not
+ * advance the browser cursor using offsets from a different file version. */
+export function getSessionHistoryPage(
+  filePath: string,
+  cursor: SessionHistoryCursor | null,
+  limit: number,
+  leafId?: string,
+  options: { deferThinking?: boolean; deferToolResultImages?: boolean; includePreCompaction?: boolean } = {},
+): { history: SessionHistoryPage; leafId: string | null; tipId: string | null } {
+  const { index, cache, key } = getSessionHistoryIndex(filePath, leafId, !!options.includePreCompaction);
+  const version = index.version;
 
   const { start, end, ...page } = selectHistoryRange(index.entryIds, cursor, limit, index.positions);
   const rawEntries: SessionEntry[] = [];
@@ -708,7 +723,7 @@ export function getSessionHistoryPage(
           if (count === 0) throw new Error("Session truncated while reading history");
           read += count;
         }
-        const entry = JSON.parse(buffer.toString("utf8")) as SessionEntry;
+        const entry = JSON.parse(buffer.toString("utf8").trim()) as SessionEntry;
         // Reuse IDs/compaction links assigned by v1 migration; v2 renamed the
         // hookMessage role. No migrated body is retained between requests.
         entry.id = row.id;

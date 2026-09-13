@@ -129,6 +129,12 @@ separate from confirmed history.
   current run after completion, even before its entry is readable on disk.
   New runs and process/session changes reset it; tool calls alone do not count.
 
+`GET /api/sessions/:id/context?boundary=1` returns only `{ entryIds }` for
+the current active context. Prompt and interrupt dispatch use this fresh
+ID-only boundary instead of downloading the transcript. It shares the history
+index without hydrating message bodies or blobs and cannot be combined with
+sync, pagination, or historical-view parameters.
+
 SSE events carry `web: { streamId, sequence }`. The stream epoch changes when
 the native process or session identity changes. These values order live
 snapshots; they are not a persisted replay journal or `Last-Event-ID` support.
@@ -137,9 +143,11 @@ processing live events while history loads and applies snapshot fields only
 when they cannot overwrite newer message, tool, or lifecycle state.
 
 Open/reopen, foreground/online, message completion, and persisted-file
-notifications share one coalesced catch-up loop. Failed reads retain the
-confirmed cursor and displayed history. Full initial loads and terminal
-metadata refreshes still update the branch-navigation tree.
+notifications share one coalesced catch-up loop. Pages are accumulated privately
+and published only when the selected history is complete. Failed reads retain
+the last complete cursor and displayed history. Overlapping full loads preserve
+newer complete history rather than treating an intermediate page as authoritative.
+Full initial loads and terminal metadata refreshes still update the branch tree.
 A completion or persistence notification during an in-flight read schedules
 one follow-up read from the newly returned cursor. Raw SSE completions never
 append a second copy of an entry that the history response already includes.
@@ -147,8 +155,11 @@ append a second copy of an entry that the history response already includes.
 Unchanged history pages reuse a file-versioned offset index and seek only the
 requested message bodies. The in-memory index cache is bounded to 32 views and
 32 MiB of charged metadata; it does not retain transcript bodies or increase
-the existing 256 MiB raw-file cache budget or 1 GiB load ceiling. File mutation
-invalidates offsets; failed reads never advance the cursor.
+the existing 256 MiB raw-file cache budget or 1 GiB load ceiling. Cold indexes
+and changed files require a full metadata scan. Growth alone is not proof of
+an append: the same inode can be rewritten and then extended, so any file
+version change invalidates offsets rather than trusting an unchecked prefix.
+Failed reads never advance the confirmed cursor.
 
 File-only catch-up also refreshes model and thinking metadata without replacing
 newer or pending RPC choices. Replacement observer connections restore browser

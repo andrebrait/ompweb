@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { existsSync } from "fs";
 import { loadSessionFile } from "@/lib/omp/session-files";
-import { buildSessionContext, getSessionEntriesForDisplayAsync, getSessionHistoryPage, readSessionHeader, SessionFileTooLargeError } from "@/lib/session-reader";
+import { buildSessionContext, getSessionContextBoundary, getSessionEntriesForDisplayAsync, getSessionHistoryPage, readSessionHeader, SessionFileTooLargeError } from "@/lib/session-reader";
 import { apiErrorResponse, resolveSessionPathOr404 } from "@/lib/api-utils";
 import { getRpcSession } from "@/lib/rpc-manager";
 import { MAX_SYNC_MESSAGES, parseHistoryCursor, selectSessionHistory, type SessionHistoryCursor, type SessionSyncResponse } from "@/lib/session-sync";
@@ -32,6 +32,15 @@ export async function GET(
   // Read-only transcript mode: include entries omitted from the active agent context.
   const includePreCompaction = url.searchParams.has("includePreCompaction");
   const sync = url.searchParams.get("sync");
+  const boundary = url.searchParams.get("boundary");
+  if (boundary !== null) {
+    if (boundary !== "1" || url.searchParams.getAll("boundary").length !== 1) {
+      return NextResponse.json({ error: "Invalid boundary mode", code: "invalid_boundary" }, { status: 400 });
+    }
+    if (["sync", "leafId", "includePreCompaction", "cursor", "limit"].some((option) => url.searchParams.has(option))) {
+      return NextResponse.json({ error: "Boundary mode requires the current active context", code: "invalid_boundary_options" }, { status: 400 });
+    }
+  }
   let cursor: SessionHistoryCursor | null = null;
   let limit = MAX_SYNC_MESSAGES;
   if (sync !== null && sync !== "1") {
@@ -82,6 +91,9 @@ export async function GET(
         );
       }
       return NextResponse.json({ error: "Session file is missing or malformed", code: "session_file_malformed" }, { status: 404 });
+    }
+    if (boundary === "1") {
+      return NextResponse.json(getSessionContextBoundary(filePath), { headers: { "Cache-Control": "no-store" } });
     }
     if (sync === "1") {
       const page = await getSessionHistoryPage(filePath, cursor, limit, leafId, {
