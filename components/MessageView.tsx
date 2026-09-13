@@ -1027,7 +1027,7 @@ const ToolCallBlock = memo(function ToolCallBlock({
                   <dl>
                     {Object.entries(block.input).map(([key, value]) => (
                       <div key={key}>
-                        <dt>{key}</dt>
+                        <dt>{key === "i" ? "intent" : key}</dt>
                         <dd><pre>{typeof value === "string" ? value : safeJson(value)}</pre></dd>
                       </div>
                     ))}
