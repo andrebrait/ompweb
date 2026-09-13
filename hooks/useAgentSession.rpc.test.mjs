@@ -221,14 +221,15 @@ globalThis.fetch = fetchStub;
 // The hook chain includes components/ui/toast.tsx, whose JSX jiti cannot parse
 // in this environment and whose DOM toasts must never fire inside Node tests.
 const jiti = createJiti(import.meta.url, {
+  tryNative: false,
   alias: {
     "@/components/ui/toast": fileURLToPath(new URL("./__fixtures__/toast-stub.mjs", import.meta.url)),
     "@/": fileURLToPath(new URL("../", import.meta.url)),
   },
 });
 const { useAgentSession } = await jiti.import("../hooks/useAgentSession.ts");
-const { selectSessionHistory } = await jiti.import("../lib/session-sync.ts");
-const { publishSessionsChanged } = await jiti.import("../lib/session-change-bus.ts");
+const { selectSessionHistory } = await jiti.import("@/lib/session-sync");
+const { publishSessionsChanged } = await jiti.import("@/lib/session-change-bus");
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -1333,7 +1334,7 @@ test("forking carries the advisor choice to the child's next native command", as
   await act(async () => { await w.latest.handleFork("e0"); });
   assert.deepEqual(forked, ["advisor-child"]);
   assert.equal(localStorage.getItem("omp-advisor-enabled:advisor-child"), "true");
-  const { sendAgentCommand } = await jiti.import("../lib/agent-client.ts");
+  const { sendAgentCommand } = await jiti.import("@/lib/agent-client");
   await sendAgentCommand("advisor-child", { type: "get_state" });
   assert.ok(world.calls.some((call) => call.url === "/api/agent/advisor-child?advisor=1"));
 });
