@@ -528,6 +528,57 @@ test("a failed transcript reload is retried instead of being classified as an em
   assert.deepEqual(w.latest.notices.filter((n) => n.type === "error"), []);
 });
 
+for (const nextRun of ["send", "interrupt"]) {
+  test(`${nextRun} captures saved entries newer than the last rendered transcript`, async (t) => {
+    t.after(unmountAll);
+    resetWorld();
+    primeSession("s1", [userMsg("u0", "old question")]);
+    const { w, es } = await startRun(t, "s1", "question");
+    primeSession("s1", [userMsg("u0", "old question"), userMsg("u1", "question"), assistantMsg("a1", "Previous answer")]);
+    let releaseTerminalReload;
+    if (nextRun === "send") {
+      world.holds.push({
+        match: (method, url) => method === "GET" && url.startsWith("/api/sessions/s1?"),
+        produce: () => new Promise((resolve) => {
+          releaseTerminalReload = () => resolve({ value: {
+            sessionId: "s1",
+            leafId: "3",
+            context: { ...world.sessions.get("s1"), todoPhases: [] },
+          } });
+        }),
+      });
+      await act(async () => {
+        es.emit({ type: "message_update", message: assistantMsg("a1", "Previous answer") });
+        es.emit({ type: "agent_end", isTerminal: true });
+        await Promise.resolve();
+      });
+      assert.equal(w.latest.agentRunning, false);
+    }
+    let submission;
+    await act(async () => {
+      submission = nextRun === "send" ? w.latest.handleSend("question") : w.latest.handleInterruptAndReply("question");
+      await sleep(30);
+    });
+    const replacement = lastEs();
+    await act(async () => {
+      replacement.open();
+      await submission;
+      releaseTerminalReload?.();
+      if (nextRun === "interrupt") replacement.emit({ type: "agent_end", isTerminal: true });
+      replacement.emit({ type: "agent_start" });
+      await Promise.resolve();
+    });
+    // The replacement never persisted a new user entry or answer.
+    await act(async () => {
+      docTarget.fire("visibilitychange");
+      await sleep(60);
+    });
+    await settle();
+    assert.equal(w.latest.agentRunning, false);
+    assert.equal(w.latest.notices.filter((n) => n.type === "error").length, 1, "previous answer must not count as replacement success");
+  });
+}
+
 test("tool activity and turn_end errors do not count as a successful answer", async (t) => {
   t.after(unmountAll);
   resetWorld();

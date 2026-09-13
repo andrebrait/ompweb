@@ -377,8 +377,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const lastRunErrorRef = useRef<string | null>(null);
   const runHadContentRef = useRef(false);
   // Persisted entries preceding a locally submitted run cannot supply its answer.
-  // Empty on mount: reconnecting to an existing run includes its saved messages.
-  const runPreviousEntryIdsRef = useRef<string[]>([]);
+  // Empty on mount; null while a submitted run's boundary is still being read.
+  const runPreviousEntryIdsRef = useRef<string[] | null>([]);
   const slashCommandRunRef = useRef(false);
   // Bumped on every roster clear (run end): in-flight get_subagents/history
   // responses from the finished run must not merge into the cleared (or next
@@ -1352,6 +1352,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     let runError = lastRunErrorRef.current;
     const allowEmptyResponse = slashCommandRunRef.current;
     const previousEntryIds = runPreviousEntryIdsRef.current;
+    if (previousEntryIds === null) return;
     let transcriptLoaded = false;
     try {
       // Pass the fence into loadSession: the pre-check above only guards the
@@ -2232,6 +2233,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [addNotice, clearLiveToolResults, clearTerminalReconcileTimer, consumeQueuedMessage, finishPromptWithoutStream, handleExtensionUiRequest, handleHostToolCall, handleHostUriRequest, loadSession, mergeSubagents, onAgentEnd, reconcileAgentState, resetSubagentActivityState, applyAuthoritativeModel, beginAuthoritativeModelSync, setLiveToolResult, surfaceQuotaOnStream]);
   handleAgentEventRef.current = handleAgentEvent;
 
+  const snapshotRunEntries = useCallback(async (sid: string) => {
+    // Read immediately before dispatch, not from React's last rendered state:
+    // the previous terminal reload or interrupted turn can still be in flight.
+    // Unlike loadSession, this must not replace the optimistic user bubble.
+    const params = new URLSearchParams({ deferThinking: "1", deferMedia: "1" });
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}?${params}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const snapshot = await res.json() as SessionData;
+    return snapshot.context.entryIds ?? [];
+  }, []);
+
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]): Promise<boolean> => {
     const trimmedMessage = message.trim();
     if (!trimmedMessage && !images?.length) return false;
@@ -2264,7 +2276,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setMessages((prev) => [...prev, userMsg]);
     optimisticUserMessageKeyRef.current = userMessageKey(userMsg);
     promptRunIdRef.current = promptRunId;
-    runPreviousEntryIdsRef.current = entryIds;
+    runPreviousEntryIdsRef.current = isNew ? [] : null;
     agentRunningRef.current = true;
     slashCommandRunRef.current = isSlashCommandPrompt;
     // A new run starts fresh: drop any rescued in-flight reconcile state from
@@ -2326,6 +2338,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         void refreshSubagentRoster(session.id);
         void registerHostTools(session.id);
         void registerHostUriSchemes(session.id);
+        const previousEntryIds = await snapshotRunEntries(session.id);
+        if (promptRunIdRef.current === promptRunId && sessionIdRef.current === session.id) {
+          runPreviousEntryIdsRef.current = previousEntryIds;
+        }
         await sendAgentCommand(session.id, {
           type: "prompt",
           message,
@@ -2370,7 +2386,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       dispatch({ type: "end" });
       return false;
     }
-  }, [isNew, newSessionCwd, newSessionModel, session, ensureNewSession, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, opts.chatInputRef, refreshSubagentRoster, registerHostTools, registerHostUriSchemes, clearLiveToolResults, clearTerminalReconcileTimer, entryIds]);
+  }, [isNew, newSessionCwd, newSessionModel, session, ensureNewSession, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, opts.chatInputRef, refreshSubagentRoster, registerHostTools, registerHostUriSchemes, clearLiveToolResults, clearTerminalReconcileTimer, snapshotRunEntries]);
 
   /** Abort the running agent and send the message as a fresh prompt
    * (abort_and_prompt). Only valid mid-run; the old turn's agent_end is
@@ -2392,8 +2408,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     clearTerminalReconcileTimer();
     // Advance the run generation so late agent_end / prompt_error / stale
     // loadSession from the aborted turn cannot stop or clobber the replacement.
-    promptRunIdRef.current += 1;
-    runPreviousEntryIdsRef.current = entryIds;
+    const promptRunId = ++promptRunIdRef.current;
+    const previousRunEntryIds = runPreviousEntryIdsRef.current;
+    runPreviousEntryIdsRef.current = null;
 
     const { userMsg, piImages: interruptPiImages } = buildOutgoingPrompt(message, images);
     setMessages((prev) => [...prev, userMsg]);
@@ -2405,6 +2422,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     try {
       await ensureEventsConnected(sid);
       void refreshSubagentRoster(sid);
+      const previousEntryIds = await snapshotRunEntries(sid);
+      if (promptRunIdRef.current === promptRunId && sessionIdRef.current === sid) {
+        runPreviousEntryIdsRef.current = previousEntryIds;
+      }
       await sendAgentCommand(sid, {
         type: "abort_and_prompt",
         message: trimmedMessage,
@@ -2413,6 +2434,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       return true;
     } catch (e) {
       console.error("Failed to interrupt and reply:", e);
+      if (promptRunIdRef.current === promptRunId && sessionIdRef.current === sid) {
+        runPreviousEntryIdsRef.current = previousRunEntryIds;
+      }
       interruptReplyPendingRef.current = false;
       const optimisticKey = optimisticUserMessageKeyRef.current;
       if (optimisticKey) {
@@ -2430,7 +2454,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (trimmedMessage) opts.chatInputRef?.current?.insertIfEmpty(trimmedMessage);
       return false;
     }
-  }, [addNotice, ensureEventsConnected, refreshSubagentRoster, clearTerminalReconcileTimer, opts.chatInputRef, entryIds]);
+  }, [addNotice, ensureEventsConnected, refreshSubagentRoster, clearTerminalReconcileTimer, opts.chatInputRef, snapshotRunEntries]);
 
   const executeBash = useCallback(async (command: string, excludeFromContext: boolean) => {
     if (agentRunningRef.current || bashRunningRef.current) return;
