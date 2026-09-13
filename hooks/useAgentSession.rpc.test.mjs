@@ -148,6 +148,7 @@ const world = {
   live: new Map(),
   views: new Map(),
   contextUnavailable: false,
+  wrappers: new Map(),
 };
 
 async function fetchStub(url, init = {}) {
@@ -166,6 +167,8 @@ async function fetchStub(url, init = {}) {
 
   let m;
   if ((m = u.match(/\/api\/sessions\/([^/?#]+)\/state/))) {
+    const wrapper = world.wrappers.get(decodeURIComponent(m[1]));
+    if (wrapper) return jsonResponse(200, { running: wrapper.isAlive(), state: await wrapper.send({ type: "get_state" }) });
     const a = world.agents.get(decodeURIComponent(m[1])) ?? { running: false, state: {} };
     return jsonResponse(200, { running: a.running, state: a.state });
   }
@@ -179,13 +182,13 @@ async function fetchStub(url, init = {}) {
     const f = world.views.get(`${sid}:${params.get("leafId") ?? ""}:${params.has("includePreCompaction")}`)
       ?? world.sessions.get(sid);
     if (!f) return jsonResponse(404, {});
-    const context = { ...f, todoPhases: [], thinkingLevel: "off", model: null };
+    const context = { todoPhases: [], thinkingLevel: "off", model: null, ...f };
     if (!params.has("sync")) return jsonResponse(200, { context });
     return jsonResponse(200, {
       ...selectSessionHistory(context, params.has("cursor") ? JSON.parse(params.get("cursor")) : null),
       sessionId: sid,
       leafId: params.get("leafId") ?? f.leafId,
-      live: params.has("leafId") ? null : structuredClone(world.live.get(sid) ?? null),
+      live: params.has("leafId") ? null : structuredClone(world.wrappers.get(sid)?.getStreamSnapshot() ?? world.live.get(sid) ?? null),
     });
   }
   if ((m = u.match(/\/api\/sessions\/([^/?#]+)/)) && method === "GET") {
@@ -195,7 +198,7 @@ async function fetchStub(url, init = {}) {
     return jsonResponse(200, {
       sessionId: decodeURIComponent(m[1]), filePath: "/fixture/session.jsonl", tree: f.tree ?? [],
       leafId: f.leafId,
-      context: { messages: f.messages, entryIds: f.entryIds, todoPhases: [] },
+      context: { todoPhases: [], thinkingLevel: "off", model: null, ...f },
     });
   }
   if (/^\/api\/models/.test(u)) {
@@ -203,6 +206,11 @@ async function fetchStub(url, init = {}) {
   }
   if ((m = u.match(/\/api\/agent\/([^/?#]+)/))) {
     const sid = decodeURIComponent(m[1]);
+    const wrapper = world.wrappers.get(sid);
+    if (wrapper) {
+      if (method === "GET") return jsonResponse(200, { running: wrapper.isAlive(), state: await wrapper.send({ type: "get_state" }) });
+      if (method === "POST") return jsonResponse(200, { success: true, data: await wrapper.send(safeParse(init.body)) });
+    }
     if (method === "GET") {
       const a = world.agents.get(sid) ?? { running: false, state: {} };
       return jsonResponse(200, { running: a.running, state: a.state });
@@ -231,6 +239,7 @@ const jiti = createJiti(import.meta.url, {
 const { useAgentSession } = await jiti.import("../hooks/useAgentSession.ts");
 const { selectSessionHistory } = await jiti.import("@/lib/session-sync");
 const { publishSessionsChanged } = await jiti.import("@/lib/session-change-bus");
+const { AgentSessionWrapper } = await jiti.import("@/lib/rpc-manager");
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -311,6 +320,7 @@ function resetWorld() {
   world.live.clear();
   world.views.clear();
   world.contextUnavailable = false;
+  world.wrappers.clear();
 }
 
 function primeSession(sid, messages) {
@@ -1549,7 +1559,7 @@ function liveSnapshot(sid, sequence, streamingMessage, toolEvents = []) {
 function syncSnapshot(sid, live = null, cursor = null) {
   const file = world.sessions.get(sid);
   return {
-    ...selectSessionHistory({ ...file, todoPhases: [], thinkingLevel: "off", model: null }, cursor),
+    ...selectSessionHistory({ todoPhases: [], thinkingLevel: "off", model: null, ...file }, cursor),
     sessionId: sid, leafId: file.leafId, live,
   };
 }
@@ -1565,6 +1575,112 @@ function holdNextSync(sid, value) {
     release();
   };
 }
+
+/** Real web wrapper, controllable native frames, independently delayed disk writes. */
+function attachNativeWrapper(t, sid) {
+  let frameListener;
+  let delivering = true;
+  let streaming = false;
+  const wrapper = new AgentSessionWrapper({
+    isAlive: true,
+    onFrame(listener) { frameListener = listener; return () => {}; },
+    async sendCommand(command) {
+      if (command.type === "get_state") return { sessionId: sid, isStreaming: streaming, isCompacting: false };
+      if (command.type === "prompt") return { agentInvoked: true };
+      return {};
+    },
+    sendFrame() {},
+    async dispose() {},
+  }, process.cwd());
+  wrapper.start();
+  world.wrappers.set(sid, wrapper);
+  t.after(() => wrapper.destroyAndWait());
+  wrapper.onEvent((event) => {
+    world.streams.set(sid, event.web);
+    world.live.set(sid, wrapper.getStreamSnapshot());
+    if (delivering) lastEs()?.emit(event, { persist: false });
+  });
+  return {
+    wrapper,
+    emit(event, deliver = true) {
+      delivering = deliver;
+      if (event.type === "agent_start") streaming = true;
+      if (event.type === "agent_end" && event.isTerminal !== false) streaming = false;
+      frameListener(event);
+      delivering = true;
+    },
+  };
+}
+
+test("wrapper-observed response missed by SSE survives terminal recovery before disk append", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "old question")]);
+  const { w } = await startRun(t, "s1", "new question");
+  const native = attachNativeWrapper(t, "s1");
+  const answer = assistantMsg("a1", "Saved after agent_end");
+  saveSession("s1", [userMsg("u0", "old question"), userMsg("u1", "new question")]);
+  await act(async () => {
+    native.emit({ type: "agent_start" });
+    native.emit({ type: "message_end", message: answer }, false);
+    native.emit({ type: "agent_end", isTerminal: true });
+  });
+  await settle();
+  assert.equal(w.latest.agentRunning, false);
+  assert.deepEqual(w.latest.notices.filter((n) => n.type === "error"), []);
+  assert.equal(w.latest.messages.filter((m) => m.role === "assistant").length, 0, "native observation is not a persisted entry");
+  appendEntry("s1", answer);
+  await act(async () => { publishSessionsChanged(["s1"]); });
+  await settle();
+  await act(async () => { publishSessionsChanged(["s1"]); });
+  await settle();
+  assert.deepEqual(w.latest.messages.filter((m) => m.role === "assistant"), [answer]);
+  assert.deepEqual(w.latest.entryIds, ["e0", "e1", "e2"]);
+  assert.deepEqual(w.latest.notices.filter((n) => n.type === "error"), []);
+});
+
+test("a previous wrapper observation cannot hide a replacement run with no response", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w } = await startRun(t, "s1", "first");
+  const native = attachNativeWrapper(t, "s1");
+  saveSession("s1", [userMsg("u0", "q"), userMsg("u1", "first")]);
+  await act(async () => {
+    native.emit({ type: "agent_start" });
+    native.emit({ type: "message_end", message: assistantMsg("a1", "first answer") }, false);
+    native.emit({ type: "agent_end", isTerminal: true });
+  });
+  await settle();
+  assert.equal(w.latest.agentRunning, false);
+  assert.deepEqual(w.latest.notices.filter((n) => n.type === "error"), []);
+  let sending;
+  await act(async () => { sending = w.latest.handleSend("second"); await sleep(30); });
+  await act(async () => { lastEs().open(); await sending; });
+  // No new agent_start is required for a failed prompt: even pre-start failure
+  // must not reuse either the wrapper's or the browser's prior observation.
+  await act(async () => { native.emit({ type: "agent_end", isTerminal: true }); });
+  await settle();
+  assert.equal(w.latest.agentRunning, false);
+  assert.equal(w.latest.notices.filter((n) => /stopped without returning a response/i.test(n.message)).length, 1);
+});
+
+test("terminal recovery respects a still-busy authoritative state instead of classifying readable history", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w, es } = await startRun(t, "s1", "new question");
+  world.agents.set("s1", { running: true, state: { isStreaming: true, isPromptRunning: true } });
+  await act(async () => { es.emit({ type: "agent_end", isTerminal: true }); });
+  await settle();
+  assert.equal(w.latest.agentRunning, true);
+  assert.deepEqual(w.latest.notices.filter((n) => n.type === "error"), []);
+  world.agents.set("s1", { running: true, state: { isStreaming: false, isPromptRunning: false } });
+  await act(async () => { winTarget.fire("online"); });
+  await settle();
+  assert.equal(w.latest.agentRunning, false);
+  assert.equal(w.latest.notices.filter((n) => n.type === "error").length, 1);
+});
 
 test("busy foreground catch-up restores missing middle messages without overwriting newer queued tokens", async (t) => {
   t.after(unmountAll);
@@ -2095,6 +2211,8 @@ test("HTTP discovery of a new wrapper replaces an old still-open stream before h
   const snapshot = { ...liveSnapshot("s1", 1, assistantMsg("new", "new wrapper partial")), cursor: { streamId: "new-wrapper", sequence: 1 } };
   world.live.set("s1", snapshot);
   world.streams.set("s1", snapshot.cursor);
+  const registrationsBefore = world.calls.length;
+  world.subagentSnapshots.set("s1", [{ id: "new-child", agent: "explore", status: "started", index: 0, task: "recover roster" }]);
   await act(async () => { publishSessionsChanged(["s1"]); });
   await settle();
   const replacement = lastEs();
@@ -2102,6 +2220,10 @@ test("HTTP discovery of a new wrapper replaces an old still-open stream before h
   assert.equal(es.closedByCaller, true, "an old heartbeat-only connection must be replaced");
   await act(async () => { replacement.open(); });
   await settle();
+  const restored = world.calls.slice(registrationsBefore).filter((c) => c.method === "POST").map((c) => c.body.type);
+  assert.equal(restored.includes("set_host_tools"), true);
+  assert.equal(restored.includes("set_host_uri_schemes"), true);
+  assert.equal(w.latest.subagents.find((s) => s.id === "new-child")?.status, "started");
   assert.equal(w.latest.streamState.streamingMessage?.content[0].text, "new wrapper partial");
   await act(async () => { replacement.emit({ type: "message_update", message: assistantMsg("new", "new wrapper live-only tokens") }); });
   await settle(90);
@@ -2122,12 +2244,18 @@ test("foreground catch-up replaces an idle CLOSED source and resumes later live-
   world.streams.set("s1", cursor);
   world.live.set("s1", { ...liveSnapshot("s1", 10, assistantMsg("resumed", "busy snapshot")), cursor });
   world.agents.set("s1", { running: true, state: { isStreaming: true } });
+  const registrationsBefore = world.calls.length;
+  world.subagentSnapshots.set("s1", [{ id: "resumed-child", agent: "explore", status: "started", index: 0, task: "quiet child" }]);
   await act(async () => { winTarget.fire("online"); });
   await settle();
   const replacement = lastEs();
   assert.notEqual(replacement, es);
   await act(async () => { replacement.open(); });
   await settle();
+  const restored = world.calls.slice(registrationsBefore).filter((c) => c.method === "POST").map((c) => c.body.type);
+  assert.equal(restored.includes("set_host_tools"), true);
+  assert.equal(restored.includes("set_host_uri_schemes"), true);
+  assert.equal(w.latest.subagents.find((s) => s.id === "resumed-child")?.status, "started");
   assert.equal(w.latest.agentRunning, true);
   assert.equal(w.latest.streamState.streamingMessage?.content[0].text, "busy snapshot");
   await act(async () => { replacement.emit({ type: "message_update", message: assistantMsg("resumed", "live-only continuation") }); });
@@ -2204,4 +2332,113 @@ test("idle closed streams retain capped backoff and a healthy replacement cancel
   });
   assert.equal(lastEs(), healthy, "an orphaned backoff timer must not replace the healthy stream");
   assert.equal(healthy.closedByCaller, false);
+});
+
+test("idle file-only catch-up updates persisted model, thinking and data context without RPC startup", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  Object.assign(world.sessions.get("s1"), { model: { provider: "test", modelId: "old-model" }, thinkingLevel: "high" });
+  const w = await mountSession("s1");
+  assert.equal(w.latest.displayModel.modelId, "old-model");
+  assert.equal(w.latest.thinkingLevel, "high");
+  const context = world.sessions.get("s1");
+  Object.assign(context, { model: { provider: "test", modelId: "external-model" }, thinkingLevel: "off" });
+  await act(async () => { publishSessionsChanged(["s1"]); });
+  await settle();
+  assert.equal(w.latest.displayModel.modelId, "external-model");
+  assert.equal(w.latest.thinkingLevel, "off");
+  assert.deepEqual(w.latest.data.context.model, context.model);
+  assert.equal(w.latest.data.context.thinkingLevel, "off");
+  assert.deepEqual(w.latest.data.context.entryIds, w.latest.entryIds);
+  assert.equal(callsTo("POST", "/api/agent/").length, 0, "reading idle metadata must never spawn a process");
+  assert.equal(world.esInstances.length, 0);
+});
+
+test("file metadata refresh preserves an active RPC model and thinking choice", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  world.agents.set("s1", { running: true, state: {
+    isStreaming: true, model: { provider: "test", id: "live-model" }, thinkingLevel: "high",
+  } });
+  const w = await mountSession("s1");
+  await act(async () => { lastEs().open(); });
+  Object.assign(world.sessions.get("s1"), { model: { provider: "test", modelId: "persisted-model" }, thinkingLevel: "low" });
+  await act(async () => { publishSessionsChanged(["s1"]); });
+  await settle();
+  assert.equal(w.latest.agentRunning, true);
+  assert.equal(w.latest.displayModel.modelId, "live-model");
+  assert.equal(w.latest.thinkingLevel, "high");
+  assert.equal(w.latest.data.context.model.modelId, "persisted-model", "data context still reflects confirmed disk metadata");
+});
+
+test("a held file snapshot cannot roll back a newer RPC model choice", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  Object.assign(world.sessions.get("s1"), { model: { provider: "test", modelId: "old-model" }, thinkingLevel: "low" });
+  const w = await mountSession("s1");
+  const release = holdNextSync("s1", syncSnapshot("s1"));
+  await act(async () => { publishSessionsChanged(["s1"]); await sleep(20); });
+  world.agents.set("s1", { running: true, state: { model: { provider: "test", id: "chosen-model" }, thinkingLevel: "high" } });
+  await act(async () => { await w.latest.handleModelChange("test", "chosen-model"); });
+  await act(async () => { release(); });
+  await settle();
+  assert.equal(w.latest.displayModel.modelId, "chosen-model");
+  assert.equal(w.latest.thinkingLevel, "high");
+});
+
+test("idle catch-up cannot overwrite a pending thinking command", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  Object.assign(world.sessions.get("s1"), { thinkingLevel: "low" });
+  const w = await mountSession("s1");
+  let releaseCommand;
+  world.holds.push({
+    match: (method, url) => method === "POST" && url === "/api/agent/s1",
+    produce: () => new Promise((resolve) => { releaseCommand = () => resolve({ value: { success: true, data: {} } }); }),
+  });
+  let command;
+  await act(async () => { command = w.latest.handleThinkingLevelChange("high"); await sleep(20); });
+  await act(async () => { publishSessionsChanged(["s1"]); });
+  await settle();
+  assert.equal(w.latest.thinkingLevel, "high");
+  world.agents.set("s1", { running: true, state: { thinkingLevel: "high" } });
+  await act(async () => { releaseCommand(); await command; });
+  assert.equal(w.latest.thinkingLevel, "high");
+});
+
+test("failed cold-read reconnects never issue process-starting registrations", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const w = await mountSession("s1");
+  world.live.set("s1", { ...liveSnapshot("s1", 1, null), isStreaming: false, isPromptRunning: false });
+  await act(async () => { publishSessionsChanged(["s1"]); });
+  await settle();
+  const source = lastEs();
+  world.live.delete("s1"); // wrapper vanished before the observer subscription
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  await act(async () => { source.failFatal(); t.mock.timers.tick(1000); });
+  await act(async () => { lastEs().failFatal(); t.mock.timers.tick(2000); });
+  assert.equal(w.latest.agentRunning, false);
+  assert.equal(callsTo("POST", "/api/agent/").length, 0);
+});
+
+test("unmount before replacement open cannot restore stale wrapper registrations", async (t) => {
+  t.after(unmountAll);
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w } = await startStreamingRun(t, "s1");
+  world.live.set("s1", { ...liveSnapshot("s1", 1, null), cursor: { streamId: "replacement", sequence: 1 } });
+  await act(async () => { publishSessionsChanged(["s1"]); });
+  await settle();
+  const replacement = lastEs();
+  const lateOpen = replacement.onopen;
+  await act(async () => { w.renderer.unmount(); });
+  const before = world.calls.length;
+  await act(async () => { lateOpen({}); });
+  assert.equal(world.calls.slice(before).some((c) => c.method === "POST"), false);
 });

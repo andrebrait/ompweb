@@ -25,6 +25,8 @@ export interface SessionLiveSnapshot {
   isCompacting: boolean;
   streamingMessage: Partial<AgentMessage> | null;
   toolEvents: SessionLiveToolEvent[];
+  /** Positive run-scoped evidence survives message_end's delayed file write. */
+  responseObserved?: boolean;
 }
 
 export interface SessionHistoryPage {
@@ -33,6 +35,11 @@ export interface SessionHistoryPage {
   context: SessionContext;
   cursor: SessionHistoryCursor;
   hasMore: boolean;
+}
+
+export interface SessionHistoryRange extends Omit<SessionHistoryPage, "context"> {
+  start: number;
+  end: number;
 }
 
 export interface SessionSyncResponse extends SessionHistoryPage {
@@ -72,18 +79,35 @@ export function selectSessionHistory(
   cursor: SessionHistoryCursor | null,
   limit = MAX_SYNC_MESSAGES,
 ): SessionHistoryPage {
+  const { start, end, ...page } = selectHistoryRange(context.entryIds, cursor, limit);
+  return {
+    ...page,
+    context: { ...context, messages: context.messages.slice(start, end), entryIds: context.entryIds.slice(start, end) },
+  };
+}
+
+/** Indexed readers can locate a cursor without scanning the delivered prefix again. */
+export function selectHistoryRange(
+  entryIds: readonly string[],
+  cursor: SessionHistoryCursor | null,
+  limit = MAX_SYNC_MESSAGES,
+  positions?: ReadonlyMap<string, number>,
+): SessionHistoryRange {
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_SYNC_MESSAGES) throw new RangeError("Invalid history page limit");
-  const firstEntryId = context.entryIds[0] ?? null;
-  const cursorIndex = cursor?.lastEntryId ? context.entryIds.indexOf(cursor.lastEntryId) : -1;
+  const firstEntryId = entryIds[0] ?? null;
+  const cursorIndex = cursor?.lastEntryId
+    ? positions ? positions.get(cursor.lastEntryId) ?? -1 : entryIds.indexOf(cursor.lastEntryId)
+    : -1;
   const append = cursor !== null && cursor.firstEntryId === firstEntryId
-    && (cursorIndex >= 0 || (cursor.lastEntryId === null && context.entryIds.length === 0));
+    && ((cursorIndex >= 0 && entryIds[cursorIndex] === cursor.lastEntryId) || (cursor.lastEntryId === null && entryIds.length === 0));
   const start = append ? cursorIndex + 1 : 0;
-  const end = Math.min(start + limit, context.entryIds.length);
+  const end = Math.min(start + limit, entryIds.length);
   return {
     mode: append ? "append" : "replace",
     baseEntryId: append ? cursor.lastEntryId : null,
-    context: { ...context, messages: context.messages.slice(start, end), entryIds: context.entryIds.slice(start, end) },
-    cursor: { firstEntryId, lastEntryId: context.entryIds[end - 1] ?? null },
-    hasMore: end < context.entryIds.length,
+    start,
+    end,
+    cursor: { firstEntryId, lastEntryId: entryIds[end - 1] ?? null },
+    hasMore: end < entryIds.length,
   };
 }

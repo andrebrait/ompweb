@@ -27,9 +27,10 @@ export interface SessionCatchUp {
 export function createSessionCatchUp(options: {
   sessionId: () => string | null;
   scope: () => string | null;
-  history: (context: SessionContext, leafId: string | null) => void;
+  history: (context: SessionContext, leafId: string | null, metadata?: { version: number; hasLive: boolean }) => void;
   live: (snapshot: SessionLiveSnapshot, fields: SessionLiveFields) => void;
   subscribe: (force: boolean) => boolean;
+  metadataVersion?: () => number;
 }): SessionCatchUp {
   let context: SessionContext | null = null;
   let cursor: SessionHistoryCursor | null = null;
@@ -73,6 +74,7 @@ export function createSessionCatchUp(options: {
         if (!sid || scope === null) break;
         const version = revision;
         const base = cursor;
+        const metadataVersion = options.metadataVersion?.() ?? 0;
         const params = new URLSearchParams({ sync: "1", deferThinking: "1", deferMedia: "1" });
         if (base) params.set("cursor", JSON.stringify(base));
         if (view.leafId) params.set("leafId", view.leafId);
@@ -107,7 +109,7 @@ export function createSessionCatchUp(options: {
           context = { ...page.context, messages, entryIds };
           cursor = page.cursor;
           loaded = context;
-          options.history(context, page.leafId);
+          options.history(context, page.leafId, { version: metadataVersion, hasLive: page.live !== null });
           if (page.hasMore) {
             // Malformed/non-advancing pages must not create an unbounded read loop.
             if (base?.firstEntryId === cursor.firstEntryId && base?.lastEntryId === cursor.lastEntryId) break;

@@ -125,6 +125,9 @@ separate from confirmed history.
   history never starts an OMP process. A live process can supply its first
   partial before its session file exists, but a missing file cannot erase a
   nonempty confirmed cursor.
+- `live.responseObserved` retains positive visible-answer evidence for the
+  current run after completion, even before its entry is readable on disk.
+  New runs and process/session changes reset it; tool calls alone do not count.
 
 SSE events carry `web: { streamId, sequence }`. The stream epoch changes when
 the native process or session identity changes. These values order live
@@ -140,6 +143,16 @@ metadata refreshes still update the branch-navigation tree.
 A completion or persistence notification during an in-flight read schedules
 one follow-up read from the newly returned cursor. Raw SSE completions never
 append a second copy of an entry that the history response already includes.
+
+Unchanged history pages reuse a file-versioned offset index and seek only the
+requested message bodies. The in-memory index cache is bounded to 32 views and
+32 MiB of charged metadata; it does not retain transcript bodies or increase
+the existing 256 MiB raw-file cache budget or 1 GiB load ceiling. File mutation
+invalidates offsets; failed reads never advance the cursor.
+
+File-only catch-up also refreshes model and thinking metadata without replacing
+newer or pending RPC choices. Replacement observer connections restore browser
+registrations and the subagent roster only after successfully connecting.
 
 Deploy the frontend and API support together; no native OMP upgrade is required.
 
