@@ -367,9 +367,8 @@ const ExplorerRow = memo(function ExplorerRow({
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
-          // The name is the answer the user is looking for, so the directory
-          // gives up width first.
-          flex: secondaryLabel ? "0 0 auto" : 1,
+          // Prefer the name, but let it shrink to keep row actions reachable.
+          flex: secondaryLabel ? "0 1 auto" : 1,
           maxWidth: secondaryLabel ? "72%" : undefined,
         }}
         title={node.fullPath}

@@ -295,7 +295,7 @@ export function GitChangesPanel({ cwd, refreshKey, onOpenFile, onAtMention, onRe
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
-                      flex: directory ? "0 0 auto" : 1,
+                      flex: directory ? "0 1 auto" : 1,
                       maxWidth: directory ? "60%" : undefined,
                     }}
                     title={file.filePath}
