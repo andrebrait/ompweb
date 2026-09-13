@@ -52,12 +52,17 @@ branch, full commit SHA, build ID, source worktree, release directory, and
 source-file checksum manifest. Refuse a deployment if its tracked source
 differs from that commit. Do not infer source provenance from a directory name.
 
-The web deployment has separate services: `ompweb-pwa.service` serves the
-frontend on port 30179; `ompweb-patched.service` owns live RPC sessions on
-port 30178. Frontend-only changes must not restart the RPC service or replace
-the native OMP binary. Retain previous hashed static assets for open tabs,
-back up the frontend service and deployment metadata, switch only the frontend,
-and verify the public page and API health. Keep the previous release for rollback.
+The web deployment has separate frontend and RPC services. The frontend uses
+`ompweb-pwa.service` on port 30179; the current API unit and port are recorded
+in `/opt/omp-deployment/current.json`. Frontend-only changes must not restart
+the RPC service or replace the native OMP binary. API upgrades start a new
+versioned service and keep active session requests on their existing owner
+until those runs and queued messages drain. Cursor-history reads can use the
+new file reader while the old owner continues to serve its live RPC stream.
+Existing owners do not gain new live-snapshot capabilities until retirement.
+Retain previous hashed static assets for open tabs, back up service and nginx
+configuration plus deployment metadata, and verify public page/API health.
+Keep the previous release for rollback.
 
 ## Bootstrap the first release
 
