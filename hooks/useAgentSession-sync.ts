@@ -13,7 +13,7 @@ export interface SessionLiveFields {
 
 export interface SessionCatchUp {
   request(): Promise<SessionContext | null>;
-  seed(context: SessionContext, view?: SessionView): void;
+  seed(context: SessionContext, position?: SessionHistoryCursor | null): SessionContext;
   invalidate(): void;
   view(): SessionView;
   position(): SessionHistoryCursor | null;
@@ -54,12 +54,18 @@ export function createSessionCatchUp(options: {
     revision += 1;
     if (pending) requested = true;
   };
-  const seed = (next: SessionContext, selected: SessionView = view) => {
+  const seed = (next: SessionContext, position: SessionHistoryCursor | null = cursor) => {
+    // A newer completed sync may reflect truncation, not just an append.
+    // Keep it and re-read rather than inferring freshness from transcript length.
+    if (cursor !== position && context) {
+      void request();
+      return context;
+    }
     invalidate();
-    view = selected;
     context = next;
     cursor = historyCursor(next);
-    options.history(next, selected.leafId);
+    options.history(next, view.leafId);
+    return next;
   };
 
   const request = (): Promise<SessionContext | null> => {
@@ -73,77 +79,88 @@ export function createSessionCatchUp(options: {
         const scope = options.scope();
         if (!sid || scope === null) break;
         const version = revision;
-        const base = cursor;
+        const publishedCursor = cursor;
         const metadataVersion = options.metadataVersion?.() ?? 0;
-        const params = new URLSearchParams({ sync: "1", deferThinking: "1", deferMedia: "1" });
-        if (base) params.set("cursor", JSON.stringify(base));
-        if (view.leafId) params.set("leafId", view.leafId);
-        if (view.includePreCompaction) params.set("includePreCompaction", "1");
+        // Pages are private until the selected history is complete. A failed
+        // replacement must not truncate the visible history or advance its cursor.
+        let nextContext = context;
+        let nextCursor = cursor;
         try {
-          const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/context?${params}`, { signal: AbortSignal.timeout(30_000) });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const page = await res.json() as SessionSyncResponse;
-          if (options.scope() !== scope || revision !== version || cursor !== base || options.sessionId() !== sid) continue;
-          if (page.sessionId !== sid) break;
-          if ((page.mode !== "append" && page.mode !== "replace") || page.context.messages.length !== page.context.entryIds.length) break;
-          // This current request discovered a wrapper restart that the old SSE never saw.
-          // Observed epoch transitions were already rejected by the revision fence above.
-          if (page.live && stream && page.live.cursor.streamId !== stream.streamId) {
-            options.subscribe(true);
-            requested = false; // the new connection's open/connected frame starts a fresh read
-            break;
-          }
-          if (page.mode === "append" && page.baseEntryId !== (base?.lastEntryId ?? null)) break;
-          const unchanged = page.mode === "append" && page.context.entryIds.length === 0 && context !== null;
-          const messages = page.mode === "append" ? unchanged ? context!.messages : [...(context?.messages ?? [])] : [];
-          const entryIds = page.mode === "append" ? unchanged ? context!.entryIds : [...(context?.entryIds ?? [])] : [];
-          const seen = new Set(unchanged ? [] : entryIds);
-          for (let i = 0; i < page.context.entryIds.length; i += 1) {
-            const id = page.context.entryIds[i];
-            if (!seen.has(id)) {
-              seen.add(id);
-              entryIds.push(id);
-              messages.push(page.context.messages[i]);
-            }
-          }
-          context = { ...page.context, messages, entryIds };
-          cursor = page.cursor;
-          loaded = context;
-          options.history(context, page.leafId, { version: metadataVersion, hasLive: page.live !== null });
-          if (page.hasMore) {
-            // Malformed/non-advancing pages must not create an unbounded read loop.
-            if (base?.firstEntryId === cursor.firstEntryId && base?.lastEntryId === cursor.lastEntryId) break;
-            requested = true;
-          } else if (page.live) {
-            if (options.subscribe(false)) {
-              requested = false;
+          while (true) {
+            const base = nextCursor;
+            const params = new URLSearchParams({ sync: "1", deferThinking: "1", deferMedia: "1" });
+            if (base) params.set("cursor", JSON.stringify(base));
+            if (view.leafId) params.set("leafId", view.leafId);
+            if (view.includePreCompaction) params.set("includePreCompaction", "1");
+            const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/context?${params}`, { signal: AbortSignal.timeout(30_000) });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const page = await res.json() as SessionSyncResponse;
+            if (options.scope() !== scope || revision !== version || cursor !== publishedCursor || options.sessionId() !== sid) break;
+            if (page.sessionId !== sid) break;
+            if ((page.mode !== "append" && page.mode !== "replace") || page.context.messages.length !== page.context.entryIds.length) break;
+            // This request discovered a wrapper restart that the old SSE never saw.
+            if (page.live && stream && page.live.cursor.streamId !== stream.streamId) {
+              options.subscribe(true);
+              requested = false; // the new connection's open/connected frame starts a fresh read
               break;
             }
-            if (stream) {
-              const sequence = page.live.cursor.sequence;
-              const busy = page.live.isStreaming || page.live.isPromptRunning || page.live.isCompacting;
-              const preserve = sequence >= Math.max(toolsSnapshotSequence, lifecycleSequence) ? new Set<string>() : null;
-              const fields: SessionLiveFields = {
-                message: sequence >= Math.max(messageSequence, lifecycleSequence),
-                lifecycle: sequence >= lifecycleSequence && (busy || sequence >= Math.max(messageSequence, latestToolSequence)),
-                tools: preserve,
-              };
-              if (preserve) {
-                for (const [id, seen] of toolSequences) {
-                  if (seen > sequence) preserve.add(id);
-                  else toolSequences.delete(id);
-                }
-                toolsSnapshotSequence = sequence;
-                latestToolSequence = Math.max(latestToolSequence, sequence);
+            if (page.mode === "append" && page.baseEntryId !== (base?.lastEntryId ?? null)) break;
+            const unchanged = page.mode === "append" && page.context.entryIds.length === 0 && nextContext !== null;
+            const messages = page.mode === "append" ? unchanged ? nextContext!.messages : [...(nextContext?.messages ?? [])] : [];
+            const entryIds = page.mode === "append" ? unchanged ? nextContext!.entryIds : [...(nextContext?.entryIds ?? [])] : [];
+            const seen = new Set(unchanged ? [] : entryIds);
+            for (let i = 0; i < page.context.entryIds.length; i += 1) {
+              const id = page.context.entryIds[i];
+              if (!seen.has(id)) {
+                seen.add(id);
+                entryIds.push(id);
+                messages.push(page.context.messages[i]);
               }
-              if (fields.message) messageSequence = sequence;
-              if (fields.lifecycle) lifecycleSequence = sequence;
-              stream = { ...stream, sequence: Math.max(stream.sequence, sequence) };
-              if (fields.message || fields.lifecycle || fields.tools) options.live(page.live, fields);
             }
+            nextContext = { ...page.context, messages, entryIds };
+            nextCursor = page.cursor;
+            if (page.hasMore) {
+              // Malformed/non-advancing pages must not create an unbounded read loop.
+              if (base?.firstEntryId === nextCursor.firstEntryId && base?.lastEntryId === nextCursor.lastEntryId) break;
+              continue;
+            }
+            context = nextContext;
+            cursor = nextCursor;
+            loaded = context;
+            options.history(context, page.leafId, { version: metadataVersion, hasLive: page.live !== null });
+            if (page.live) {
+              if (options.subscribe(false)) {
+                requested = false;
+                break;
+              }
+              if (stream) {
+                const sequence = page.live.cursor.sequence;
+                const busy = page.live.isStreaming || page.live.isPromptRunning || page.live.isCompacting;
+                const preserve = sequence >= Math.max(toolsSnapshotSequence, lifecycleSequence) ? new Set<string>() : null;
+                const fields: SessionLiveFields = {
+                  message: sequence >= Math.max(messageSequence, lifecycleSequence),
+                  lifecycle: sequence >= lifecycleSequence && (busy || sequence >= Math.max(messageSequence, latestToolSequence)),
+                  tools: preserve,
+                };
+                if (preserve) {
+                  for (const [id, seen] of toolSequences) {
+                    if (seen > sequence) preserve.add(id);
+                    else toolSequences.delete(id);
+                  }
+                  toolsSnapshotSequence = sequence;
+                  latestToolSequence = Math.max(latestToolSequence, sequence);
+                }
+                if (fields.message) messageSequence = sequence;
+                if (fields.lifecycle) lifecycleSequence = sequence;
+                stream = { ...stream, sequence: Math.max(stream.sequence, sequence) };
+                if (fields.message || fields.lifecycle || fields.tools) options.live(page.live, fields);
+              }
+            }
+            break;
           }
         } catch {
-          // A failed read is not an empty transcript. A later trigger retries this cursor.
+          // A failed read is not an empty transcript. A later trigger retries
+          // from the last complete history, not a partially fetched replacement.
           loaded = null;
         }
       }

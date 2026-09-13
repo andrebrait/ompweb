@@ -736,6 +736,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (showLoading) setLoading(true);
       const params = new URLSearchParams({ deferThinking: "1", deferMedia: "1" });
       const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}?${params}`);
+      if (sessionIdRef.current !== sid || contextRequestSeqRef.current !== requestSeq || promptRunIdRef.current !== requestRun) return null;
       if (res.status === 404) {
         if (showLoading) {
           setData(null);
@@ -758,13 +759,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (sessionIdRef.current !== sid || contextRequestSeqRef.current !== requestSeq || promptRunIdRef.current !== requestRun) return null;
         d.context = catchUp.history() ?? d.context;
         setShowPreCompactionHistory(catchUp.view().includePreCompaction);
-      } else if (catchUp.position() === position) {
-        catchUp.seed(d.context, { leafId: null, includePreCompaction: false });
-        setActiveLeafId(d.leafId);
-        setShowPreCompactionHistory(false);
       } else {
-        // A newer delta already committed while this full metadata read was in flight.
-        d.context = catchUp.history() ?? d.context;
+        const fullContext = d.context;
+        d.context = catchUp.seed(fullContext, position);
+        if (d.context === fullContext) setActiveLeafId(d.leafId);
+        setShowPreCompactionHistory(false);
       }
       setData(d);
       // Recover on-disk subagent history (task toolResults) for this session —
@@ -866,10 +865,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // Fence like loadSession: drop the response if the session changed or a
       // newer navigate started while this request was in flight.
       if (sessionIdRef.current !== sid || contextRequestSeqRef.current !== seq || promptRunIdRef.current !== runId) return false;
-      // A file notification may already have hydrated newer entries in this view.
-      if (catchUp.position() === position) {
-        catchUp.seed(d.context);
-      }
+      catchUp.seed(d.context, position);
       setShowPreCompactionHistory(includePreCompaction);
       void catchUp.request();
     } catch (e) {
@@ -1483,7 +1479,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const allowEmptyResponse = slashCommandRunRef.current;
     const previousEntryIds = runPreviousEntryIdsRef.current;
     if (previousEntryIds === null) return;
-    let transcriptLoaded = false;
+    let recoveryLoaded = false;
     let stillBusy = false;
     try {
       // Pass the fence into loadSession: the pre-check above only guards the
@@ -1491,7 +1487,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // not be overwritten by the finished run's snapshot.
       const loaded = sid ? await loadSession(sid, false, true, runId) : null;
       if (loaded) {
-        transcriptLoaded = true;
+        // A successful state response may report no wrapper; null instead
+        // means the state request failed and cannot prove an empty completion.
+        recoveryLoaded = loaded.agentState !== null;
         const state = loaded.agentState?.state;
         stillBusy = !!(state?.isStreaming || state?.isPromptRunning || state?.isCompacting);
         if (!promptDispatchPendingRef.current && state?.responseObserved) hadContent = true;
@@ -1515,9 +1513,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // Live frames can arrive while the snapshot is loading.
       hadContent ||= runHadContentRef.current;
       runError = lastRunErrorRef.current ?? runError;
-      // A failed read is not proof of an empty answer. Keep recovery active
-      // so the next visibility/online/poll trigger can load the transcript.
-      if (!transcriptLoaded && !hadContent && !runError && !allowEmptyResponse) return;
+      // File success alone cannot prove an empty answer when state failed.
+      // Keep recovery active unless visible content or an explicit error settled it.
+      if (!recoveryLoaded && !hadContent && !runError && !quotaMessage && !allowEmptyResponse) return;
       if (!agentRunningRef.current) return;
       if (runError) {
         addNotice({ type: "error", message: runError });
@@ -2495,11 +2493,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     // Read immediately before dispatch, not from React's last rendered state:
     // the previous terminal reload or interrupted turn can still be in flight.
     // Unlike loadSession, this must not replace the optimistic user bubble.
-    const params = new URLSearchParams({ deferThinking: "1", deferMedia: "1" });
-    const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}?${params}`);
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/context?boundary=1`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const snapshot = await res.json() as SessionData;
-    return snapshot.context.entryIds ?? [];
+    const snapshot = await res.json() as { entryIds: string[] };
+    return snapshot.entryIds;
   }, []);
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]): Promise<boolean> => {
