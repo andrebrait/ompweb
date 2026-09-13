@@ -100,6 +100,49 @@ Models and allow-listed OMP settings use surgical YAML updates that preserve
 unrelated content. Plugin operations run the installed `omp plugin` CLI. MCP
 configuration is project-local, validated before writing, and saved atomically.
 
+### Reconnect and foreground catch-up
+
+Completed conversation history is identified by persisted session entry IDs.
+Live `message_end` frames have no durable ID and can arrive before OMP writes
+the entry, so they trigger catch-up rather than append an unidentified copy.
+Streaming text, active tool output, and an optimistic user prompt remain
+separate from confirmed history.
+
+`GET /api/sessions/:id/context?sync=1` returns a `SessionSyncResponse`:
+
+- `cursor` contains `firstEntryId` and `lastEntryId` (both null for empty
+  history). Send its JSON value in the next request's `cursor` query parameter.
+- `mode: "append"` returns only messages after that position; `baseEntryId`
+  identifies the expected client prefix. An orphaned cursor or changed
+  compaction prefix returns `mode: "replace"`.
+- `context.messages` and `context.entryIds` remain aligned. `limit` is an
+  integer from 1 to 200 (default 200); follow `hasMore` with the returned cursor.
+  Only the selected page's image blobs are resolved.
+- Existing `leafId`, `includePreCompaction`, `deferThinking`, and `deferMedia`
+  view parameters remain available. A historical view excludes live output.
+- `live` contains the web-owned process's current partial message, active tool
+  snapshots, and lifecycle flags, or null for a file-only session. Reading
+  history never starts an OMP process. A live process can supply its first
+  partial before its session file exists, but a missing file cannot erase a
+  nonempty confirmed cursor.
+
+SSE events carry `web: { streamId, sequence }`. The stream epoch changes when
+the native process or session identity changes. These values order live
+snapshots; they are not a persisted replay journal or `Last-Event-ID` support.
+Subscription precedes the `connected` cursor announcement. The client keeps
+processing live events while history loads and applies snapshot fields only
+when they cannot overwrite newer message, tool, or lifecycle state.
+
+Open/reopen, foreground/online, message completion, and persisted-file
+notifications share one coalesced catch-up loop. Failed reads retain the
+confirmed cursor and displayed history. Full initial loads and terminal
+metadata refreshes still update the branch-navigation tree.
+A completion or persistence notification during an in-flight read schedules
+one follow-up read from the newly returned cursor. Raw SSE completions never
+append a second copy of an entry that the history response already includes.
+
+Deploy the frontend and API support together; no native OMP upgrade is required.
+
 ## Security contract
 
 - Bind loopback-only by default. A non-loopback hostname is an explicit opt-in.
