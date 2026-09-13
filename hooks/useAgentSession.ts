@@ -376,6 +376,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // until the terminal path can surface it exactly once.
   const lastRunErrorRef = useRef<string | null>(null);
   const runHadContentRef = useRef(false);
+  // Persisted entries preceding a locally submitted run cannot supply its answer.
+  // Empty on mount: reconnecting to an existing run includes its saved messages.
+  const runPreviousEntryIdsRef = useRef<string[]>([]);
   const slashCommandRunRef = useRef(false);
   // Bumped on every roster clear (run end): in-flight get_subagents/history
   // responses from the finished run must not merge into the cleared (or next
@@ -715,7 +718,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       messagesLoaded = true;
       if (showLoading) setLoading(false);
       if (!includeState) {
-        return null;
+        return { context: d.context, agentState: null };
       }
 
       // Track initial hydration so prompt submission waits for the live state.
@@ -760,11 +763,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           setQueuedMessages(EMPTY_QUEUE);
         }
         if (showLoading) setLoading(false);
-        return agentState;
+        return { context: d.context, agentState };
       } catch (e) {
         console.error("Failed to load agent state:", e);
         if (showLoading) setLoading(false);
-        return null;
+        return { context: d.context, agentState: null };
       } finally {
         if (isInitialHydration) initialHydrationPendingRef.current = false;
       }
@@ -1339,22 +1342,46 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [addNotice, opts.chatInputRef]);
 
-  const finishPromptWithoutStream = useCallback(async (sid: string | null = sessionIdRef.current, runId?: number) => {
+  const finishPromptWithoutStream = useCallback(async (sid: string | null = sessionIdRef.current, runId = promptRunIdRef.current) => {
     clearTerminalReconcileTimer();
     // Bail out before loadSession too: a stale finish for a previous run
     // must not overwrite the messages of the run currently streaming.
     if (runId !== undefined && promptRunIdRef.current !== runId) return;
-    const hadContent = runHadContentRef.current;
+    let hadContent = runHadContentRef.current;
     const quotaMessage = lastQuotaErrorRef.current;
-    const runError = lastRunErrorRef.current;
+    let runError = lastRunErrorRef.current;
     const allowEmptyResponse = slashCommandRunRef.current;
+    const previousEntryIds = runPreviousEntryIdsRef.current;
+    let transcriptLoaded = false;
     try {
       // Pass the fence into loadSession: the pre-check above only guards the
       // start — a next prompt that begins while the reload is in flight must
       // not be overwritten by the finished run's snapshot.
-      if (sid) await loadSession(sid, false, true, runId);
+      const loaded = sid ? await loadSession(sid, false, true, runId) : null;
+      if (loaded) {
+        transcriptLoaded = true;
+        const { messages, entryIds = [] } = loaded.context;
+        // Only the latest user turn can answer the current prompt. Entry ids
+        // distinguish repeated same-text prompts from the previous saved turn.
+        const userIndex = messages.findLastIndex((message) => message.role === "user");
+        const userEntryId = entryIds[userIndex];
+        if (userIndex >= 0 && userEntryId && !previousEntryIds.includes(userEntryId)) {
+          for (let i = userIndex + 1; i < messages.length; i += 1) {
+            const message = messages[i];
+            if (message.role !== "assistant") continue;
+            hadContent ||= hasVisibleAssistantContent(message);
+            runError = readAgentError(message) ?? runError;
+          }
+        }
+      }
     } finally {
-      if (runId !== undefined && promptRunIdRef.current !== runId) return;
+      if (promptRunIdRef.current !== runId || sessionIdRef.current !== sid) return;
+      // Live frames can arrive while the snapshot is loading.
+      hadContent ||= runHadContentRef.current;
+      runError = lastRunErrorRef.current ?? runError;
+      // A failed read is not proof of an empty answer. Keep recovery active
+      // so the next visibility/online/poll trigger can load the transcript.
+      if (!transcriptLoaded && !hadContent && !runError && !allowEmptyResponse) return;
       optimisticUserMessageKeyRef.current = null;
       if (!agentRunningRef.current) return;
       if (runError) {
@@ -1671,6 +1698,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         const quotaMessage = lastQuotaErrorRef.current;
         const terminalError = readTerminalAgentError(event) ?? lastRunErrorRef.current;
         const wasSlashCommand = slashCommandRunRef.current;
+        if (!hadContent && !terminalError && !wasSlashCommand) {
+          // On resume, even agent_end can arrive without the answer frames.
+          // Reload before classifying an apparently empty completion.
+          void finishPromptWithoutStream(sessionIdRef.current, promptRunIdRef.current);
+          break;
+        }
         if (terminalError && isQuotaLikeError(terminalError)) {
           lastQuotaErrorRef.current = terminalError;
         }
@@ -1690,10 +1723,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           } else {
             toast.error("Request failed", errorMessage, { timeout: 12000 });
           }
-        } else if (!hadContent && !wasSlashCommand) {
-          const message = translate("agentSession.responseFailed");
-          addNotice({ type: "error", message });
-          toast.error("Request failed", message, { timeout: 10000 });
         }
         // async, and a next prompt (or session switch) that starts while it is
         // in flight must not be overwritten by this finished run's snapshot.
@@ -2235,6 +2264,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setMessages((prev) => [...prev, userMsg]);
     optimisticUserMessageKeyRef.current = userMessageKey(userMsg);
     promptRunIdRef.current = promptRunId;
+    runPreviousEntryIdsRef.current = entryIds;
     agentRunningRef.current = true;
     slashCommandRunRef.current = isSlashCommandPrompt;
     // A new run starts fresh: drop any rescued in-flight reconcile state from
@@ -2340,7 +2370,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       dispatch({ type: "end" });
       return false;
     }
-  }, [isNew, newSessionCwd, newSessionModel, session, ensureNewSession, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, opts.chatInputRef, refreshSubagentRoster, registerHostTools, registerHostUriSchemes, clearLiveToolResults, clearTerminalReconcileTimer]);
+  }, [isNew, newSessionCwd, newSessionModel, session, ensureNewSession, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, opts.chatInputRef, refreshSubagentRoster, registerHostTools, registerHostUriSchemes, clearLiveToolResults, clearTerminalReconcileTimer, entryIds]);
 
   /** Abort the running agent and send the message as a fresh prompt
    * (abort_and_prompt). Only valid mid-run; the old turn's agent_end is
@@ -2363,6 +2393,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     // Advance the run generation so late agent_end / prompt_error / stale
     // loadSession from the aborted turn cannot stop or clobber the replacement.
     promptRunIdRef.current += 1;
+    runPreviousEntryIdsRef.current = entryIds;
 
     const { userMsg, piImages: interruptPiImages } = buildOutgoingPrompt(message, images);
     setMessages((prev) => [...prev, userMsg]);
@@ -2399,7 +2430,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (trimmedMessage) opts.chatInputRef?.current?.insertIfEmpty(trimmedMessage);
       return false;
     }
-  }, [addNotice, ensureEventsConnected, refreshSubagentRoster, clearTerminalReconcileTimer, opts.chatInputRef]);
+  }, [addNotice, ensureEventsConnected, refreshSubagentRoster, clearTerminalReconcileTimer, opts.chatInputRef, entryIds]);
 
   const executeBash = useCallback(async (command: string, excludeFromContext: boolean) => {
     if (agentRunningRef.current || bashRunningRef.current) return;
@@ -2999,7 +3030,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (mountedSessionLoadRef.current === session.id) return;
       mountedSessionLoadRef.current = session.id;
       sessionIdRef.current = session.id;
-      loadSession(session.id, true, true).then((agentState) => {
+      loadSession(session.id, true, true).then((loaded) => {
+        const agentState = loaded?.agentState;
         if (agentState?.running) {
           if (agentState.state?.isStreaming || agentState.state?.isPromptRunning) {
             agentRunningRef.current = true;
