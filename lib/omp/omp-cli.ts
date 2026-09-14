@@ -11,13 +11,11 @@ import { delimiter, join } from "path";
 
 let cachedBin: string | null = null;
 let binMissAt = 0;
-let cachedVersion: string | null = null;
 let versionMissAt = 0;
 
 const BIN_NAME = process.platform === "win32" ? "omp.exe" : "omp";
-// Only successes are cached for the process lifetime. omp may be installed (or
-// PATH repaired) while the server runs; a permanently cached "not found" would
-// keep the UI reporting a missing binary until restart.
+// Retry missing binaries and failed version probes after a short backoff so
+// a later install or repair is picked up without a web server restart.
 const MISS_TTL_MS = 30_000;
 
 function probeOmpBin(): string | null {
@@ -63,10 +61,10 @@ export function resolveOmpBin(): string | null {
 }
 
 /** `omp --version` output (e.g. "omp/17.1.3"), or null when unavailable.
- * Cached after the first successful probe; failures are retried after
- * MISS_TTL_MS so a later install is picked up without a server restart. */
+ * Probe each time: restarting omp sessions does not restart the web server,
+ * and an update can replace the executable at the same path. Failed probes
+ * are retried after MISS_TTL_MS. */
 export async function getOmpVersion(): Promise<string | null> {
-  if (cachedVersion) return cachedVersion;
   if (Date.now() - versionMissAt < MISS_TTL_MS) return null;
   const bin = resolveOmpBin();
   if (!bin) {
@@ -82,7 +80,6 @@ export async function getOmpVersion(): Promise<string | null> {
     });
     const version = output.trim();
     if (version) {
-      cachedVersion = version;
       versionMissAt = 0;
       return version;
     }
