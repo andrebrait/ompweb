@@ -17,7 +17,7 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 - Cancel queued messages in OMP before removing their chips or recalling them for editing. Failed or timed-out cancellation leaves the message visible; successful recall survives composer remounts without losing newer typing. Requires native `remove_queued_message` support.
 - Preserve question-dialog answers and selections when an SSE reconnect replays the same pending request or answer submission fails.
 - Restore copy-success feedback after React Strict Mode re-runs effect setup.
-- Refresh the OMP version shown in new sessions after a CLI update without requiring an omp-web server restart.
+- Refresh the OMP version shown in new sessions after a CLI update without requiring an omp-web server restart. Reuse results while executable metadata is unchanged, with a five-minute fallback expiry for launchers. Keep the last known version visible between visits and distinguish initial loading from an unavailable runtime.
 - Keep sent-message copy, edit, and fork actions visible without hover or a reveal tap. Also keep file mention/download, Git open-file actions, and sidebar menus visible alongside their metadata; wrap message actions on narrow screens.
 - Expand complete tool inputs inline, including multiline code and edit patches, while keeping command previews compact and output visibility unchanged.
 - Keep composer controls on one line, with equally sized Send, Stop, and Queue buttons and model names truncating before short effort labels.
