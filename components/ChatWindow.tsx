@@ -110,7 +110,10 @@ function OmpRuntimeVersion() {
   useEffect(() => {
     let cancelled = false;
     fetch("/api/omp-version")
-      .then((res) => (res.ok ? res.json() : null))
+      .then((res) => {
+        if (!res.ok) throw new Error(`Version lookup failed: HTTP ${res.status}`);
+        return res.json();
+      })
       .then((data: { version: string | null } | null) => {
         if (cancelled) return;
         // omp reports "omp/17.1.3"; show just the number next to the label.
@@ -120,7 +123,6 @@ function OmpRuntimeVersion() {
       })
       .catch(() => {
         if (cancelled) return;
-        lastKnownOmpVersion = undefined;
         setVersion(null);
       });
     return () => {
