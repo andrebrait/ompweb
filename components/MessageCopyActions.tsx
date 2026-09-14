@@ -14,7 +14,7 @@ function renderedText(body: HTMLElement, source: string): string {
   // Oversized messages deliberately render as raw text, on demand.
   if (!markdown) return source;
   const clone = markdown.cloneNode(true) as HTMLElement;
-  clone.querySelectorAll(".markdown-code-header, .linenumber, .katex-mathml").forEach((node) => node.remove());
+  clone.querySelectorAll(".markdown-code-header, .linenumber, .katex-mathml, .mermaid-block-loading, .mermaid-block-error").forEach((node) => node.remove());
   clone.querySelectorAll("img").forEach((image) => image.replaceWith(document.createTextNode(image.alt)));
   clone.querySelectorAll("svg").forEach((svg) => {
     const labels = [...svg.querySelectorAll("text, foreignObject")].map((node) => node.textContent ?? "");
