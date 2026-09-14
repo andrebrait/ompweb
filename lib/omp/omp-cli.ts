@@ -1,5 +1,5 @@
 import { execFile } from "child_process";
-import { existsSync } from "fs";
+import { existsSync, realpathSync, statSync } from "fs";
 import { homedir } from "os";
 import { delimiter, join } from "path";
 
@@ -11,13 +11,16 @@ import { delimiter, join } from "path";
 
 let cachedBin: string | null = null;
 let binMissAt = 0;
-let versionMissAt = 0;
+let cachedVersion: { fingerprint: string; value: string; expiresAt: number } | null = null;
+let versionMiss: { fingerprint: string | null; retryAt: number } | null = null;
 let versionProbe: Promise<string | null> | null = null;
 
 const BIN_NAME = process.platform === "win32" ? "omp.exe" : "omp";
 // Retry missing binaries and failed version probes after a short backoff so
 // a later install or repair is picked up without a web server restart.
 const MISS_TTL_MS = 30_000;
+// Launchers can stay unchanged while their underlying package is updated.
+const VERSION_TTL_MS = 5 * 60_000;
 
 function probeOmpBin(): string | null {
   const override = process.env.OMP_WEB_OMP_BIN;
@@ -61,9 +64,9 @@ export function resolveOmpBin(): string | null {
   return null;
 }
 
-/** `omp --version` output (e.g. "omp/17.1.3"), or null when unavailable.
- * Share only an in-flight probe; a later call must see CLI updates even when
- * the web server has not restarted. Failed probes back off for MISS_TTL_MS. */
+/** Return the installed CLI version, using file metadata to invalidate cached
+ * results without launching omp on every visit. An expiry covers opaque
+ * launchers; concurrent callers share a probe. */
 export function getOmpVersion(): Promise<string | null> {
   versionProbe ??= probeOmpVersion().finally(() => {
     versionProbe = null;
@@ -71,11 +74,27 @@ export function getOmpVersion(): Promise<string | null> {
   return versionProbe;
 }
 
+function versionFingerprint(bin: string): string | null {
+  try {
+    const target = realpathSync(bin);
+    const stat = statSync(target, { bigint: true });
+    return [target, stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+  } catch {
+    return null;
+  }
+}
+
 async function probeOmpVersion(): Promise<string | null> {
-  if (Date.now() - versionMissAt < MISS_TTL_MS) return null;
   const bin = resolveOmpBin();
+  const fingerprint = bin ? versionFingerprint(bin) : null;
+  const now = Date.now();
+  if (fingerprint && cachedVersion?.fingerprint === fingerprint && now < cachedVersion.expiresAt) {
+    return cachedVersion.value;
+  }
+  if (versionMiss?.fingerprint === fingerprint && now < versionMiss.retryAt) return null;
+  cachedVersion = null;
   if (!bin) {
-    versionMissAt = Date.now();
+    versionMiss = { fingerprint, retryAt: now + MISS_TTL_MS };
     return null;
   }
   try {
@@ -87,12 +106,16 @@ async function probeOmpVersion(): Promise<string | null> {
     });
     const version = output.trim();
     if (version) {
-      versionMissAt = 0;
+      versionMiss = null;
+      // Do not cache a probe across an executable replacement.
+      if (fingerprint && versionFingerprint(bin) === fingerprint) {
+        cachedVersion = { fingerprint, value: version, expiresAt: Date.now() + VERSION_TTL_MS };
+      }
       return version;
     }
   } catch {
     // Fall through to the miss path: retry after the TTL.
   }
-  versionMissAt = Date.now();
+  versionMiss = { fingerprint, retryAt: Date.now() + MISS_TTL_MS };
   return null;
 }
