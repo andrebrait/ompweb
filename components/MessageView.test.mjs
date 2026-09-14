@@ -14,6 +14,13 @@ const { MessageView, SafeMarkdownBody, TaskResultPanel, isInterruptedMessage } =
 const { CodeBlock } = await jiti.import("./MermaidBlock.tsx");
 afterEach(cleanup);
 
+test("sent messages without timestamps or branch metadata still offer copy", () => {
+  const html = renderToStaticMarkup(React.createElement(MessageView, {
+    message: { role: "user", content: "Keep this message copyable." },
+  }));
+  assert.match(html, /<button[^>]*aria-label="Copy message"/);
+});
+
 test("expanded grouped tool inputs follow streaming arguments without toggling output", () => {
   const code = "print('first')\nprint('complete')";
   const editInput = { path: "/tmp/example.ts", patch: "-old\n+new", options: { dryRun: false } };
