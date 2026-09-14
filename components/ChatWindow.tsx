@@ -104,7 +104,7 @@ function withAssistantBlocks(
 // Retain the last successful value across welcome-screen remounts, not reloads.
 let lastKnownOmpVersion: string | undefined;
 
-function OmpRuntimeVersion() {
+export function OmpRuntimeVersion() {
   const { t } = useI18n();
   const [version, setVersion] = useState<string | null | undefined>(lastKnownOmpVersion);
   useEffect(() => {
@@ -123,7 +123,7 @@ function OmpRuntimeVersion() {
       })
       .catch(() => {
         if (cancelled) return;
-        setVersion(null);
+        setVersion(lastKnownOmpVersion ?? null);
       });
     return () => {
       cancelled = true;
