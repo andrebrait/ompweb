@@ -41,16 +41,26 @@ throughout a rebase; rebasing a branch does not change the running release.
 
 ### Build and deploy a committed snapshot
 
-Resolve `origin/deploy/integration` to its full commit SHA and create a fresh,
-detached build worktree at that exact commit. Run `npm ci`, `npm run build`,
-`npm run lint`, and `npm test` there, then package with
-`npm pack --ignore-scripts`. Never run the production build in a development
-worktree. Verify the affected UI in a browser before switching releases.
+Build with `/opt/omp-deployment/bin/ompweb-build <commit-ish>`. It resolves the commit
+on `origin/deploy/integration`, creates a detached build worktree at that exact SHA
+under `/opt/ompweb-patched/builds/`, refuses a dirty tree, runs `npm ci`, `npm run build`,
+`npm run lint`, and `npm test` there, packs with `npm pack --ignore-scripts`, and unpacks
+the tarball into `/opt/ompweb-patched/releases/<sha>/`. The build worktree is removed
+at the end; `builds/` is empty between deployments. Never run the production build in a
+development worktree. Verify the affected UI in a browser before switching releases.
 
-Production provenance lives in `/opt/omp-deployment/current.json`: record the
-branch, full commit SHA, build ID, source worktree, release directory, and
-source-file checksum manifest. Refuse a deployment if its tracked source
-differs from that commit. Do not infer source provenance from a directory name.
+Runtime dependencies come from `/opt/ompweb-patched/deps/<lock>/node_modules`, one
+entry per distinct `package-lock.json` (`<lock>` is the first 16 hex characters of its
+SHA-256); `releases/<sha>/node_modules` is a symlink into it and `releases/<sha>/.deps-lock`
+records the key. A release is therefore the unpacked package plus its pruned `.next`
+(tens of MiB), not a checkout.
+
+Production provenance lives in `/opt/omp-deployment/current.json`: record the branch,
+full commit SHA, build ID, the pack tarball (`/opt/omp-deployment/artifacts/<sha>.tgz`),
+the release directory, and the source-file checksum manifest
+(`artifacts/<sha>-manifest.json`, written by the build from `git ls-files` at that
+commit). Refuse a deployment if its tracked source differs from that commit. Do not
+infer source provenance from a directory name.
 
 The web deployment has separate frontend and RPC services. The frontend uses
 `ompweb-pwa.service` on port 30179; the current API unit and port are recorded
@@ -62,7 +72,17 @@ new file reader while the old owner continues to serve its live RPC stream.
 Existing owners do not gain new live-snapshot capabilities until retirement.
 Retain previous hashed static assets for open tabs, back up service and nginx
 configuration plus deployment metadata, and verify public page/API health.
-Keep the previous release for rollback.
+
+### Retire
+
+Retention is the live releases (enabled or active `ompweb*` units, running processes,
+`/opt/ompweb-patched/current`) plus one rollback, the newest other release by commit
+date. A retirement script ends, after the old unit is stopped and routes are switched,
+with `/opt/omp-deployment/bin/ompweb-retire`: it removes every other release, every
+`deps/` entry no remaining release links to, and any build worktree an aborted build left
+behind, then prints the kept set and `df`. `--dry-run` shows the plan. Point `current` at
+the live API release before retiring; a disabled unit that still names a release does
+not keep it.
 
 ## Bootstrap the first release
 
