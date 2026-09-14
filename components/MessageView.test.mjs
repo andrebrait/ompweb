@@ -57,6 +57,28 @@ test("message Markdown copy preserves source, excludes activity, and confirms su
   }
 });
 
+test("plain Copy keeps full oversized message source instead of the reveal control", async (t) => {
+  let clipboard = "";
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: async (text) => { clipboard = text; } },
+  });
+  t.after(() => { delete navigator.clipboard; });
+  const source = "# Keep the full raw source\n\n".repeat(5000);
+  for (const message of [
+    { role: "user", content: source },
+    { role: "assistant", content: [
+      { type: "thinking", thinking: "Do not copy thinking" },
+      { type: "text", text: source },
+    ] },
+  ]) {
+    const view = render(React.createElement(MessageView, { message }));
+    await act(async () => { fireEvent.click(view.getByRole("button", { name: "Copy message" })); });
+    assert.equal(clipboard, source);
+    view.unmount();
+  }
+});
+
 test("expanded grouped tool inputs follow streaming arguments without toggling output", () => {
   const code = "print('first')\nprint('complete')";
   const editInput = { path: "/tmp/example.ts", patch: "-old\n+new", options: { dryRun: false } };
