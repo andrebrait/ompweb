@@ -12,6 +12,7 @@ import { delimiter, join } from "path";
 let cachedBin: string | null = null;
 let binMissAt = 0;
 let versionMissAt = 0;
+let versionProbe: Promise<string | null> | null = null;
 
 const BIN_NAME = process.platform === "win32" ? "omp.exe" : "omp";
 // Retry missing binaries and failed version probes after a short backoff so
@@ -61,10 +62,16 @@ export function resolveOmpBin(): string | null {
 }
 
 /** `omp --version` output (e.g. "omp/17.1.3"), or null when unavailable.
- * Probe each time: restarting omp sessions does not restart the web server,
- * and an update can replace the executable at the same path. Failed probes
- * are retried after MISS_TTL_MS. */
-export async function getOmpVersion(): Promise<string | null> {
+ * Share only an in-flight probe; a later call must see CLI updates even when
+ * the web server has not restarted. Failed probes back off for MISS_TTL_MS. */
+export function getOmpVersion(): Promise<string | null> {
+  versionProbe ??= probeOmpVersion().finally(() => {
+    versionProbe = null;
+  });
+  return versionProbe;
+}
+
+async function probeOmpVersion(): Promise<string | null> {
   if (Date.now() - versionMissAt < MISS_TTL_MS) return null;
   const bin = resolveOmpBin();
   if (!bin) {
