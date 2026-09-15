@@ -6,6 +6,7 @@ import type { AgentMessage, AssistantContentBlock, AssistantMessage, BashExecuti
 import { translate, useI18n } from "@/lib/i18n";
 import { getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
 import { isGroupAnchor, planTranscriptRows, type TranscriptRow } from "@/lib/chat-transcript-plan";
+import { resolveForkEntryIds } from "@/lib/chat-fork";
 import { MessageView } from "./MessageView";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ExtensionDialog } from "./ExtensionDialog";
@@ -34,6 +35,7 @@ import { getDraftSummary } from "@/lib/draft-store";
 interface Props {
   session: SessionInfo | null;
   newSessionCwd: string | null;
+  newSessionWorkspace?: ReactNode;
   toolCallsDefaultCollapsed?: boolean;
   onAgentEnd?: () => void;
   onSessionCreated?: (session: SessionInfo) => void;
@@ -100,25 +102,37 @@ function withAssistantBlocks(
   return next;
 }
 
-function OmpRuntimeVersion() {
+// Retain the last successful value across welcome-screen remounts, not reloads.
+let lastKnownOmpVersion: string | undefined;
+
+export function OmpRuntimeVersion() {
   const { t } = useI18n();
-  const [version, setVersion] = useState<string | null>(null);
+  const [version, setVersion] = useState<string | null | undefined>(lastKnownOmpVersion);
   useEffect(() => {
     let cancelled = false;
     fetch("/api/omp-version")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: { version: string | null } | null) => {
-        // omp reports "omp/17.1.3"; show just the number next to the label.
-        if (!cancelled && data?.version) setVersion(data.version.replace(/^omp\//, ""));
+      .then((res) => {
+        if (!res.ok) throw new Error(`Version lookup failed: HTTP ${res.status}`);
+        return res.json();
       })
-      .catch(() => {});
+      .then((data: { version: string | null } | null) => {
+        if (cancelled) return;
+        // omp reports "omp/17.1.3"; show just the number next to the label.
+        const nextVersion = typeof data?.version === "string" ? data.version.trim().replace(/^omp\//, "") : "";
+        lastKnownOmpVersion = nextVersion || undefined;
+        setVersion(nextVersion || null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setVersion(lastKnownOmpVersion ?? null);
+      });
     return () => {
       cancelled = true;
     };
   }, []);
   return (
-    <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-      omp <span style={{ color: "var(--text)" }}>{version ? `v${version}` : t("chatWindow.versionNotFound")}</span>
+    <span aria-busy={version === undefined} style={{ fontSize: 11, color: "var(--text-muted)" }}>
+      omp <span style={{ color: "var(--text)" }}>{version === undefined ? t("appShell.loading") : version ? `v${version}` : t("chatWindow.versionNotFound")}</span>
     </span>
   );
 }
@@ -328,6 +342,12 @@ const CommittedTranscript = memo(function CommittedTranscript({
 }: CommittedTranscriptProps) {
   const { t } = useI18n();
   const { toolResultsMap, lastAnchorIdx, visibleRefIndexByMessage } = conversationMeta;
+  // omp's `branch` command accepts a user entry only, so every row forks at the
+  // user prompt that started its turn (#103).
+  const forkEntryIds = useMemo(
+    () => resolveForkEntryIds(messages.map((message) => message.role), entryIds),
+    [messages, entryIds],
+  );
 
   const attachVisibleRef = (idx: number, refIndex: number) => (el: HTMLDivElement | null) => {
     messageRefs.current[refIndex] = el;
@@ -356,6 +376,9 @@ const CommittedTranscript = memo(function CommittedTranscript({
       }
     }
     if (options.showTimestamp !== undefined) showTimestamp = options.showTimestamp;
+    // Forking needs a branch point omp accepts, and a first user prompt has no
+    // earlier context to fork from — that one row keeps no fork action.
+    const canOfferFork = !sessionBusy && !isNew && !!forkEntryIds[idx] && !(idx === 0 && msg.role === "user");
     const view = (
       <MessageView
         key={`${keyPrefix}-view-${idx}`}
@@ -365,8 +388,9 @@ const CommittedTranscript = memo(function CommittedTranscript({
         cwd={messageCwd}
         onOpenFile={onOpenFile}
         entryId={entryIds[idx]}
-        onFork={sessionBusy || isNew || (idx === 0 && msg.role === "user") ? undefined : handleFork}
-        forking={forkingEntryId === entryIds[idx]}
+        forkEntryId={forkEntryIds[idx]}
+        onFork={canOfferFork ? handleFork : undefined}
+        forking={forkingEntryId === forkEntryIds[idx]}
         onNavigate={sessionBusy ? undefined : handleNavigate}
         prevAssistantEntryId={sessionBusy ? undefined : prevAssistantEntryId}
         onEditContent={handleEditContent}
@@ -494,7 +518,7 @@ const CommittedTranscript = memo(function CommittedTranscript({
   );
 });
 
-export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed = true, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onProviderUsageContextChange, onGenerationSpeedChange, onOpenFile, onOpenProviders }: Props) {
+export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCallsDefaultCollapsed = true, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onProviderUsageContextChange, onGenerationSpeedChange, onOpenFile, onOpenProviders }: Props) {
   const { t, tn } = useI18n();
   const { playDoneSound, unlockAudio } = useAudio();
   const isMobile = useIsMobile();
@@ -527,6 +551,7 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
     notices, dismissNotice, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
     isAutoModelSelection,
     agentPhase, activeGoal, activePlan,
+    liveToolResults,
     subagents, subagentEvents, subagentTranscriptVersions, activeSubagentCount, currentTodoPhase, todoPhases,
     isNew,
     sessionIdRef, messagesEndRef, scrollContainerRef,
@@ -841,6 +866,23 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
     });
     return { toolResultsMap, lastAnchorIdx, hasCompaction, visibleRefIndexByMessage };
   }, [messages]);
+  // Runtime tool results span committed messages plus the tool calls omp is
+  // still executing. A committed result always wins; the live snapshot only
+  // covers the window between `tool_execution_start` and the toolResult message
+  // landing, which is what makes the row show a running indicator and streamed
+  // output instead of a dead "no result" row.
+  const toolResultsWithLive = useMemo<Map<string, ToolResultMessage>>(() => {
+    if (liveToolResults.size === 0) return conversationMeta.toolResultsMap;
+    const merged = new Map(liveToolResults);
+    for (const [toolCallId, result] of conversationMeta.toolResultsMap) merged.set(toolCallId, result);
+    return merged;
+  }, [liveToolResults, conversationMeta]);
+  const conversationMetaWithLive = useMemo(
+    () => (toolResultsWithLive === conversationMeta.toolResultsMap
+      ? conversationMeta
+      : { ...conversationMeta, toolResultsMap: toolResultsWithLive }),
+    [conversationMeta, toolResultsWithLive],
+  );
   // The ref array is sized by the count of user/assistant messages — exactly
   // what conversationMeta's visibleRefIndexByMessage already tallies, so no
   // separate filter pass (which would re-run on every streaming frame).
@@ -1119,6 +1161,7 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
                 <OmpRuntimeVersion />
               </div>
             </div>
+            <div style={{ padding: `0 ${CHAT_COLUMN_PADDING}px` }}>{newSessionWorkspace}</div>
             <NoticeShelf notices={notices} onDismiss={dismissNotice} align="right" />
             {chatInputElement}
           </div>
@@ -1145,7 +1188,7 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
         {/* Hide the Firefox scrollbar on desktop only: ChatMinimap provides the
             position indicator there, but on mobile there is no minimap and
             users need the scrollbar (Chrome's overlay scrollbar still shows). */}
-        <div ref={scrollContainerRef} className={`flex-1 overflow-y-auto pt-6` + (isMobile ? "" : " [scrollbar-width:none] [&::-webkit-scrollbar]:hidden")}>
+        <div ref={scrollContainerRef} data-selection-scope="chat" tabIndex={-1} className={`flex-1 overflow-y-auto pt-6` + (isMobile ? "" : " [scrollbar-width:none] [&::-webkit-scrollbar]:hidden")}>
           <div style={{ padding: `0 ${CHAT_COLUMN_PADDING}px` }}>
             <div style={{ maxWidth: isMobile ? CHAT_COLUMN_MAX_WIDTH : CHAT_COLUMN_MAX_WIDTH_DESKTOP, margin: "0 auto" }}>
               <ExtensionStatusBar statuses={extensionStatuses} />
@@ -1177,7 +1220,7 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
             <CommittedTranscript
               messages={messages}
               entryIds={entryIds}
-              conversationMeta={conversationMeta}
+              conversationMeta={conversationMetaWithLive}
               messageRefs={messageRefs}
               isStreaming={streamState.isStreaming}
               sessionBusy={sessionBusy}
@@ -1203,6 +1246,7 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
                 modelNames={modelNames}
                 cwd={messageCwd}
                 onOpenFile={onOpenFile}
+                toolResults={toolResultsWithLive}
                 toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}
                 liveTokensPerSecond={tokensPerSecond}
               />
@@ -1269,10 +1313,14 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
         />
       )}
 
-      {/* Full composer - always mounted; hidden when minimized to preserve ref + state */}
-      <div className="relative" style={{ flexShrink: 0, display: composerMinimized ? "none" : undefined }}>
+      {/* Full composer - always mounted; hidden when minimized to preserve ref + state.
+          A flex column that may shrink: when the panels + widgets + input are
+          taller than the viewport (soft keyboard up, Tasks expanded), the
+          panels block below scrolls and the input stays reachable instead of
+          being clipped off the bottom. */}
+      <div className="relative" style={{ display: composerMinimized ? "none" : "flex", flexDirection: "column", minHeight: 0 }}>
         {/* Minimize chevron above the composer area */}
-        <div style={{ padding: `0 ${CHAT_COLUMN_PADDING}px` }}>
+        <div style={{ padding: `0 ${CHAT_COLUMN_PADDING}px`, flexShrink: 0 }}>
           <div style={{ maxWidth: CHAT_COLUMN_MAX_WIDTH, margin: "0 auto", display: "flex", justifyContent: "center" }}>
             <button
               type="button"
@@ -1298,6 +1346,8 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
         <div
           style={{
             padding: `0 ${CHAT_COLUMN_PADDING}px`,
+            minHeight: 0,
+            overflowY: "auto",
           }}
         >
           <div style={{ maxWidth: CHAT_COLUMN_MAX_WIDTH, margin: "0 auto" }}>
@@ -1348,7 +1398,7 @@ function ExtensionStatusBar({ statuses }: { statuses: Array<{ key: string; text:
           }}
         >
           <span style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{status.key}</span>
-          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{status.text}</span>
+          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{renderAnsiLine(status.text, status.key)}</span>
         </div>
       ))}
     </div>
@@ -1360,23 +1410,21 @@ function ExtensionWidgets({ widgets }: { widgets: Array<{ key: string; lines: st
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
       {widgets.map((widget) => (
-        <div
+        <pre
           key={widget.key}
           className="ui-compact-surface"
-          style={{
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-control)",
-            background: "var(--bg-panel)",
-            overflow: "hidden",
-          }}
+          role="group"
+          aria-label={widget.key}
+          title={widget.key}
+          style={{ margin: 0, padding: "8px 9px", fontSize: 12, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "var(--font-mono)" }}
         >
-          <div style={{ padding: "5px 9px", borderBottom: "1px solid var(--border)", color: "var(--text-dim)", fontSize: 11, fontFamily: "var(--font-mono)" }}>
-            {widget.key}
-          </div>
-          <pre style={{ margin: 0, padding: "8px 9px", color: "var(--text-muted)", fontSize: 12, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "var(--font-mono)" }}>
-            {widget.lines.join("\n")}
-          </pre>
-        </div>
+          {widget.lines.map((line, index, allLines) => (
+            <Fragment key={index}>
+              {renderAnsiLine(line, `${widget.key}-${index}`)}
+              {index < allLines.length - 1 ? "\n" : null}
+            </Fragment>
+          ))}
+        </pre>
       ))}
     </div>
   );

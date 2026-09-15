@@ -1,9 +1,13 @@
+import "../tests/setup-dom.mjs";
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { afterEach } from "node:test";
+import { act, cleanup, renderHook } from "@testing-library/react/pure.js";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { tsconfigPaths: true });
-const { nextThemePreference, resolveTheme, isDarkTheme, LIGHT_THEMES, DARK_THEMES, ALL_THEMES } = await jiti.import("./useTheme.ts");
+const { nextThemePreference, resolveTheme, isDarkTheme, LIGHT_THEMES, DARK_THEMES, useTheme } = await jiti.import("./useTheme.ts");
+
+afterEach(cleanup);
 
 test("cycles explicit and system theme preferences", () => {
   assert.equal(nextThemePreference("light"), "dark");
@@ -46,21 +50,74 @@ test("nextThemePreference toggles custom dark themes to light and custom light t
   assert.equal(nextThemePreference("one-light"), "dark");
 });
 
-test("contains all requested light and dark themes in metadata", () => {
-  const lightIds = LIGHT_THEMES.map((t) => t.id);
-  const darkIds = DARK_THEMES.map((t) => t.id);
-  assert.deepEqual(lightIds, ["light", "one-light", "catppuccin-latte", "rose-pine-dawn"]);
-  assert.deepEqual(darkIds, [
-    "omp",
-    "dark",
-    "dracula",
-    "harbor",
-    "one-dark-pro",
-    "rose-pine",
-    "catppuccin-mocha",
-    "gruvbox-dark",
-    "nord",
-    "tokyo-night",
-  ]);
-  assert.equal(ALL_THEMES.length, 14);
+test("browser chrome follows the selected theme and only follows OS changes in system mode", async (t) => {
+  const root = document.documentElement;
+  const originalClass = root.getAttribute("class");
+  const originalTheme = root.getAttribute("data-theme");
+  const originalPreference = localStorage.getItem("omp-theme");
+  const originalMatchMedia = Object.getOwnPropertyDescriptor(window, "matchMedia");
+  const meta = document.createElement("meta");
+  meta.name = "theme-color";
+  meta.content = "#000000";
+  document.head.append(meta);
+  root.className = "keep-layout dark theme-nord";
+  localStorage.setItem("omp-theme", "dracula");
+
+  const media = Object.assign(new window.EventTarget(), { matches: false });
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: (query) => query === "(prefers-color-scheme: dark)" ? media : { matches: false },
+  });
+  t.after(() => {
+    cleanup();
+    meta.remove();
+    for (const [attribute, value] of [["class", originalClass], ["data-theme", originalTheme]]) {
+      if (value === null) root.removeAttribute(attribute);
+      else root.setAttribute(attribute, value);
+    }
+    if (originalPreference === null) localStorage.removeItem("omp-theme");
+    else localStorage.setItem("omp-theme", originalPreference);
+    if (originalMatchMedia) Object.defineProperty(window, "matchMedia", originalMatchMedia);
+    else delete window.matchMedia;
+  });
+
+  let hook = renderHook(() => useTheme());
+  const assertTheme = (theme, color, dark, classes, preference = theme) => {
+    assert.equal(hook.result.current.theme, theme);
+    assert.equal(hook.result.current.preference, preference);
+    assert.equal(hook.result.current.isDark, dark);
+    assert.equal(root.getAttribute("data-theme"), theme);
+    assert.deepEqual([...root.classList].sort(), ["keep-layout", ...classes].sort());
+    assert.equal(meta.getAttribute("content"), color);
+    assert.equal(localStorage.getItem("omp-theme"), preference);
+  };
+  const changeOS = async (dark) => {
+    await act(() => {
+      media.matches = dark;
+      media.dispatchEvent(new window.Event("change"));
+    });
+  };
+
+  assertTheme("dracula", "#282A36", true, ["dark", "theme-dracula"]);
+  await changeOS(true);
+  assertTheme("dracula", "#282A36", true, ["dark", "theme-dracula"]);
+  await act(() => hook.result.current.setTheme("catppuccin-latte"));
+  assertTheme("catppuccin-latte", "#EFF1F5", false, ["theme-catppuccin-latte"]);
+  await act(() => hook.result.current.setTheme("system"));
+  assertTheme("dark", "#1B1916", true, ["dark", "theme-dark"], "system");
+  await changeOS(false);
+  assertTheme("light", "#FAF9F6", false, ["theme-light"], "system");
+  await act(() => hook.result.current.setTheme("omp"));
+  await changeOS(true);
+  assertTheme("omp", "#000000", true, ["omp"]);
+
+  await act(() => hook.result.current.setTheme("system"));
+  assertTheme("dark", "#1B1916", true, ["dark", "theme-dark"], "system");
+  hook.unmount();
+  await changeOS(false);
+  assert.equal(root.getAttribute("data-theme"), "dark", "unmounted consumers no longer update browser chrome");
+  assert.equal(meta.getAttribute("content"), "#1B1916");
+  hook = renderHook(() => useTheme());
+  assertTheme("light", "#FAF9F6", false, ["theme-light"], "system");
 });

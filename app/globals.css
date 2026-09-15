@@ -568,6 +568,18 @@ html.dark {
   }
 }
 
+/* iOS Safari / WKWebView zooms the page when an editable control with a computed
+   font-size below 16px gains focus. There is no user-facing toggle, and
+   `maximum-scale=1` has been ignored since iOS 17.4, so the reliable fix is to
+   floor form-control font size at 16px on small screens (see issue #87). */
+@media (max-width: 640px) {
+  input,
+  textarea,
+  select {
+    font-size: max(16px, 1em) !important;
+  }
+}
+
 /* General UI scale / density scaling tokens — zoom is non-standard but supported in Chromium; keep both zoom and transform for coverage. */
 @layer base {
   :root {
@@ -1517,6 +1529,53 @@ pre, code {
   border-radius: 4px;
 }
 
+.session-item-trailing {
+  width: 68px;
+  gap: 2px;
+  height: 24px;
+}
+.session-item-metadata {
+  width: auto;
+}
+.session-item-time {
+  width: 42px;
+}
+.session-item-menu-button {
+  width: 24px;
+  height: 24px;
+}
+.sidebar-project-actions {
+  /* Match the session status column after reserving timestamp + menu space. */
+  width: 46px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Touch rows keep the compact timestamp immediately beside a full-size menu target. */
+@media (hover: none), (pointer: coarse) {
+  .sidebar-project-actions {
+    width: 56px;
+  }
+  .session-item-row {
+    min-height: 44px;
+  }
+  .session-item-trailing {
+    width: 78px;
+    height: 44px;
+  }
+  .session-item-time {
+    width: 32px;
+  }
+  .session-item-menu-button {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+  }
+  .session-item-row .session-item-button {
+    align-self: stretch;
+  }
+}
+
 .sidebar-project-header > button:focus-visible,
 .sidebar-project-identity:focus-visible,
 .sidebar-project-action:focus-visible,
@@ -1581,12 +1640,8 @@ pre, code {
   from { opacity: 0; transform: translateY(-5px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.sidebar-project-activity {
-  transition: transform var(--dur-fast) var(--ease-out-warm), opacity var(--dur-fast) var(--ease-out-warm);
-}
-.sidebar-project:hover .sidebar-project-activity {
-  transform: translateX(-1px);
-}
+/* The activity dot is part of the sidebar's shared right-edge status column
+   (see SessionSidebar-rows.tsx) — it must not move on hover. */
 .sidebar-project-activity[data-running="true"] .sidebar-project-activity-dot {
   position: relative;
   isolation: isolate;
@@ -1631,6 +1686,72 @@ pre, code {
 }
 .chat-input-shell:focus-within {
   transform: none;
+}
+.composer-toolbar {
+  container-type: inline-size;
+}
+.composer-toolbar > button {
+  flex-shrink: 0;
+}
+.composer-model-control {
+  flex: 1 1 0;
+  max-width: 140px;
+  min-width: 24px !important;
+}
+.composer-thinking-control {
+  flex: 0 1 auto;
+  min-width: 24px !important;
+  max-width: 100px;
+}
+.composer-primary-action {
+  flex-shrink: 0;
+  min-width: 7em;
+  justify-content: center;
+  white-space: nowrap;
+  min-height: 28px;
+  padding: 4px 10px;
+  line-height: 20px;
+}
+@container (max-width: 400px) {
+  .composer-model-control > button > svg:first-child,
+  .composer-thinking-control > button > svg:first-child,
+  .composer-fast-control > span {
+    display: none;
+  }
+  .composer-fast-control {
+    justify-content: center;
+    width: 28px;
+    padding-inline: 0 !important;
+  }
+}
+@container (max-width: 300px) {
+  .composer-model-control,
+  .composer-thinking-control {
+    flex: 0 0 24px;
+  }
+  .composer-model-control > button,
+  .composer-thinking-control > button {
+    justify-content: center;
+    gap: 0 !important;
+  }
+  .composer-model-control > button > svg:first-child,
+  .composer-thinking-control > button > svg:first-child {
+    display: block;
+  }
+  .composer-model-control > button > span,
+  .composer-model-control > button > svg:last-child,
+  .composer-thinking-control > button > span,
+  .composer-thinking-control > button > svg:last-child {
+    display: none;
+  }
+  .composer-toolbar > button:not(.composer-primary-action),
+  .composer-toolbar > div > button,
+  .composer-toolbar > span {
+    width: 24px !important;
+  }
+  .composer-primary-action {
+    padding-inline: 6px;
+  }
 }
 .composer-control-shelf {
   animation: ui-slide-up var(--dur-fast) var(--ease-out-warm) both;
@@ -2338,12 +2459,17 @@ html.dark .dropdown-surface :is(select, option) {
 /* Provider Sub-navigation & Cards */
 .providers-segmented {
   display: inline-flex;
+  flex-wrap: nowrap;
   align-items: stretch;
+  width: max-content;
+  max-width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--bg-panel);
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   margin-bottom: 24px;
+  box-sizing: border-box;
 }
 
 .providers-segmented-btn {
@@ -2359,6 +2485,7 @@ html.dark .dropdown-surface :is(select, option) {
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
+  flex-shrink: 0;
   transition: background var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm);
 }
 
@@ -2537,6 +2664,35 @@ html.dark .dropdown-surface :is(select, option) {
   animation: chat-message-in var(--dur-med) var(--ease-out-warm) both;
 }
 
+.message-copy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+}
+.message-copy-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 3px 8px;
+  border: none;
+  border-radius: var(--radius-control);
+  background: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.message-copy-action:hover {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+@media (pointer: coarse) {
+  .message-copy-action {
+    min-height: 44px;
+  }
+}
+
 @keyframes toast-in {
   from { opacity: 0; transform: translate3d(18px, 8px, 0) scale(0.97); }
   to   { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
@@ -2675,6 +2831,10 @@ html.dark .dropdown-surface :is(select, option) {
   background: var(--border);
   flex-shrink: 0;
 }
+  .right-panel-toolbar > [role="toolbar"] {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
 @media (max-width: 640px) {
   .shell-toolbar-btn {
     width: 40px;
@@ -2682,6 +2842,124 @@ html.dark .dropdown-surface :is(select, option) {
   }
   .shell-toolbar-divider {
     margin: 0 4px;
+  }
+  .right-panel-toolbar > div:first-child {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+  }
+  .right-panel-toolbar > [role="toolbar"] > button {
+    min-width: 40px;
+    min-height: 40px;
+  }
+  .right-panel-toolbar .tabbar-scroll {
+    width: 100%;
+  }
+  .right-panel-toolbar .tabbar-scroll,
+  .right-panel-toolbar .tabbar-tab {
+    height: 44px !important;
+  }
+}
+
+.shell-topbar {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: space-between;
+}
+.shell-topbar-overflow {
+  display: contents;
+}
+.shell-topbar-overflow > summary {
+  display: none;
+}
+.shell-topbar-overflow-content {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+}
+.shell-topbar-center {
+  position: absolute;
+  top: 4.5px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: clamp(0px, calc(100% - 520px), 400px);
+  pointer-events: none;
+}
+.shell-topbar-center > .shell-topbar-breadcrumb {
+  pointer-events: auto;
+}
+
+/* Hide only the breadcrumb when the sidebars leave too little title space. */
+@container breadcrumb (max-width: 200px) {
+  .shell-topbar-breadcrumb {
+    visibility: hidden;
+  }
+}
+
+@media (max-width: 960px) {
+  .shell-topbar-center {
+    display: none !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .shell-topbar {
+    gap: 0 4px !important;
+    padding-right: 48px !important;
+  }
+  .shell-topbar-tools {
+    gap: 2px !important;
+  }
+  .shell-topbar .shell-toolbar-divider {
+    margin: 0;
+  }
+  .shell-topbar [data-topbar-right-group] {
+    padding: 0 !important;
+  }
+  .shell-topbar-overflow[data-compact="pending"] {
+    display: block;
+  }
+  .shell-topbar-overflow[data-compact="pending"] > summary {
+    display: flex;
+    list-style: none;
+  }
+  .shell-topbar-overflow[data-compact="pending"] > .shell-topbar-overflow-content {
+    display: none;
+  }
+}
+
+.shell-topbar-overflow[data-compact="true"] {
+  display: block;
+}
+.shell-topbar-overflow[data-compact="true"] > summary {
+  display: flex;
+  list-style: none;
+}
+.shell-topbar-overflow > summary::-webkit-details-marker {
+  display: none;
+}
+.shell-topbar-overflow[data-compact="true"]:not([open]) > .shell-topbar-overflow-content {
+  display: none;
+}
+.shell-topbar-overflow[data-compact="true"] > .shell-topbar-overflow-content {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 4px;
+  right: 4px;
+  height: 48px;
+  gap: 4px;
+  padding: 4px;
+  z-index: 500;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-pop);
+}
+
+@container topbar-speed (width < calc(10ch + 33px)) {
+  .shell-metric-pill {
+    display: none !important;
   }
 }
 
@@ -2735,11 +3013,6 @@ html.dark .dropdown-surface :is(select, option) {
   border-color: var(--accent);
 }
 
-@media (max-width: 960px) {
-  .shell-topbar-center {
-    display: none !important;
-  }
-}
 
 @media (max-width: 640px) {
   .shell-metric-pill {
@@ -2882,7 +3155,7 @@ html.dark .dropdown-surface :is(select, option) {
 }
 .tool-call-command {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 7px;
   min-width: 0;
   padding: 5px 8px;
@@ -2897,11 +3170,50 @@ html.dark .dropdown-surface :is(select, option) {
   flex: 0 0 auto;
 }
 .tool-call-command code {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   color: var(--text);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.tool-call-input-toggle {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 4px;
+  border-radius: var(--radius-control);
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.tool-call-input-toggle:hover {
+  background: var(--bg-hover);
+}
+.tool-call-input-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.tool-call-input {
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.tool-call-input dl, .tool-call-input dd, .tool-call-input pre {
+  margin: 0;
+}
+.tool-call-input dl > div + div {
+  margin-top: 8px;
+}
+.tool-call-input dt {
+  color: var(--text-muted);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.tool-call-input pre {
+  color: var(--text);
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .tool-call-output {
   max-height: 260px;
@@ -3199,24 +3511,19 @@ html.dark .dropdown-surface :is(select, option) {
   .right-panel-container {
     overflow: hidden;
     transition: width var(--dur-med) var(--ease-out-warm), min-width var(--dur-med) var(--ease-out-warm);
-    flex-shrink: 0;
+    flex-shrink: 1;
   }
   .right-panel-container.right-panel-open {
     width: var(--right-panel-width, 42%);
-    min-width: 300px;
+    min-width: 0;
   }
   .right-panel-container.right-panel-closed {
     width: 0;
     min-width: 0;
     border-left: none !important;
   }
-  /* keep inner content at fixed width so it doesn't reflow during animation */
+  /* Follow the panel's available width, including interface scaling and borders. */
   .right-panel-container > * {
-    width: 42vw;
-    min-width: 300px;
-  }
-  /* user-chosen pixel width: content follows the container instead */
-  .right-panel-container.right-panel-custom-width > * {
     width: 100%;
     min-width: 0;
   }

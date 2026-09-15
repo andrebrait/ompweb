@@ -4,25 +4,29 @@ import { useState, useCallback, useRef, useEffect, useLayoutEffect } from "react
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+import { useSidebarHistory } from "@/hooks/useSidebarHistory";
 import { SessionSidebar } from "./SessionSidebar";
 import { ToastProvider } from "./ui/toast";
 import { toast } from "./ui/toast";
+import { ConfirmDialog } from "./ui/field";
 import { ChatWindow } from "./ChatWindow";
 import { type Tab } from "./TabBar";
 import { type FileExplorerHandle } from "./FileExplorer";
 import type { RightPanelView } from "./RightPanel";
 import { BranchNavigator } from "./BranchNavigator";
 import { LanguageSwitcher } from "./LanguageSwitcher";
-import { Check, Folder, History, Menu, PanelLeft, Terminal, Wand2, Zap } from "lucide-react";
+import { Check, Ellipsis, Folder, History, Menu, PanelLeft, Terminal, Wand2, Zap } from "lucide-react";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { translate, useI18n } from "@/lib/i18n";
 import { formatApiError } from "@/lib/i18n/api-error";
+import { formatGenerationSpeed } from "@/lib/generation-speed";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { copyText } from "@/lib/clipboard";
 import { encodeFilePathForApi, getFileName, getRelativeFilePath } from "@/lib/file-paths";
 import { buildAtMentionText, buildFileAtMentionsText, buildFileLineMentionText } from "@/lib/file-fuzzy";
 import { getInitialNavigation } from "@/lib/initial-navigation";
 import { comparableProjectPath } from "@/lib/comparable-path";
+import { clearDraft } from "@/lib/draft-store";
 import { showCompletionNotification } from "@/lib/browser-notifications";
 import {
   APP_UPDATE_COMPLETED_RELOAD_MS,
@@ -34,8 +38,11 @@ import {
   AppUpdateTransportError,
   COMPLETED_APP_UPDATE_KEY,
   DISMISSED_APP_UPDATE_KEY,
+  DISMISSED_OMP_UPDATE_KEY,
   fetchAppUpdateJson,
   isExactLegacyTargetCompletion,
+  readDismissedVersion,
+  rememberDismissedVersion,
   sanitizeAppUpdateError,
   waitForAppUpdateDwell,
 } from "./AppShell-app-update";
@@ -51,7 +58,7 @@ import {
   loadSidebarWidth,
   projectLabel,
 } from "./AppShell-layout";
-import type { SessionInfo, SessionTreeNode } from "@/lib/types";
+import type { ManagedProject, SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo, GenerationSpeedInfo } from "@/lib/pi-types";
 import type { SettingsTab } from "./SettingsTabs";
@@ -75,6 +82,7 @@ const RightPanel = dynamic(() => import("./RightPanel").then((m) => m.RightPanel
 
 const TOOL_CALLS_COLLAPSED_STORAGE_KEY = "omp-web:tool-calls-collapsed";
 const PROVIDER_USAGE_VISIBLE_STORAGE_KEY = "omp-web:provider-usage-visible";
+const NATIVE_SELECT_ALL_STORAGE_KEY = "omp-web:scope-native-select-all";
 
 const CommandPalette = dynamic(() => import("./CommandPalette").then((m) => m.CommandPalette), {
   ssr: false,
@@ -91,11 +99,16 @@ export function AppShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [initialNavigation] = useState(() => getInitialNavigation(searchParams));
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const isMobile = useIsMobile();
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
   // When user clicks +, we only store the cwd — no fake session id
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null);
+  const [workspaceOptions, setWorkspaceOptions] = useState<{ projects: ManagedProject[]; selectedProject: string | null; cwd: string | null }>({ projects: [], selectedProject: null, cwd: null });
+  const [addProjectOpen, setAddProjectOpen] = useState(false);
+  const handleWorkspaceOptionsChange = useCallback((projects: ManagedProject[], selectedProject: string | null, cwd: string | null) => {
+    setWorkspaceOptions({ projects, selectedProject, cwd });
+  }, []);
   const [initialCwdStatus, setInitialCwdStatus] = useState<"idle" | "validating" | "ready" | "error">(
     () => initialNavigation.requestedCwd ? "validating" : "idle",
   );
@@ -112,6 +125,7 @@ export function AppShell() {
   const [sidebarWidth, setSidebarWidth] = useState<number>(SIDEBAR_DEFAULT_WIDTH);
   const [toolCallsDefaultCollapsed, setToolCallsDefaultCollapsed] = useState(true);
   const [providerUsageVisible, setProviderUsageVisible] = useState(true);
+  const [scopeNativeSelectAll, setScopeNativeSelectAll] = useState(false);
   const [sidebarResizing, setSidebarResizing] = useState(false);
   // Active drag handlers so an unmount mid-drag can detach them.
   const sidebarResizeHandlersRef = useRef<{ onMove: (ev: MouseEvent) => void; onUp: () => void } | null>(null);
@@ -123,6 +137,7 @@ export function AppShell() {
     try {
       setToolCallsDefaultCollapsed(window.localStorage.getItem(TOOL_CALLS_COLLAPSED_STORAGE_KEY) !== "false");
       setProviderUsageVisible(window.localStorage.getItem(PROVIDER_USAGE_VISIBLE_STORAGE_KEY) !== "false");
+      setScopeNativeSelectAll(window.localStorage.getItem(NATIVE_SELECT_ALL_STORAGE_KEY) === "true");
     } catch {
       // Keep the compact default when storage is unavailable.
     }
@@ -139,6 +154,14 @@ export function AppShell() {
     setProviderUsageVisible(visible);
     try {
       window.localStorage.setItem(PROVIDER_USAGE_VISIBLE_STORAGE_KEY, String(visible));
+    } catch {
+      // The preference still applies for this page load.
+    }
+  }, []);
+  const handleScopeNativeSelectAllChange = useCallback((enabled: boolean) => {
+    setScopeNativeSelectAll(enabled);
+    try {
+      window.localStorage.setItem(NATIVE_SELECT_ALL_STORAGE_KEY, String(enabled));
     } catch {
       // The preference still applies for this page load.
     }
@@ -249,6 +272,10 @@ export function AppShell() {
       .then((data: { currentVersion?: string | null; availableVersion?: string | null; updateAvailable?: boolean; updateCommand?: string } | null) => {
         setOmpUpdateAvailable(Boolean(data?.updateAvailable));
         if (!data?.updateAvailable || !data.availableVersion) return;
+        // This check re-runs on every visibilitychange back to the tab, so a
+        // version the user already dismissed must not be re-announced.
+        if (readDismissedVersion(DISMISSED_OMP_UPDATE_KEY) === data.availableVersion) return;
+        const version = data.availableVersion;
         const cmd = data.updateCommand || "omp update";
         toast.info(
           translate("appShell.ompUpdateAvailable"),
@@ -281,7 +308,7 @@ export function AppShell() {
               </button>
             </div>
           </div>,
-          { id: "omp-update-available", timeout: 0 }
+          { id: "omp-update-available", timeout: 0, onClose: () => rememberDismissedVersion(DISMISSED_OMP_UPDATE_KEY, version) }
         );
       })
       .catch(() => {});
@@ -311,15 +338,15 @@ export function AppShell() {
 
     if (autoOpen && !data.selfUpdateStatus && data.updateAvailable && data.availableVersion) {
       if (data.selfUpdateSupported === true) {
-        let dismissed: string | null = null;
-        try { dismissed = window.localStorage.getItem(DISMISSED_APP_UPDATE_KEY); } catch {}
-        if (dismissed !== data.availableVersion) {
+        if (readDismissedVersion(DISMISSED_APP_UPDATE_KEY) !== data.availableVersion) {
           setAppUpdatePhase("idle");
           setAppUpdateError(null);
           setAppUpdateDialogOpen(true);
         }
       } else {
         const cmd = data.updateCommand || "npm install -g @kahme247/ompweb";
+        const version = data.availableVersion;
+        if (readDismissedVersion(DISMISSED_APP_UPDATE_KEY) === version) return data;
         toast.info(
           translate("appShell.appUpdateAvailable"),
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
@@ -351,7 +378,7 @@ export function AppShell() {
               </button>
             </div>
           </div>,
-          { id: "app-update-available", timeout: 0 }
+          { id: "app-update-available", timeout: 0, onClose: () => rememberDismissedVersion(DISMISSED_APP_UPDATE_KEY, version) }
         );
       }
     }
@@ -566,7 +593,7 @@ export function AppShell() {
 
   const dismissAppUpdate = useCallback(() => {
     if (appUpdatePhase === "idle" && appUpdate?.availableVersion) {
-      try { window.localStorage.setItem(DISMISSED_APP_UPDATE_KEY, appUpdate.availableVersion); } catch {}
+      rememberDismissedVersion(DISMISSED_APP_UPDATE_KEY, appUpdate.availableVersion);
       toast.info(t("appUpdateDialog.settingsLater"));
     }
     setAppUpdateDialogOpen(false);
@@ -639,6 +666,40 @@ export function AppShell() {
 
   // Single active panel — only one dropdown open at a time
   const [activeTopPanel, setActiveTopPanel] = useState<"branches" | "system" | null>(null);
+  const mobileToolsRef = useRef<HTMLDetailsElement>(null);
+  const mobileToolsContentRef = useRef<HTMLDivElement>(null);
+  const restoreToolsFocusRef = useRef(false);
+  const [compactTopbar, setCompactTopbar] = useState<boolean | null>(null);
+  useLayoutEffect(() => {
+    if (compactTopbar && restoreToolsFocusRef.current) {
+      mobileToolsRef.current?.querySelector("summary")?.focus();
+      restoreToolsFocusRef.current = false;
+    }
+  }, [compactTopbar]);
+  useEffect(() => {
+    if (!compactTopbar) return;
+    const closeOnOutside = (event: PointerEvent) => {
+      const tools = mobileToolsRef.current;
+      if (tools?.open && !tools.contains(event.target as Node)) {
+        tools.open = false;
+        setActiveTopPanel(null);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      const tools = mobileToolsRef.current;
+      // Nested pickers and session panels handle their own Escape first.
+      if (event.key !== "Escape" || event.defaultPrevented || activeTopPanel || !tools?.open) return;
+      event.stopPropagation();
+      tools.open = false;
+      tools.querySelector("summary")?.focus();
+    };
+    document.addEventListener("pointerdown", closeOnOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [compactTopbar, activeTopPanel]);
   const toggleTopPanel = useCallback((panel: "branches" | "system") => {
     if (isMobile) setSidebarOpen(false);
     setActiveTopPanel((cur) => cur === panel ? null : panel);
@@ -1008,6 +1069,9 @@ export function AppShell() {
     // re-select, notification click) must not bump sessionKey: that remounts
     // ChatWindow, reconnects SSE, and drops the mid-run streaming view.
     setSettingsTab(null);
+    // Re-picking the current conversation still closes/rearms the drawer,
+    // without remounting the chat or disturbing its draft.
+    if (isMobile && !isRestore) setSidebarOpen(false);
     if (!isRestore && session.id === selectedSession?.id) return;
     setNewSessionCwd(null);
     setSelectedSession(session);
@@ -1015,8 +1079,6 @@ export function AppShell() {
     setSystemPrompt(null);
     setSystemPromptLoading(false);
     setInitialSessionRestored(true);
-    // On mobile, collapse the overlay drawer so the chat is revealed after pick.
-    if (isMobile && !isRestore) setSidebarOpen(false);
     if (isRestore) {
       // Suppress the redundant sessionKey bump that would come from the
       // onCwdChange effect firing after setSelectedCwd in the sidebar. We
@@ -1050,6 +1112,7 @@ export function AppShell() {
   useGlobalKeyboardShortcuts({
     onNewSession: (cwd: string) => handleNewSession(`kb-${Date.now()}`, cwd),
     activeCwd,
+    scopeNativeSelectAll,
   });
 
   // Client-built transient SessionInfo (new session / fork) lacks the
@@ -1163,6 +1226,9 @@ export function AppShell() {
   }, [router, hydrateSelectedSession]);
 
   const handleSessionDeleted = useCallback((sessionId: string) => {
+    // The composer for this session can never be reopened, so its draft would
+    // otherwise keep the exit guard armed for unreachable content.
+    clearDraft(sessionId);
     setRefreshKey((k) => k + 1);
     if (selectedSession?.id === sessionId) {
       const cwd = selectedSession.cwd;
@@ -1328,9 +1394,80 @@ export function AppShell() {
 
   // Show chat area if a session is selected, or if we have a cwd to start a new session in
   const effectiveNewSessionCwd = newSessionCwd ?? (selectedSession === null && activeCwd ? activeCwd : null);
+  const newSessionProject = (workspaceOptions.cwd === effectiveNewSessionCwd ? workspaceOptions.selectedProject : null) ?? effectiveNewSessionCwd ?? "";
   const showChat = selectedSession !== null || effectiveNewSessionCwd !== null;
+  const currentRate = generationSpeed?.current;
+  const rate = currentRate ?? generationSpeed?.average;
+  const speed = showChat ? formatGenerationSpeed(rate) : null;
+  const hasGenerationSpeed = speed !== null;
+  useLayoutEffect(() => {
+    const header = topBarRef.current;
+    const details = mobileToolsRef.current;
+    const content = mobileToolsContentRef.current;
+    const right = header?.querySelector<HTMLElement>("[data-topbar-right-group]");
+    const tools = header?.querySelector<HTMLElement>(".shell-topbar-tools");
+    if (!header || !details || !content || !right || !tools) return;
+    const update = () => {
+      const hadControlsFocus = content.contains(document.activeElement);
+      // Measure the real controls even while their disclosure is closed.
+      const closed = !details.open;
+      const display = content.style.display;
+      const visibility = content.style.visibility;
+      content.style.visibility = "hidden";
+      content.style.display = "flex";
+      details.open = true;
+      const children = Array.from(content.children).filter((child) =>
+        !["absolute", "fixed"].includes(getComputedStyle(child).position));
+      const contentStyle = getComputedStyle(content);
+      const headerStyle = getComputedStyle(header);
+      const rightStyle = getComputedStyle(right);
+      const controlsWidth = children.reduce((width, child) => {
+        const style = getComputedStyle(child);
+        return width + child.getBoundingClientRect().width
+          + parseFloat(style.marginLeft) + parseFloat(style.marginRight);
+      }, 0) + Math.max(0, children.length - 1) * parseFloat(contentStyle.columnGap);
+      const required = controlsWidth
+        + (tools.firstElementChild?.getBoundingClientRect().width ?? 0)
+        + parseFloat(getComputedStyle(tools).columnGap)
+        + parseFloat(headerStyle.paddingLeft) + parseFloat(headerStyle.paddingRight)
+        + parseFloat(headerStyle.columnGap)
+        + parseFloat(rightStyle.minWidth)
+        + parseFloat(rightStyle.paddingLeft) + parseFloat(rightStyle.paddingRight);
+      if (closed) details.open = false;
+      content.style.display = display;
+      content.style.visibility = visibility;
+      const compact = required > header.clientWidth;
+      if (compact && details.dataset.compact !== "true" && hadControlsFocus) {
+        restoreToolsFocusRef.current = true;
+      }
+      setCompactTopbar(compact);
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(header);
+    observer.observe(content);
+    for (const child of content.children) observer.observe(child);
+    document.fonts.addEventListener("loadingdone", update);
+    update();
+    return () => {
+      observer.disconnect();
+      document.fonts.removeEventListener("loadingdone", update);
+    };
+  }, [hasGenerationSpeed, isMobile, locale, rightPanelOpen, showChat]);
   // While restoring initial session from URL, don't show the placeholder
   const showPlaceholder = initialSessionRestored && !showChat;
+
+  const sidebarHistory = useSidebarHistory({
+    active: isMobile && (showChat || Boolean(initialSessionId)),
+    ready: mobileSidebarReady,
+    sidebarOpen,
+    setSidebarOpen,
+    url: searchParams.toString(),
+  });
+  useEffect(() => {
+    if (sidebarHistory.exitNeedsNativeBack) {
+      toast.info(t("appShell.exitNativeBackTitle"), t("appShell.exitNativeBackDescription"));
+    }
+  }, [sidebarHistory.exitNeedsNativeBack, t]);
 
   const activeCwdName = activeCwd ? getFileName(activeCwd) || activeCwd : null;
   const windowTitle = activeCwdName ? `${activeCwdName} - omp web` : "omp web";
@@ -1359,6 +1496,9 @@ export function AppShell() {
       onSessionDeleted={handleSessionDeleted}
       selectedCwd={selectedSession?.cwd ?? newSessionCwd ?? null}
       onCwdChange={handleCwdChange}
+      onWorkspaceOptionsChange={handleWorkspaceOptionsChange}
+      addProjectOpen={addProjectOpen}
+      setAddProjectOpen={setAddProjectOpen}
       usageVisible={providerUsageVisible}
       settingsOpen={Boolean(settingsTab)}
       onOpenSettings={() => setSettingsTab((prev) => prev ? null : "general")}
@@ -1370,6 +1510,16 @@ export function AppShell() {
   return (
     <>
     <ToastProvider>
+      <ConfirmDialog
+        open={sidebarHistory.exitConfirmationOpen}
+        onOpenChange={(open) => { if (!open) sidebarHistory.cancelExit(); }}
+        title={t("appShell.exitTitle")}
+        description={t("appShell.exitDescription")}
+        confirmLabel={t("appShell.exitLeave")}
+        cancelLabel={t("appShell.exitStay")}
+        danger
+        onConfirm={sidebarHistory.leave}
+      />
       <CommandPalette
         onSelectSession={handleSelectSession}
         onNewSession={() => {
@@ -1532,6 +1682,8 @@ export function AppShell() {
             onToolCallsDefaultCollapsedChange={handleToolCallsDefaultCollapsedChange}
             providerUsageVisible={providerUsageVisible}
             onProviderUsageVisibleChange={handleProviderUsageVisibleChange}
+            scopeNativeSelectAll={scopeNativeSelectAll}
+            onScopeNativeSelectAllChange={handleScopeNativeSelectAllChange}
             cwd={activeCwd ?? selectedSession?.cwd ?? newSessionCwd}
             sessionId={selectedSession?.id ?? null}
             onModelsSaved={() => setModelsRefreshKey((k) => k + 1)}
@@ -1548,19 +1700,17 @@ export function AppShell() {
         {/* Top bar: 3-zone segmented control bar */}
         <div ref={topBarRef} className="shell-topbar" style={{
           position: "relative",
-          display: "flex",
           alignItems: "center",
-          justifyContent: "space-between",
           flexShrink: 0,
           borderBottom: "1px solid var(--border)",
-          height: isMobile ? 44 : 36,
+          minHeight: isMobile ? 44 : 36,
           background: "var(--bg-panel)",
           padding: isMobile ? "0 4px" : "0 8px",
-          gap: 8,
+          gap: "0 8px",
           minWidth: 0,
         }}>
           {/* Left Zone: Utility group (sidebar, theme, language) & session controls (history, branches, system) */}
-          <div style={{ display: "flex", alignItems: "center", gap: 4, height: "100%", flexShrink: 0 }}>
+          <div className="shell-topbar-tools" style={{ display: "flex", alignItems: "center", gap: 4, height: isMobile ? 43 : 35, minWidth: 0, flexShrink: 0 }}>
             <button
               onClick={handleSidebarToggle}
               title={sidebarOpen ? t("appShell.hideSidebar") : t("appShell.showSidebar")}
@@ -1569,6 +1719,23 @@ export function AppShell() {
             >
               {sidebarOpen ? <PanelLeft size={16} strokeWidth={1.8} aria-hidden="true" /> : <Menu size={16} strokeWidth={1.8} aria-hidden="true" />}
             </button>
+            <details
+              ref={mobileToolsRef}
+              className="shell-topbar-overflow"
+              data-compact={compactTopbar === null ? "pending" : compactTopbar}
+              open={compactTopbar ? undefined : true}
+              onToggle={(event) => {
+                if (!event.currentTarget.open) setActiveTopPanel(null);
+              }}
+            >
+              <summary
+                className="shell-toolbar-btn ui-focus-ring"
+                title={t("chatInput.moreControls")}
+                aria-label={t("chatInput.moreControls")}
+              >
+                <Ellipsis size={16} strokeWidth={1.8} aria-hidden="true" />
+              </summary>
+              <div ref={mobileToolsContentRef} className="shell-topbar-overflow-content">
             <ThemeSwitcher />
             <LanguageSwitcher />
             {showChat && (
@@ -1588,7 +1755,7 @@ export function AppShell() {
                   activeLeafId={branchActiveLeafId}
                   onLeafChange={handleBranchLeafChange}
                   inline
-                  containerRef={topBarRef}
+                  containerRef={compactTopbar ? mobileToolsContentRef : topBarRef}
                   open={activeTopPanel === "branches"}
                   onToggle={() => toggleTopPanel("branches")}
                   hasSession
@@ -1605,6 +1772,55 @@ export function AppShell() {
                 </button>
               </>
             )}
+          {activeTopPanel === "system" && (
+            <div data-top-panel className="dropdown-surface" style={{
+              position: "absolute",
+              top: "calc(100% + 4px)",
+              left: isMobile ? 4 : 8,
+              right: "auto",
+              width: "auto",
+              minWidth: isMobile ? undefined : 420,
+              maxWidth: "min(680px, calc(100vw - 24px))",
+              maxHeight: "min(70vh, calc(100dvh - 56px))",
+              overflowY: "auto",
+              overflowX: "hidden",
+              zIndex: 500,
+            }}>
+              {activeTopPanel === "system" && (
+                <div className="session-info-popover" style={{
+                  background: "var(--bg-panel)",
+                  borderBottom: "1px solid var(--border)",
+                  boxShadow: "var(--shadow-pop)",
+                  minWidth: isMobile ? undefined : 420,
+                }}>
+                  {systemPrompt ? (
+                    <div style={{
+                      maxHeight: "min(600px, 75vh)",
+                      overflowY: "auto",
+                      padding: "12px 16px",
+                      color: "var(--text-muted)",
+                      fontSize: 12,
+                      lineHeight: 1.6,
+                      whiteSpace: "pre-wrap",
+                      fontFamily: "var(--font-mono)",
+                    }}>
+                      {systemPrompt}
+                    </div>
+                  ) : systemPrompt === "" ? (
+                    <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
+                      {t("appShell.systemPromptEmpty")}
+                    </div>
+                  ) : (
+                    <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
+                      {systemPromptLoading ? t("appShell.systemPromptLoading") : t("appShell.systemPromptLoadHint")}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+              </div>
+            </details>
           </div>
 
           {/* Center Zone: Workspace & Session Breadcrumb + Auto-name action */}
@@ -1637,15 +1853,12 @@ export function AppShell() {
               <div
                 className="shell-topbar-center"
                 style={{
-                  position: "absolute",
-                  left: "50%",
-                  transform: "translateX(-50%)",
+                  minWidth: 0,
+                  containerType: "inline-size",
+                  containerName: "breadcrumb",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  maxWidth: "min(460px, calc(100% - 380px))",
-                  pointerEvents: "none",
-                  zIndex: 10,
                 }}
               >
                 <div
@@ -1664,7 +1877,6 @@ export function AppShell() {
                     whiteSpace: "nowrap",
                     minWidth: 0,
                     maxWidth: "min(400px, 30vw)",
-                    pointerEvents: "auto",
                     flexShrink: 1,
                   }}
                 >
@@ -1751,29 +1963,32 @@ export function AppShell() {
               marginLeft: "auto",
               display: "flex",
               alignItems: "center",
+              justifyContent: "flex-end",
               gap: 6,
-              height: "100%",
-              paddingRight: isMobile ? (rightPanelOpen ? 0 : 44) : rightPanelOpen ? 8 : 44,
-              flexShrink: 0,
+              paddingRight: rightPanelOpen ? 8 : 44,
+              minWidth: hasGenerationSpeed ? "calc(10ch + 33px)" : 0,
+              width: hasGenerationSpeed ? 200 : 0,
+              fontSize: 11,
+              fontFamily: "var(--font-mono)",
+              containerType: "inline-size",
+              containerName: "topbar-speed",
+              flexShrink: 1,
             }}
           >
 
             {/* Generation speed pill */}
             {showChat && (() => {
-              const currentSpeedStr = generationSpeed?.current !== null && generationSpeed?.current !== undefined
-                ? `${generationSpeed.current.toFixed(1)} t/s`
-                : null;
-              const averageSpeedStr = generationSpeed?.average !== null && generationSpeed?.average !== undefined
-                ? `AVG ${generationSpeed.average.toFixed(1)} t/s`
-                : null;
-              if (!currentSpeedStr && !averageSpeedStr) return null;
-              const speedTitle = currentSpeedStr
-                ? t("appShell.tooltipCurrentSpeed", { value: currentSpeedStr })
-                : t("appShell.tooltipAverageSpeed", { value: averageSpeedStr! });
+              if (!speed || rate == null) return null;
+              const isLive = currentRate != null;
+              const speedTitle = t(isLive ? "appShell.tooltipCurrentSpeed" : "appShell.tooltipAverageSpeed", {
+                value: `${rate.toFixed(1)} t/s`,
+              });
 
               return (
                 <div
                   title={speedTitle}
+                  role="img"
+                  aria-label={speedTitle}
                   className="shell-metric-pill shell-pill-extra"
                   style={{
                     display: "inline-flex",
@@ -1784,70 +1999,29 @@ export function AppShell() {
                     borderRadius: "var(--radius-control)",
                     border: "1px solid var(--border)",
                     background: "var(--bg-subtle)",
-                    color: currentSpeedStr ? "var(--accent)" : "var(--text-muted)",
+                    color: isLive ? "var(--accent)" : "var(--text-muted)",
                     fontSize: 11,
                     fontFamily: "var(--font-mono)",
                     fontVariantNumeric: "tabular-nums",
                     whiteSpace: "nowrap",
                     cursor: "default",
+                    width: "calc(10ch + 33px)",
                     flexShrink: 0,
                   }}
                 >
-                  <Zap size={11} strokeWidth={2} aria-hidden="true" style={{ color: currentSpeedStr ? "var(--accent)" : "var(--text-dim)" }} />
-                  <span style={{ fontWeight: currentSpeedStr ? 600 : 400 }}>
-                    {currentSpeedStr ?? averageSpeedStr}
+                  {isLive ? (
+                    <Zap size={11} strokeWidth={2} aria-hidden="true" style={{ flexShrink: 0, color: "var(--accent)" }} />
+                  ) : (
+                    <span aria-hidden="true" style={{ width: 11, lineHeight: "11px", textAlign: "center", flexShrink: 0, color: "var(--text-dim)" }}>~</span>
+                  )}
+                  <span style={{ display: "inline-flex", gap: "1ch", fontWeight: isLive ? 600 : 400 }}>
+                    <span style={{ width: "5ch", textAlign: "right" }}>{speed.value}</span>
+                    <span style={{ width: "4ch" }}>{speed.unit}</span>
                   </span>
                 </div>
               );
             })()}
           </div>
-          {activeTopPanel === "system" && (
-            <div data-top-panel className="dropdown-surface" style={{
-              position: "absolute",
-              top: "calc(100% + 4px)",
-              left: isMobile ? 4 : 8,
-              right: "auto",
-              width: "auto",
-              minWidth: isMobile ? undefined : 420,
-              maxWidth: "min(680px, calc(100vw - 24px))",
-              maxHeight: "min(70vh, calc(100dvh - 56px))",
-              overflowY: "auto",
-              overflowX: "hidden",
-              zIndex: 500,
-            }}>
-              {activeTopPanel === "system" && (
-                <div className="session-info-popover" style={{
-                  background: "var(--bg-panel)",
-                  borderBottom: "1px solid var(--border)",
-                  boxShadow: "var(--shadow-pop)",
-                  minWidth: isMobile ? undefined : 420,
-                }}>
-                  {systemPrompt ? (
-                    <div style={{
-                      maxHeight: "min(600px, 75vh)",
-                      overflowY: "auto",
-                      padding: "12px 16px",
-                      color: "var(--text-muted)",
-                      fontSize: 12,
-                      lineHeight: 1.6,
-                      whiteSpace: "pre-wrap",
-                      fontFamily: "var(--font-mono)",
-                    }}>
-                      {systemPrompt}
-                    </div>
-                  ) : systemPrompt === "" ? (
-                    <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-                      {t("appShell.systemPromptEmpty")}
-                    </div>
-                  ) : (
-                    <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-                      {systemPromptLoading ? t("appShell.systemPromptLoading") : t("appShell.systemPromptLoadHint")}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
 
         </div>
 
@@ -1858,6 +2032,48 @@ export function AppShell() {
               key={sessionKey}
               session={selectedSession}
               newSessionCwd={effectiveNewSessionCwd}
+              newSessionWorkspace={effectiveNewSessionCwd && (
+                <div className="mb-4 flex min-w-0 flex-col gap-2">
+                  <label htmlFor="new-session-workspace" style={{ fontSize: 13, fontWeight: 500, color: "var(--text-muted)" }}>
+                    {t("settingsConfig.chipWorkspace")}
+                  </label>
+                  <select
+                    id="new-session-workspace"
+                    aria-describedby="new-session-workspace-path"
+                    value={effectiveNewSessionCwd}
+                    onChange={(event) => {
+                      const cwd = event.target.value;
+                      if (!cwd) {
+                        setAddProjectOpen(true);
+                        return;
+                      }
+                      if (cwd === effectiveNewSessionCwd) return;
+                      suppressCwdRef.current = cwd;
+                      setActiveCwd(cwd);
+                      handleNewSession("", cwd);
+                    }}
+                    style={{ width: "100%", minWidth: 0, minHeight: 44, padding: "8px 12px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg-panel)", color: "var(--text)", fontSize: 16 }}
+                  >
+                    {!workspaceOptions.projects.some((project) => comparableProjectPath(project.path) === comparableProjectPath(newSessionProject)) && (
+                      <option value={effectiveNewSessionCwd}>{projectLabel(effectiveNewSessionCwd)}</option>
+                    )}
+                    {workspaceOptions.projects.map((project) => {
+                      const current = comparableProjectPath(project.path) === comparableProjectPath(newSessionProject);
+                      const label = project.alias ?? projectLabel(project.path);
+                      const duplicate = workspaceOptions.projects.some((other) => other.path !== project.path && (other.alias ?? projectLabel(other.path)) === label);
+                      return (
+                        <option key={project.path} value={current ? effectiveNewSessionCwd : project.path}>
+                          {duplicate ? `${label} — ${project.path}` : label}
+                        </option>
+                      );
+                    })}
+                    <option value="">+ {t("projects.add")}</option>
+                  </select>
+                  <div id="new-session-workspace-path" style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-mono)", overflowWrap: "anywhere" }}>
+                    {effectiveNewSessionCwd}
+                  </div>
+                </div>
+              )}
               onAgentEnd={handleAgentEnd}
               onSessionCreated={handleSessionCreated}
               onSessionForked={handleSessionForked}
@@ -1871,6 +2087,7 @@ export function AppShell() {
               onSessionStatsPanelOpen={openSessionStatsPanel}
               onGenerationSpeedChange={handleGenerationSpeedChange}
               onOpenProviders={() => setSettingsTab("providers")}
+              toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}
             />
           ) : initialCwdStatus === "validating" ? (
             <div
