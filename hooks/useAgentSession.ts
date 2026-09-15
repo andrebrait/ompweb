@@ -1122,34 +1122,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     });
   }, [catchUp, clearLiveToolResults, consumeQueuedMessage, eventCoalescer]);
 
-  const respondToExtensionUi = useCallback(async (
-    request: ExtensionUiDialogRequest,
-    response: { value: string } | { confirmed: boolean } | { cancelled: true },
-  ) => {
-    const sid = sessionIdRef.current;
-    if (!sid) {
-      setExtensionDialog((current) => current?.id === request.id ? null : current);
-      return;
-    }
-    try {
-      await sendAgentCommand(sid, {
-        type: "extension_ui_response",
-        id: request.id,
-        ...response,
-      });
-    } catch (e) {
-      console.error("Failed to send extension UI response:", e);
-    } finally {
-      // OMP commonly emits the next Ask select immediately after this response.
-      // Keep the current panel mounted for a short hand-off window so the composer
-      // never flashes empty between sequential questions.
-      if (extensionDialogClearTimerRef.current) clearTimeout(extensionDialogClearTimerRef.current);
-      extensionDialogClearTimerRef.current = setTimeout(() => {
-        setExtensionDialog((current) => current?.id === request.id ? null : current);
-        extensionDialogClearTimerRef.current = null;
-      }, 250);
-    }
-  }, []);
 
   // ---------------------------------------------------------------------
   // Host-tool bridge: omp-web registers tools the AGENT can call. The server

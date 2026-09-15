@@ -15,12 +15,76 @@ test("useDictation aborts in-flight transcription and silences transcript on can
   assert.match(source, /return \(\) => \{\s*\n\s*cancelledRef\.current = true;/);
 
   // Late arrival after cancel must not invoke onTranscript or onError
-  assert.match(source, /if \(!cancelledRef\.current\) \{\s*\n\s*onTranscript\(data\.text\.trim\(\)\);/);
+  assert.match(source, /if \(!cancelledRef\.current\) \{\s*\n\s*pendingAudioRef\.current = null;\s*\n\s*onTranscript\(data\.text\.trim\(\)\);/);
 });
 
-test("ChatInput cancels dictation on Escape during both recording and transcribing", async () => {
+test("useDictation supports pause and resume with active-time accounting", async () => {
+  const source = await readFile(new URL("./useDictation.ts", import.meta.url), "utf8");
+
+  // Native MediaRecorder pause/resume
+  assert.match(source, /recorder\.pause\(\)/);
+  assert.match(source, /recorder\.resume\(\)/);
+
+  // Paused time is accumulated so the elapsed clock only counts active time
+  assert.match(source, /captureRef\.current\.pausedAt = performance\.now\(\)/);
+  assert.match(source, /captureRef\.current\.pausedAccum = pausedAccum \+ \(performance\.now\(\) - pausedAt\)/);
+
+  // Pause toggle is a no-op once transcription or an error takes over
+  assert.match(source, /if \(!recorder \|\| isTranscribing \|\| transcribeError\) return;/);
+});
+
+test("useDictation exposes a live analyser for the waveform", async () => {
+  const source = await readFile(new URL("./useDictation.ts", import.meta.url), "utf8");
+
+  assert.match(source, /createMediaStreamSource\(stream\)/);
+  assert.match(source, /createAnalyser\(\)/);
+  assert.match(source, /captureRef\.current\.analyser = analyser/);
+
+  // The AudioContext must be closed on cleanup
+  assert.match(source, /audioContextRef\.current\.close\(\)/);
+});
+
+test("useDictation retains audio after failure and supports retry", async () => {
+  const source = await readFile(new URL("./useDictation.ts", import.meta.url), "utf8");
+
+  // The recorded blob is kept for retry and only dropped on success or discard
+  assert.match(source, /pendingAudioRef\.current = \{ blob, ext \}/);
+  assert.match(source, /pendingAudioRef\.current = null;\s*\n\s*onTranscript/);
+
+  // Retry re-runs transcription with the retained audio
+  assert.match(source, /const retry = useCallback\(\(\) => \{\s*\n\s*const pending = pendingAudioRef\.current;/);
+  assert.match(source, /void runTranscription\(pending\.blob, pending\.ext\)/);
+});
+
+test("useDictation surfaces timeout as an error instead of swallowing it", async () => {
+  const source = await readFile(new URL("./useDictation.ts", import.meta.url), "utf8");
+
+  // The fetch timeout aborts with a TimeoutError reason
+  assert.match(source, /abort\(new DOMException\("Transcription timed out", "TimeoutError"\)\)/);
+
+  // TimeoutError is handled distinctly from the user-cancel AbortError
+  assert.match(source, /err\.name === "TimeoutError"/);
+  assert.match(source, /err\.name === "AbortError"\) return;/);
+});
+
+test("ChatInput replaces the composer with the deck and routes dictation keys at window level", async () => {
   const source = await readFile(new URL("../components/ChatInput.tsx", import.meta.url), "utf8");
 
-  // Escape must guard both isRecording and isTranscribing
-  assert.match(source, /if \(isRecording \|\| isTranscribing\) \{\s*\n\s*if \(e\.key === "Escape"\) \{\s*\n\s*e\.preventDefault\(\);\s*\n\s*cancelDictation\(\);/);
+  // The deck covers every dictation state (recording, paused, transcribing, error)
+  assert.match(source, /isRecording \|\| isPaused \|\| isTranscribing \|\| transcribeError \? \(/);
+
+  // Window-level listener because the textarea is unmounted while the deck shows
+  assert.match(source, /window\.addEventListener\("keydown", onKeyDown\)/);
+  assert.match(source, /if \(e\.key === "Escape"\) \{\s*\n\s*e\.preventDefault\(\);\s*\n\s*cancelDictationAndReset\(\);/);
+});
+
+test("ChatInput supports transcribe-only and transcribe-and-send endings", async () => {
+  const source = await readFile(new URL("../components/ChatInput.tsx", import.meta.url), "utf8");
+
+  // Send mode flags the transcript to be sent once transcription succeeds
+  assert.match(source, /sendAfterDictationRef\.current = true;/);
+  assert.match(source, /void handleSend\(finalText\)/);
+
+  // handleSend accepts the composed dictation text override
+  assert.match(source, /async \(overrideText\?: string\) =>/);
 });
