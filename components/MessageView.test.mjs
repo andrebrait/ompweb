@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import "../tests/setup-dom.mjs";
 import test, { afterEach } from "node:test";
 import React from "react";
-import { cleanup, fireEvent, render } from "@testing-library/react/pure.js";
+import { act, cleanup, fireEvent, render } from "@testing-library/react/pure.js";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createJiti } from "jiti";
 
@@ -19,6 +19,64 @@ test("sent messages without timestamps or branch metadata still offer copy", () 
     message: { role: "user", content: "Keep this message copyable." },
   }));
   assert.match(html, /<button[^>]*aria-label="Copy message"/);
+});
+
+// Plain Copy needs the browser's layout-aware innerText (not implemented by
+// jsdom). Verify code gutters, math, tables, images and spacing in Chromium;
+// do not substitute textContent and claim equivalent coverage here.
+test("message Markdown copy preserves source, excludes activity, and confirms success in Strict Mode", async (t) => {
+  let clipboard = "";
+  const originalMatchMedia = window.matchMedia;
+  window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: async (text) => { clipboard = text; } },
+  });
+  t.after(() => {
+    delete navigator.clipboard;
+    if (originalMatchMedia) window.matchMedia = originalMatchMedia;
+    else delete window.matchMedia;
+  });
+  const source = "# Heading\n\n**Bold** and [link](https://example.com)\n\n```js\n  code();\n```";
+  const messages = [
+    { role: "user", content: source },
+    { role: "assistant", content: [
+      { type: "text", text: source },
+      { type: "thinking", thinking: "Do not copy thinking" },
+      { type: "toolCall", toolCallId: "copy-tool", toolName: "read", input: { path: "not copied" } },
+      { type: "text", text: "## Conclusion\n\nDone." },
+    ] },
+  ];
+  for (const message of messages) {
+    const view = render(React.createElement(React.StrictMode, null, React.createElement(MessageView, { message })));
+    const button = view.getByRole("button", { name: "Copy as Markdown" });
+    await act(async () => { fireEvent.click(button); });
+    assert.equal(clipboard, message.role === "user" ? source : `${source}\n\n## Conclusion\n\nDone.`);
+    assert.equal(button.textContent, "Copied");
+    view.unmount();
+  }
+});
+
+test("plain Copy keeps full oversized message source instead of the reveal control", async (t) => {
+  let clipboard = "";
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: async (text) => { clipboard = text; } },
+  });
+  t.after(() => { delete navigator.clipboard; });
+  const source = "# Keep the full raw source\n\n".repeat(5000);
+  for (const message of [
+    { role: "user", content: source },
+    { role: "assistant", content: [
+      { type: "thinking", thinking: "Do not copy thinking" },
+      { type: "text", text: source },
+    ] },
+  ]) {
+    const view = render(React.createElement(MessageView, { message }));
+    await act(async () => { fireEvent.click(view.getByRole("button", { name: "Copy message" })); });
+    assert.equal(clipboard, source);
+    view.unmount();
+  }
 });
 
 test("expanded grouped tool inputs follow streaming arguments without toggling output", () => {
@@ -123,6 +181,31 @@ test("expanded tool calls show the compact command header", () => {
   assert.match(html, /aria-expanded="true"/);
   assert.match(html, /tool-call-details/);
   assert.match(html, /\$<\/span><code>read foo\.ts<\/code>/);
+});
+
+test("ask tool previews question prompts instead of object coercion", () => {
+  const html = renderToStaticMarkup(React.createElement(MessageView, {
+    isStreaming: true,
+    toolCallsDefaultCollapsed: true,
+    message: {
+      role: "assistant",
+      content: [{
+        type: "toolCall",
+        toolCallId: "call-ask",
+        toolName: "ask",
+        input: {
+          questions: [
+            { header: "Color", question: "Which color do you prefer?", options: [{ label: "Blue" }], multiSelect: false },
+            { header: "Features", question: "Which features should be enabled?", options: [{ label: "Search" }], multiSelect: true },
+          ],
+        },
+      }],
+    },
+  }));
+
+  assert.match(html, /Color: Which color do you prefer\?/);
+  assert.match(html, /Features: Which features should be enabled\?/);
+  assert.doesNotMatch(html, /\[object Object\]/);
 });
 
 test("expanded read output uses compact terminal text without line gutters", () => {
