@@ -7,8 +7,19 @@ export interface UseDictationOptions {
   onError?: (error: string) => void;
 }
 
-const MAX_RECORDING_MS = 300_000;
+export const MAX_RECORDING_MS = 300_000;
 const STT_TIMEOUT_MS = 60_000;
+
+/**
+ * Live capture state polled by RecordingDeck (timer + waveform) without
+ * re-rendering the hook's consumer. Mutated in place; identity is stable.
+ */
+export interface DictationCapture {
+  analyser: AnalyserNode | null;
+  startedAt: number;
+  pausedAccum: number;
+  pausedAt: number | null;
+}
 
 function normalizeErrorMessage(error: unknown, fallback: string): string {
   if (typeof error === "string" && error.trim()) return error;
@@ -21,13 +32,21 @@ function normalizeErrorMessage(error: unknown, fallback: string): string {
 
 export function useDictation({ onTranscript, onError }: UseDictationOptions) {
   const [isRecording, setIsRecording] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [transcribeError, setTranscribeError] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const cancelledRef = useRef(false);
   const isStartingRef = useRef(false);
   const maxTimeoutRef = useRef<number | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const captureRef = useRef<DictationCapture>({ analyser: null, startedAt: 0, pausedAccum: 0, pausedAt: null });
+  // Audio kept after a failed/timed-out transcription so the user can retry
+  // instead of losing the recording.
+  const pendingAudioRef = useRef<{ blob: Blob; ext: string } | null>(null);
+
   const clearMaxTimeout = useCallback(() => {
     if (maxTimeoutRef.current !== null) {
       window.clearTimeout(maxTimeoutRef.current);
@@ -47,7 +66,13 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
+    if (audioContextRef.current) {
+      void audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+    captureRef.current = { analyser: null, startedAt: 0, pausedAccum: 0, pausedAt: null };
     setIsRecording(false);
+    setIsPaused(false);
   }, [clearMaxTimeout]);
 
   useEffect(() => {
@@ -57,9 +82,89 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
         abortControllerRef.current.abort();
         abortControllerRef.current = null;
       }
+      pendingAudioRef.current = null;
       cleanup();
     };
   }, [cleanup]);
+
+  const runTranscription = useCallback(async (blob: Blob, ext: string) => {
+    setIsTranscribing(true);
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    const timeoutId = window.setTimeout(() => {
+      abortController.abort(new DOMException("Transcription timed out", "TimeoutError"));
+    }, STT_TIMEOUT_MS);
+
+    try {
+      const body = new FormData();
+      body.append("file", blob, ext);
+
+      const res = await fetch("/api/stt", {
+        method: "POST",
+        body,
+        signal: abortController.signal,
+      });
+      if (cancelledRef.current) return;
+      const data = await res.json();
+      if (cancelledRef.current) return;
+      if (!res.ok) {
+        const message = normalizeErrorMessage(data?.error, "Transcription failed");
+        setTranscribeError(message);
+        onError?.(message);
+        return;
+      }
+      if (typeof data.text === "string" && data.text.trim()) {
+        if (!cancelledRef.current) {
+          pendingAudioRef.current = null;
+          onTranscript(data.text.trim());
+        }
+      } else if (!cancelledRef.current) {
+        const message = "No speech detected";
+        setTranscribeError(message);
+        onError?.(message);
+      }
+    } catch (err) {
+      if (cancelledRef.current) return;
+      if (err instanceof DOMException && err.name === "TimeoutError") {
+        const message = "Transcription timed out";
+        setTranscribeError(message);
+        onError?.(message);
+        return;
+      }
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      const message = err instanceof Error ? err.message : normalizeErrorMessage(err, "Transcription failed");
+      setTranscribeError(message);
+      onError?.(message);
+    } finally {
+      window.clearTimeout(timeoutId);
+      if (abortControllerRef.current === abortController) {
+        abortControllerRef.current = null;
+      }
+      setIsTranscribing(false);
+    }
+  }, [onTranscript, onError]);
+
+  // Ends capture and moves the session into transcription. Sets isTranscribing
+  // eagerly so the deck never flashes back to the text composer between
+  // recorder.stop() and the async onstop event.
+  const finishCapture = useCallback(() => {
+    if (!isRecording) return;
+    clearMaxTimeout();
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      try {
+        recorder.stop();
+      } catch {}
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    setIsRecording(false);
+    setIsPaused(false);
+    setIsTranscribing(true);
+  }, [isRecording, clearMaxTimeout]);
+
   const start = useCallback(async () => {
     if (isStartingRef.current || isRecording || isTranscribing) return;
     isStartingRef.current = true;
@@ -69,6 +174,9 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
       abortControllerRef.current = null;
     }
     cancelledRef.current = false;
+    pendingAudioRef.current = null;
+    setTranscribeError(null);
+    setIsTranscribing(false);
     if (
       typeof navigator?.mediaDevices?.getUserMedia !== "function" ||
       typeof window === "undefined" ||
@@ -82,6 +190,20 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
+      captureRef.current = { analyser: null, startedAt: performance.now(), pausedAccum: 0, pausedAt: null };
+      if (typeof window.AudioContext === "function") {
+        try {
+          const ctx = new AudioContext();
+          if (ctx.state === "suspended") void ctx.resume();
+          const source = ctx.createMediaStreamSource(stream);
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 256;
+          source.connect(analyser);
+          audioContextRef.current = ctx;
+          captureRef.current.analyser = analyser;
+        } catch {}
+      }
+
       const recorder = new MediaRecorder(stream);
       mediaRecorderRef.current = recorder;
       const chunks: Blob[] = [];
@@ -90,75 +212,24 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
         if (event.data.size > 0) chunks.push(event.data);
       };
 
-      recorder.onstop = async () => {
+      recorder.onstop = () => {
         if (cancelledRef.current) return;
         clearMaxTimeout();
-        if (chunks.length === 0) return;
-        setIsTranscribing(true);
-        const abortController = new AbortController();
-        abortControllerRef.current = abortController;
-        const timeoutId = window.setTimeout(() => {
-          abortController.abort(new DOMException("Transcription timed out", "TimeoutError"));
-        }, STT_TIMEOUT_MS);
-
-        try {
-          const mimeType = recorder.mimeType || "audio/webm";
-          const blob = new Blob(chunks, { type: mimeType });
-          const ext = mimeType.includes("mp4") ? "audio.mp4" : mimeType.includes("ogg") ? "audio.ogg" : "audio.webm";
-          const body = new FormData();
-          body.append("file", blob, ext);
-
-          const res = await fetch("/api/stt", {
-            method: "POST",
-            body,
-            signal: abortController.signal,
-          });
-          if (cancelledRef.current) return;
-          const data = await res.json();
-          if (cancelledRef.current) return;
-          if (!res.ok) {
-            onError?.(normalizeErrorMessage(data?.error, "Transcription failed"));
-            return;
-          }
-          if (typeof data.text === "string" && data.text.trim()) {
-            if (!cancelledRef.current) {
-              onTranscript(data.text.trim());
-            }
-          } else {
-            if (!cancelledRef.current) {
-              onError?.("No speech detected");
-            }
-          }
-        } catch (err) {
-          if (cancelledRef.current) return;
-          if (err instanceof DOMException && err.name === "AbortError") return;
-          onError?.(
-            err instanceof Error
-              ? err.message
-              : normalizeErrorMessage(err, "Transcription failed"),
-          );
-        } finally {
-          window.clearTimeout(timeoutId);
-          if (abortControllerRef.current === abortController) {
-            abortControllerRef.current = null;
-          }
+        if (chunks.length === 0) {
           setIsTranscribing(false);
+          return;
         }
+        const mimeType = recorder.mimeType || "audio/webm";
+        const blob = new Blob(chunks, { type: mimeType });
+        const ext = mimeType.includes("mp4") ? "audio.mp4" : mimeType.includes("ogg") ? "audio.ogg" : "audio.webm";
+        pendingAudioRef.current = { blob, ext };
+        void runTranscription(blob, ext);
       };
 
       recorder.start();
       setIsRecording(true);
       maxTimeoutRef.current = window.setTimeout(() => {
-        if (mediaRecorderRef.current?.state === "recording") {
-          try {
-            mediaRecorderRef.current.stop();
-          } catch {}
-        }
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach((track) => track.stop());
-          streamRef.current = null;
-        }
-        setIsRecording(false);
+        finishCapture();
       }, MAX_RECORDING_MS);
     } catch (err) {
       cleanup();
@@ -166,22 +237,25 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
     } finally {
       isStartingRef.current = false;
     }
-  }, [isRecording, isTranscribing, cleanup, clearMaxTimeout, onTranscript, onError]);
+  }, [isRecording, isTranscribing, cleanup, clearMaxTimeout, runTranscription, onError, finishCapture]);
 
-  const stop = useCallback(() => {
-    if (!isRecording) return;
-    clearMaxTimeout();
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-      try {
-        mediaRecorderRef.current.stop();
-      } catch {}
+  const togglePause = useCallback(() => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || isTranscribing || transcribeError) return;
+    if (recorder.state === "recording") {
+      recorder.pause();
+      captureRef.current.pausedAt = performance.now();
+      setIsPaused(true);
+    } else if (recorder.state === "paused") {
+      recorder.resume();
+      const { pausedAt, pausedAccum } = captureRef.current;
+      if (pausedAt !== null) {
+        captureRef.current.pausedAccum = pausedAccum + (performance.now() - pausedAt);
+      }
+      captureRef.current.pausedAt = null;
+      setIsPaused(false);
     }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-    }
-    setIsRecording(false);
-  }, [isRecording, clearMaxTimeout]);
+  }, [isTranscribing, transcribeError]);
 
   const cancel = useCallback(() => {
     cancelledRef.current = true;
@@ -189,14 +263,35 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
+    pendingAudioRef.current = null;
+    setTranscribeError(null);
     setIsTranscribing(false);
     cleanup();
   }, [cleanup]);
 
-  const toggle = useCallback(() => {
-    if (isRecording) stop();
-    else void start();
-  }, [isRecording, start, stop]);
+  const retry = useCallback(() => {
+    const pending = pendingAudioRef.current;
+    if (!pending || isTranscribing) return;
+    setTranscribeError(null);
+    void runTranscription(pending.blob, pending.ext);
+  }, [isTranscribing, runTranscription]);
 
-  return { isRecording, isTranscribing, start, stop, cancel, toggle };
+  const toggle = useCallback(() => {
+    if (isRecording) finishCapture();
+    else void start();
+  }, [isRecording, start, finishCapture]);
+
+  return {
+    isRecording,
+    isPaused,
+    isTranscribing,
+    transcribeError,
+    captureRef,
+    start,
+    stop: finishCapture,
+    cancel,
+    toggle,
+    togglePause,
+    retry,
+  };
 }

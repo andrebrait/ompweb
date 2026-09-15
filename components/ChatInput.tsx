@@ -11,6 +11,7 @@ import { useDictation } from "@/hooks/useDictation";
 import type { GenerationSpeedInfo, SessionStatsInfo } from "@/lib/pi-types";
 import { formatCompactNumber, formatPercent } from "@/lib/format";
 import { ContextDetailPanel } from "./ComposerPanels";
+import { RecordingDeck } from "./RecordingDeck";
 import { clearDraft, getDraft, setDraft } from "@/lib/draft-store";
 import { expandWebSlashCommand } from "@/lib/web-slash-commands";
 import type { AttachedImage, AttachedTextFile } from "./ChatInput-draft-attachments";
@@ -359,22 +360,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     });
   }, []);
 
-  const { isRecording, isTranscribing, toggle: toggleDictation, cancel: cancelDictation, stop: stopDictation } = useDictation({
-    onTranscript: insertTextAtCursor,
-    onError: (err) => {
-      const msg =
-        err === "Microphone not supported in this browser or context"
-          ? t("chatInput.dictationNotSupported")
-          : err === "Microphone access denied"
-          ? t("chatInput.dictationPermissionDenied")
-          : err === "No speech detected"
-          ? t("chatInput.dictationNoSpeech")
-          : err === "Transcription failed"
-          ? t("chatInput.dictationFailed")
-          : err;
-      toast.error(msg);
-    },
-  });
 
   useImperativeHandle(ref, () => ({
     focus() {
@@ -663,8 +648,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     return error !== null;
   }, []);
 
-  const handleSend = useCallback(async () => {
-    const msg = value.trim();
+  const handleSend = useCallback(async (overrideText?: string) => {
+    const raw = overrideText ?? value;
+    const msg = raw.trim();
     if (!msg && !attachedImages.length && !attachedTextFiles.length) return;
     if (isStreaming) return;
     onAudioUnlock?.();
@@ -672,12 +658,12 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     if (!attachedImages.length && !attachedTextFiles.length && msg.startsWith("/") && onBuiltinCommand) {
       const expansion = expandWebSlashCommand(msg);
       if (expansion.kind === "expand" && rejectsOversizedPrompt(expansion.prompt, attachedImages)) return;
-      const sentValue = value;
+      const sentValue = overrideText ?? value;
       const result = await onBuiltinCommand(msg);
       if (result.handled) {
         // The user may have started typing while the command ran; only clear
         // if the composer still holds what was sent.
-        if (!result.error && !result.retainInput && valueRef.current === sentValue) clearInput();
+        if (!result.error && !result.retainInput && (overrideText !== undefined || valueRef.current === sentValue)) clearInput();
         return;
       }
     }
@@ -685,6 +671,78 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     onSend(composedMessage, attachedImages.length ? attachedImages : undefined);
     clearInput();
   }, [value, attachedImages, attachedTextFiles, isStreaming, onBuiltinCommand, onSend, clearInput, onAudioUnlock, rejectsOversizedPrompt]);
+  const sendAfterDictationRef = useRef(false);
+  const {
+    isRecording,
+    isPaused,
+    isTranscribing,
+    transcribeError,
+    captureRef,
+    toggle: toggleDictation,
+    cancel: cancelDictation,
+    stop: stopDictation,
+    togglePause: togglePauseDictation,
+    retry: retryDictation,
+  } = useDictation({
+    onTranscript: (text) => {
+      const shouldSend = sendAfterDictationRef.current;
+      sendAfterDictationRef.current = false;
+      const base = valueRef.current;
+      const sep = base.length > 0 && !base.endsWith(" ") ? " " : "";
+      const finalText = base + sep + text;
+      insertTextAtCursor(text);
+      if (shouldSend) {
+        void handleSend(finalText);
+      } else {
+        toast.success(t("chatInput.dictationSuccess"));
+      }
+    },
+    onError: (err) => {
+      const msg =
+        err === "Microphone not supported in this browser or context"
+          ? t("chatInput.dictationNotSupported")
+          : err === "Microphone access denied"
+          ? t("chatInput.dictationPermissionDenied")
+          : err === "No speech detected"
+          ? t("chatInput.dictationNoSpeech")
+          : err === "Transcription timed out"
+          ? t("chatInput.dictationTimedOut")
+          : err === "Transcription failed"
+          ? t("chatInput.dictationFailed")
+          : err;
+      toast.error(msg);
+    },
+  });
+  const stopAndInsertDictation = useCallback(() => {
+    sendAfterDictationRef.current = false;
+    stopDictation();
+  }, [stopDictation]);
+  const stopAndSendDictation = useCallback(() => {
+    sendAfterDictationRef.current = true;
+    stopDictation();
+  }, [stopDictation]);
+  const cancelDictationAndReset = useCallback(() => {
+    sendAfterDictationRef.current = false;
+    cancelDictation();
+  }, [cancelDictation]);
+  // While the recording deck replaces the textarea there is no focused input,
+  // so Escape/Enter are handled at window level: Escape cancels/discard, Enter
+  // retries after an error or converts the recording to text.
+  useEffect(() => {
+    if (!(isRecording || isPaused || isTranscribing || transcribeError)) return;
+    const onKeyDown = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cancelDictationAndReset();
+      } else if (e.key === "Enter" && !e.shiftKey && !isTranscribing) {
+        e.preventDefault();
+        if (transcribeError) retryDictation();
+        else stopAndInsertDictation();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isRecording, isPaused, isTranscribing, transcribeError, cancelDictationAndReset, retryDictation, stopAndInsertDictation]);
 
   const slashQuery = value.startsWith("/") && !/\s/.test(value.slice(1))
     ? value.slice(1).toLowerCase()
@@ -1130,18 +1188,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         if (recentlyComposed) e.preventDefault();
         return;
       }
-      if (isRecording || isTranscribing) {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          cancelDictation();
-          return;
-        }
-        if (isRecording && e.key === "Enter" && !e.shiftKey) {
-          e.preventDefault();
-          stopDictation();
-          return;
-        }
-      }
       if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "m") {
         e.preventDefault();
         toggleDictation();
@@ -1268,7 +1314,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         }
       }
     },
-    [isMobile, isStreaming, onSteer, onFollowUp, onAbort, onMinimize, slashMenuOpen, slashQuery, filteredSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, historyMenuOpen, inputHistory, historyActiveIndex, applyHistoryInput, value, isRecording, isTranscribing, cancelDictation, stopDictation, toggleDictation]
+    [isMobile, isStreaming, onSteer, onFollowUp, onAbort, onMinimize, slashMenuOpen, slashQuery, filteredSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, historyMenuOpen, inputHistory, historyActiveIndex, applyHistoryInput, value, toggleDictation]
   );
 
   const handleInput = useCallback(() => {
@@ -2241,6 +2287,19 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               transition: "border-color var(--dur-fast) var(--ease-out-warm), background var(--dur-fast) var(--ease-out-warm), box-shadow var(--dur-fast) var(--ease-out-warm)",
             } as React.CSSProperties}
           >
+          {isRecording || isPaused || isTranscribing || transcribeError ? (
+            <RecordingDeck
+              captureRef={captureRef}
+              isPaused={isPaused}
+              isTranscribing={isTranscribing}
+              transcribeError={transcribeError}
+              onPauseResume={togglePauseDictation}
+              onConvert={stopAndInsertDictation}
+              onSend={stopAndSendDictation}
+              onCancel={cancelDictationAndReset}
+              onRetry={retryDictation}
+            />
+          ) : (
           <textarea
             ref={textareaRef}
             value={value}
@@ -2282,6 +2341,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               overflow: "auto",
             }}
           />
+          )}
 
           {/* Toolbar: plus menu · model · reasoning · fast · compact · send/queue/stop */}
           <div className="composer-toolbar" style={{
@@ -2858,7 +2918,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               <button
                 type="button"
                 className="composer-primary-action"
-                onClick={handleSend}
+                onClick={() => void handleSend()}
                 disabled={!value.trim() && !attachedImages.length && !attachedTextFiles.length}
                 style={{
                   display: "flex", alignItems: "center", gap: 6,
