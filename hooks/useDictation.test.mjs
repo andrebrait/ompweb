@@ -82,7 +82,7 @@ test("ChatInput supports transcribe-only and transcribe-and-send endings", async
   const source = await readFile(new URL("../components/ChatInput.tsx", import.meta.url), "utf8");
 
   // Send mode flags the transcript to be sent once transcription succeeds
-  assert.match(source, /sendAfterDictationRef\.current = true;/);
+  assert.match(source, /dictationAfterRef\.current = "send";/);
   assert.match(source, /void handleSend\(finalText\)/);
 
   // handleSend accepts the composed dictation text override
