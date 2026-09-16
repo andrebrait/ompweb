@@ -260,7 +260,6 @@
   "chatInput.plusOff": "Off",
   "chatInput.attachImage": "Attach image",
   "chatInput.startDictation": "Start dictation",
-  "chatInput.stopDictation": "Stop dictation",
   "chatInput.transcribing": "Transcribing...",
   "chatInput.dictationFailed": "Transcription failed",
   "chatInput.dictationNoSpeech": "No speech detected",

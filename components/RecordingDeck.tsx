@@ -7,7 +7,6 @@ import { useI18n } from "@/lib/i18n";
 
 const WAVE_WIDTH = 160;
 const WAVE_HEIGHT = 28;
-const BAR_COUNT = 40;
 const SAMPLE_INTERVAL_MS = 50;
 const BAR_SCALE = 3;
 
@@ -47,13 +46,13 @@ function DeckIconButton({
         display: "flex", alignItems: "center", justifyContent: "center",
         width: 28, height: 28, padding: 0, flexShrink: 0,
         background:
-          tone === "danger" ? "var(--danger-subtle, rgba(239, 68, 68, 0.15))"
+          tone === "danger" ? "color-mix(in srgb, var(--status-error) 15%, transparent)"
           : tone === "accent" ? "var(--bg-subtle)"
           : "var(--bg-subtle)",
-        border: `1px solid ${tone === "danger" ? "var(--danger, #ef4444)" : tone === "accent" ? "var(--accent)" : "var(--border)"}`,
+        border: `1px solid ${tone === "danger" ? "var(--status-error)" : tone === "accent" ? "var(--accent)" : "var(--border)"}`,
         borderRadius: 7,
         color:
-          tone === "danger" ? "var(--danger, #ef4444)"
+          tone === "danger" ? "var(--status-error)"
           : tone === "accent" ? "var(--accent)"
           : "var(--text-muted)",
         cursor: "pointer",
@@ -110,12 +109,10 @@ export function RecordingDeck({
     if (!ctx) return;
 
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = WAVE_WIDTH * dpr;
-    canvas.height = WAVE_HEIGHT * dpr;
-    ctx.scale(dpr, dpr);
+    let lastW = 0;
 
     const style = getComputedStyle(canvas);
-    const barColor = (isPaused ? style.getPropertyValue("--text-muted") : style.getPropertyValue("--danger")).trim() || (isPaused ? "#888" : "#ef4444");
+    const barColor = (isPaused ? style.getPropertyValue("--text-muted") : style.getPropertyValue("--status-error")).trim();
 
     const data = new Uint8Array(256);
     let raf = 0;
@@ -123,8 +120,18 @@ export function RecordingDeck({
 
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
-      const analyser = captureRef.current?.analyser ?? null;
+      // The canvas flexes with the composer; re-fit the backing store whenever
+      // its CSS width changes (mobile <-> desktop, panel resizes).
+      const cssW = Math.max(1, canvas.clientWidth || WAVE_WIDTH);
+      if (cssW !== lastW) {
+        lastW = cssW;
+        canvas.width = cssW * dpr;
+        canvas.height = WAVE_HEIGHT * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+      const barCount = Math.max(24, Math.min(80, Math.floor(cssW / 6)));
       const bars = barsRef.current;
+      const analyser = captureRef.current?.analyser ?? null;
       if (analyser && !isPaused && now - lastPush >= SAMPLE_INTERVAL_MS) {
         lastPush = now;
         analyser.getByteTimeDomainData(data);
@@ -135,15 +142,20 @@ export function RecordingDeck({
         }
         const rms = Math.sqrt(sum / data.length);
         bars.push(Math.min(1, rms * BAR_SCALE));
-        if (bars.length > BAR_COUNT) bars.shift();
+        while (bars.length > barCount) bars.shift();
       }
-      ctx.clearRect(0, 0, WAVE_WIDTH, WAVE_HEIGHT);
+      while (bars.length > barCount) bars.shift();
+
+      ctx.clearRect(0, 0, cssW, WAVE_HEIGHT);
       ctx.fillStyle = barColor;
       const gap = 2;
-      const barW = (WAVE_WIDTH - gap * (BAR_COUNT - 1)) / BAR_COUNT;
-      for (let i = 0; i < bars.length; i++) {
-        const h = Math.max(2, bars[i] * (WAVE_HEIGHT - 2));
-        ctx.fillRect(i * (barW + gap), (WAVE_HEIGHT - h) / 2, barW, h);
+      const barW = Math.max(1, (cssW - gap * (barCount - 1)) / barCount);
+      // Newest samples hug the buttons (right edge); history trails left.
+      const visible = bars.slice(-barCount);
+      const offset = cssW - visible.length * (barW + gap) + gap;
+      for (let i = 0; i < visible.length; i++) {
+        const h = Math.max(2, visible[i] * (WAVE_HEIGHT - 2));
+        ctx.fillRect(offset + i * (barW + gap), (WAVE_HEIGHT - h) / 2, barW, h);
       }
     };
     raf = requestAnimationFrame(draw);
@@ -167,13 +179,13 @@ export function RecordingDeck({
         <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-muted)", fontSize: 12 }}>
           <Loader2 size={14} strokeWidth={1.8} className="animate-spin" aria-hidden="true" />
           <span style={{ flexShrink: 0 }}>{t("chatInput.transcribing")}</span>
-          <div style={{ flex: 1, maxWidth: 220, height: 3, borderRadius: 2, background: "var(--border)", overflow: "hidden", position: "relative" }}>
+          <div style={{ flex: 1, height: 3, borderRadius: 2, background: "var(--border)", overflow: "hidden", position: "relative" }}>
             <div className="dictation-indeterminate" style={{ position: "absolute", top: 0, bottom: 0, width: "40%", background: "var(--accent)", borderRadius: 2 }} />
           </div>
         </div>
       ) : transcribeError ? (
         <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text)", minWidth: 0 }}>
-          <AlertCircle size={14} strokeWidth={1.8} aria-hidden="true" style={{ color: "var(--danger, #ef4444)", flexShrink: 0 }} />
+          <AlertCircle size={14} strokeWidth={1.8} aria-hidden="true" style={{ color: "var(--status-error)", flexShrink: 0 }} />
           <span title={transcribeError} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
             {transcribeError}
           </span>
@@ -186,7 +198,7 @@ export function RecordingDeck({
           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
             <span
               aria-hidden="true"
-              style={{ width: 8, height: 8, borderRadius: "50%", background: isPaused ? "var(--text-muted)" : "var(--danger, #ef4444)", flexShrink: 0 }}
+              style={{ width: 8, height: 8, borderRadius: "50%", background: isPaused ? "var(--text-muted)" : "var(--status-error)", flexShrink: 0 }}
             />
             <span
               style={{
@@ -199,7 +211,7 @@ export function RecordingDeck({
             >
               {formatElapsed(elapsed)}
             </span>
-            <canvas ref={canvasRef} style={{ width: WAVE_WIDTH, height: WAVE_HEIGHT, flexShrink: 1, minWidth: 0, alignSelf: "center" }} aria-hidden="true" />
+            <canvas ref={canvasRef} style={{ flex: 1, minWidth: 0, height: WAVE_HEIGHT, alignSelf: "center" }} aria-hidden="true" />
             <div style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: "auto", flexShrink: 0 }}>
               <DeckIconButton onClick={onPauseResume} title={isPaused ? t("chatInput.resumeDictation") : t("chatInput.pauseDictation")}>
                 {isPaused ? <Play size={14} strokeWidth={1.8} aria-hidden="true" /> : <Pause size={14} strokeWidth={1.8} aria-hidden="true" />}
@@ -220,7 +232,7 @@ export function RecordingDeck({
               style={{
                 height: "100%",
                 width: `${Math.min(100, (elapsed / MAX_RECORDING_MS) * 100)}%`,
-                background: "var(--danger, #ef4444)",
+                background: "var(--status-error)",
                 transition: "width 0.1s linear",
               }}
             />

@@ -651,13 +651,13 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const handleSend = useCallback(async (overrideText?: string) => {
     const raw = overrideText ?? value;
     const msg = raw.trim();
-    if (!msg && !attachedImages.length && !attachedTextFiles.length) return;
+    if (!msg && !attachedImagesRef.current.length && !attachedTextFilesRef.current.length) return;
     if (isStreaming) return;
     onAudioUnlock?.();
-    const composedMessage = composeMessageWithTextAttachments(msg, attachedTextFiles);
-    if (!attachedImages.length && !attachedTextFiles.length && msg.startsWith("/") && onBuiltinCommand) {
+    const composedMessage = composeMessageWithTextAttachments(msg, attachedTextFilesRef.current);
+    if (!attachedImagesRef.current.length && !attachedTextFilesRef.current.length && msg.startsWith("/") && onBuiltinCommand) {
       const expansion = expandWebSlashCommand(msg);
-      if (expansion.kind === "expand" && rejectsOversizedPrompt(expansion.prompt, attachedImages)) return;
+      if (expansion.kind === "expand" && rejectsOversizedPrompt(expansion.prompt, attachedImagesRef.current)) return;
       const sentValue = overrideText ?? value;
       const result = await onBuiltinCommand(msg);
       if (result.handled) {
@@ -667,10 +667,10 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         return;
       }
     }
-    if (rejectsOversizedPrompt(composedMessage, attachedImages)) return;
-    onSend(composedMessage, attachedImages.length ? attachedImages : undefined);
+    if (rejectsOversizedPrompt(composedMessage, attachedImagesRef.current)) return;
+    onSend(composedMessage, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
     clearInput();
-  }, [value, attachedImages, attachedTextFiles, isStreaming, onBuiltinCommand, onSend, clearInput, onAudioUnlock, rejectsOversizedPrompt]);
+  }, [value, isStreaming, onBuiltinCommand, onSend, clearInput, onAudioUnlock, rejectsOversizedPrompt]);
   /** What happens to the composer after the transcript lands: null inserts it
    *  for editing; "send" dispatches immediately; "steer"/"followup" queue it
    *  into the running agent. */
@@ -1039,8 +1039,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const sendQueued = useCallback((mode: "steer" | "followup", overrideText?: string) => {
     const raw = overrideText ?? value;
     const msg = raw.trim();
-    if (!msg && !attachedImages.length && !attachedTextFiles.length) return;
-    if (attachedImages.length || attachedTextFiles.length) return;
+    if (!msg && !attachedImagesRef.current.length && !attachedTextFilesRef.current.length) return;
+    if (attachedImagesRef.current.length || attachedTextFilesRef.current.length) return;
     onAudioUnlock?.();
     const streamingBehavior = mode === "steer" ? "steer" : "followUp";
     if (msg.startsWith("/") && onPromptWithStreamingBehavior) {
@@ -1057,8 +1057,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       // own ACP handlers can run them.
       const expansion = expandWebSlashCommand(msg);
       if (expansion.kind === "expand") {
-        if (rejectsOversizedPrompt(expansion.prompt, attachedImages)) return;
-        onPromptWithStreamingBehavior(expansion.prompt, streamingBehavior, attachedImages.length ? attachedImages : undefined);
+        if (rejectsOversizedPrompt(expansion.prompt, attachedImagesRef.current)) return;
+        onPromptWithStreamingBehavior(expansion.prompt, streamingBehavior, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
         clearInput();
         return;
       }
@@ -1069,19 +1069,19 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         }));
         return;
       }
-      if (rejectsOversizedPrompt(msg, attachedImages)) return;
-      onPromptWithStreamingBehavior(msg, streamingBehavior, attachedImages.length ? attachedImages : undefined);
+      if (rejectsOversizedPrompt(msg, attachedImagesRef.current)) return;
+      onPromptWithStreamingBehavior(msg, streamingBehavior, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
       clearInput();
       return;
     }
-    if (rejectsOversizedPrompt(msg, attachedImages)) return;
+    if (rejectsOversizedPrompt(msg, attachedImagesRef.current)) return;
     if (mode === "steer" && onSteer) {
-      onSteer(msg, attachedImages.length ? attachedImages : undefined);
+      onSteer(msg, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
     } else if (mode === "followup" && onFollowUp) {
-      onFollowUp(msg, attachedImages.length ? attachedImages : undefined);
+      onFollowUp(msg, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
     }
     clearInput();
-  }, [value, attachedImages, attachedTextFiles, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, t, advisorEnabled, rejectsOversizedPrompt]);
+  }, [value, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, t, advisorEnabled, rejectsOversizedPrompt]);
   // A typed, text-only message during a run is a queued follow-up — and so is
   // a dictation in progress: the primary button must take the same state it
   // would have if the composer already held text. Keep Stop as the action
@@ -2869,10 +2869,10 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center",
                   width: 28, height: 28, padding: 0,
-                  background: "var(--danger-subtle, rgba(239, 68, 68, 0.15))",
-                  border: "1px solid var(--danger, #ef4444)",
+                  background: "color-mix(in srgb, var(--status-error) 15%, transparent)",
+                  border: "1px solid var(--status-error)",
                   borderRadius: 7,
-                  color: "var(--danger, #ef4444)",
+                  color: "var(--status-error)",
                   cursor: "pointer",
                   transition: "background var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm)",
                 }}
