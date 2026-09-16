@@ -197,7 +197,6 @@ export function RecordingDeck({
           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
             <span
               aria-hidden="true"
-              className="live-pulse"
               style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--danger, #ef4444)", flexShrink: 0 }}
             />
             <span
@@ -211,7 +210,7 @@ export function RecordingDeck({
             >
               {formatElapsed(elapsed)}
             </span>
-            <canvas ref={canvasRef} style={{ width: WAVE_WIDTH, height: WAVE_HEIGHT, flexShrink: 1 }} aria-hidden="true" />
+            <canvas ref={canvasRef} style={{ width: WAVE_WIDTH, height: WAVE_HEIGHT, flexShrink: 1, minWidth: 0, alignSelf: "center" }} aria-hidden="true" />
             <div style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: "auto", flexShrink: 0 }}>
               <DeckIconButton onClick={onPauseResume} title={isPaused ? t("chatInput.resumeDictation") : t("chatInput.pauseDictation")}>
                 {isPaused ? <Play size={14} strokeWidth={1.8} aria-hidden="true" /> : <Pause size={14} strokeWidth={1.8} aria-hidden="true" />}
