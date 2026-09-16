@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { AlertCircle, Loader2, Pause, Play, RotateCw, Square, X } from "lucide-react";
+import { AlertCircle, Loader2, Pause, Play, RotateCw, Square } from "lucide-react";
 import { MAX_RECORDING_MS, type DictationCapture } from "@/hooks/useDictation";
 import { useI18n } from "@/lib/i18n";
 
@@ -18,8 +18,6 @@ interface RecordingDeckProps {
   transcribeError: string | null;
   onPauseResume: () => void;
   onConvert: () => void;
-  onSend: () => void;
-  onCancel: () => void;
   onRetry: () => void;
 }
 
@@ -73,10 +71,15 @@ export function RecordingDeck({
   transcribeError,
   onPauseResume,
   onConvert,
-  onSend,
-  onCancel,
   onRetry,
 }: RecordingDeckProps) {
+  const { t } = useI18n();
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const barsRef = useRef<number[]>([]);
+  const [elapsed, setElapsed] = useState(0);
+
+  const captureActive = !isTranscribing && !transcribeError;
+
   useEffect(() => {
     const compute = () => {
       const capture = captureRef.current;
@@ -99,12 +102,6 @@ export function RecordingDeck({
     const id = window.setInterval(compute, 100);
     return () => window.clearInterval(id);
   }, [captureRef]);
-  const { t } = useI18n();
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [elapsed, setElapsed] = useState(0);
-
-  const captureActive = !isTranscribing && !transcribeError;
-
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -120,15 +117,15 @@ export function RecordingDeck({
     const style = getComputedStyle(canvas);
     const barColor = (isPaused ? style.getPropertyValue("--text-muted") : style.getPropertyValue("--danger")).trim() || (isPaused ? "#888" : "#ef4444");
 
-    const bars: number[] = [];
     const data = new Uint8Array(256);
     let raf = 0;
     let lastPush = 0;
 
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
-      const analyser = (isPaused ? null : captureRef.current?.analyser) ?? null;
-      if (analyser && now - lastPush >= SAMPLE_INTERVAL_MS) {
+      const analyser = captureRef.current?.analyser ?? null;
+      const bars = barsRef.current;
+      if (analyser && !isPaused && now - lastPush >= SAMPLE_INTERVAL_MS) {
         lastPush = now;
         analyser.getByteTimeDomainData(data);
         let sum = 0;
@@ -142,14 +139,12 @@ export function RecordingDeck({
       }
       ctx.clearRect(0, 0, WAVE_WIDTH, WAVE_HEIGHT);
       ctx.fillStyle = barColor;
-      ctx.globalAlpha = isPaused ? 0.45 : 1;
       const gap = 2;
       const barW = (WAVE_WIDTH - gap * (BAR_COUNT - 1)) / BAR_COUNT;
       for (let i = 0; i < bars.length; i++) {
         const h = Math.max(2, bars[i] * (WAVE_HEIGHT - 2));
         ctx.fillRect(i * (barW + gap), (WAVE_HEIGHT - h) / 2, barW, h);
       }
-      ctx.globalAlpha = 1;
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
@@ -175,9 +170,6 @@ export function RecordingDeck({
           <div style={{ flex: 1, maxWidth: 220, height: 3, borderRadius: 2, background: "var(--border)", overflow: "hidden", position: "relative" }}>
             <div className="dictation-indeterminate" style={{ position: "absolute", top: 0, bottom: 0, width: "40%", background: "var(--accent)", borderRadius: 2 }} />
           </div>
-          <DeckIconButton onClick={onCancel} title={t("chatInput.cancelDictation")} tone="danger">
-            <X size={14} strokeWidth={1.8} aria-hidden="true" />
-          </DeckIconButton>
         </div>
       ) : transcribeError ? (
         <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text)", minWidth: 0 }}>
@@ -188,16 +180,13 @@ export function RecordingDeck({
           <DeckIconButton onClick={onRetry} title={t("chatInput.retryDictation")} tone="accent">
             <RotateCw size={14} strokeWidth={1.8} aria-hidden="true" />
           </DeckIconButton>
-          <DeckIconButton onClick={onCancel} title={t("chatInput.discardDictation")} tone="danger">
-            <X size={14} strokeWidth={1.8} aria-hidden="true" />
-          </DeckIconButton>
         </div>
       ) : (
         <>
           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
             <span
               aria-hidden="true"
-              style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--danger, #ef4444)", flexShrink: 0 }}
+              style={{ width: 8, height: 8, borderRadius: "50%", background: isPaused ? "var(--text-muted)" : "var(--danger, #ef4444)", flexShrink: 0 }}
             />
             <span
               style={{
@@ -217,15 +206,6 @@ export function RecordingDeck({
               </DeckIconButton>
               <DeckIconButton onClick={onConvert} title={t("chatInput.convertDictation")}>
                 <Square size={11} strokeWidth={2} aria-hidden="true" />
-              </DeckIconButton>
-              <DeckIconButton onClick={onSend} title={t("chatInput.sendDictation")} tone="accent">
-                <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <line x1="2" y1="7" x2="11" y2="7" />
-                  <polyline points="7.5 3 12 7 7.5 11" />
-                </svg>
-              </DeckIconButton>
-              <DeckIconButton onClick={onCancel} title={t("chatInput.cancelDictation")} tone="danger">
-                <X size={14} strokeWidth={1.8} aria-hidden="true" />
               </DeckIconButton>
             </div>
           </div>
