@@ -749,6 +749,10 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         e.preventDefault();
         cancelDictationAndReset();
       } else if (e.key === "Enter" && !e.shiftKey && !isTranscribing) {
+        // Let focused deck/toolbar controls keep their own activation;
+        // only hijack Enter from the non-interactive page context.
+        const target = e.target as HTMLElement | null;
+        if (target && target.closest("button, input, textarea, select, a, [role='button']")) return;
         e.preventDefault();
         if (transcribeError) retryDictation();
         else stopAndInsertDictation();
