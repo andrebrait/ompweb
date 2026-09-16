@@ -1,8 +1,12 @@
+import { execFile } from "child_process";
 import { existsSync, promises as fs } from "fs";
 import { homedir } from "os";
 import * as path from "path";
+import { promisify } from "util";
 import { parse as parseYaml } from "yaml";
 import { getAgentDir } from "@/lib/omp/paths";
+import { resolveOmpBin } from "@/lib/omp/omp-cli";
+import { isRecord } from "@/lib/type-guards";
 import type { SkillInfo } from "@/lib/api-types";
 import { annotateSkillsWithInstallInfo } from "@/lib/skill-lock";
 
@@ -233,9 +237,74 @@ async function scanRoot(root: SkillScanRoot, diagnostics: SkillDiagnostic[]): Pr
   return skills;
 }
 
+/** omp provider id (the `source` field is "provider:level") mapped to the
+ * provider label the UI renders (the owning directory). */
+const SOURCE_LABEL_BY_PROVIDER: Record<string, string> = {
+  native: ".omp",
+  claude: ".claude",
+  agents: ".agents",
+  codex: ".codex",
+  github: ".github",
+  "omp-managed": "managed",
+};
+
+/**
+ * Map an `omp skills --json` payload onto the app's SkillInfo shape. Returns
+ * undefined for anything that is not a skills data object.
+ */
+export function skillsFromCliPayload(data: unknown): SkillsWithDiagnostics | undefined {
+  if (!isRecord(data)) return undefined;
+  const rawSkills = Array.isArray(data.skills) ? data.skills : [];
+  const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+  const skills: SkillInfo[] = [];
+  for (const raw of rawSkills) {
+    if (!isRecord(raw) || typeof raw.name !== "string" || typeof raw.filePath !== "string") continue;
+    const [provider = "", scope = ""] = typeof raw.source === "string" ? raw.source.split(":") : [];
+    skills.push({
+      name: raw.name,
+      description: typeof raw.description === "string" ? raw.description : "",
+      filePath: raw.filePath,
+      baseDir: typeof raw.baseDir === "string" ? raw.baseDir : raw.filePath.replace(/[\\/]SKILL\.md$/, ""),
+      disableModelInvocation: raw.hide === true,
+      sourceInfo: { source: SOURCE_LABEL_BY_PROVIDER[provider] ?? provider, scope },
+    });
+  }
+  return { skills, diagnostics: warnings as SkillDiagnostic[] };
+}
+
+const execFileAsync = promisify(execFile);
+const SKILLS_CLI_TIMEOUT_MS = 15_000;
+
+/**
+ * Ask the omp binary for its skill listing (`omp skills --json`, omp >= the
+ * skills CLI). The binary is the authoritative source — the same discovery
+ * sessions use, including namespaced collision aliases this replica cannot
+ * reproduce — and every exec re-reads disk, so installs, uninstalls and
+ * toggles show immediately. Keyed by binary capability, not session
+ * liveness, so the listing source is stable per install. Returns undefined
+ * when no binary is available, when the binary predates the command, or on
+ * any exec/parse failure, letting the caller fall back to the replica scan.
+ */
+async function discoverSkillsViaCli(cwd: string): Promise<SkillsWithDiagnostics | undefined> {
+  const ompBin = resolveOmpBin();
+  if (!ompBin) return undefined;
+  try {
+    const { stdout } = await execFileAsync(ompBin, ["skills", "--json", cwd], {
+      timeout: SKILLS_CLI_TIMEOUT_MS,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    return skillsFromCliPayload(JSON.parse(stdout));
+  } catch {
+    // Missing/old binary, exec or parse failure — fall back to the replica.
+    return undefined;
+  }
+}
+
 /** Discover skills for a cwd the way omp does. Name collisions resolve to the
  * highest-priority provider (scan-root order); result is sorted by name. */
 export async function discoverSkills(cwd: string): Promise<SkillsWithDiagnostics> {
+  const viaCli = await discoverSkillsViaCli(cwd);
+  if (viaCli) return viaCli;
   const diagnostics: SkillDiagnostic[] = [];
   const byName = new Map<string, SkillInfo>();
   for (const root of buildScanRoots(cwd)) {
