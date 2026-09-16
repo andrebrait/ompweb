@@ -144,18 +144,18 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
     }
   }, [onTranscript, onError]);
 
-  // Ends capture and moves the session into transcription. Sets isTranscribing
-  // eagerly so the deck never flashes back to the text composer between
-  // recorder.stop() and the async onstop event.
+  // Ends capture and moves the session into transcription. Gates on the live
+  // MediaRecorder state (not the isRecording closure) because the 5-minute
+  // cap timeout captures this callback from the render that started the
+  // recording. Sets isTranscribing eagerly so the deck never flashes back to
+  // the text composer between recorder.stop() and the async onstop event.
   const finishCapture = useCallback(() => {
-    if (!isRecording) return;
     clearMaxTimeout();
     const recorder = mediaRecorderRef.current;
-    if (recorder && recorder.state !== "inactive") {
-      try {
-        recorder.stop();
-      } catch {}
-    }
+    if (!recorder || recorder.state === "inactive") return;
+    try {
+      recorder.stop();
+    } catch {}
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
@@ -168,7 +168,7 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
     setIsRecording(false);
     setIsPaused(false);
     setIsTranscribing(true);
-  }, [isRecording, clearMaxTimeout]);
+  }, [clearMaxTimeout]);
 
   const start = useCallback(async () => {
     if (isStartingRef.current || isRecording || isTranscribing) return;
@@ -197,16 +197,21 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
 
       captureRef.current = { analyser: null, startedAt: performance.now(), pausedAccum: 0, pausedAt: null };
       if (typeof window.AudioContext === "function") {
+        let ctx: AudioContext | null = null;
         try {
-          const ctx = new AudioContext();
+          ctx = new AudioContext();
+          audioContextRef.current = ctx;
           if (ctx.state === "suspended") void ctx.resume();
           const source = ctx.createMediaStreamSource(stream);
           const analyser = ctx.createAnalyser();
           analyser.fftSize = 256;
           source.connect(analyser);
-          audioContextRef.current = ctx;
           captureRef.current.analyser = analyser;
-        } catch {}
+        } catch {
+          // Own the failure: never leave a live context behind untracked.
+          void ctx?.close().catch(() => {});
+          audioContextRef.current = null;
+        }
       }
 
       const recorder = new MediaRecorder(stream);
