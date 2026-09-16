@@ -236,25 +236,11 @@ function sessionInfo(sid) {
   };
 }
 
-<<<<<<< HEAD
 async function mountSession(sid, onAgentEnd, options = {}) {
   const session = sid === null ? null : sessionInfo(sid);
   const { result, unmount } = renderHook(() => useAgentSession({
     session, newSessionCwd: null, ...(onAgentEnd ? { onAgentEnd } : {}), ...options,
   }));
-=======
-async function mountSession(sid, onAgentEnd, strictMode = false) {
-  let latest = null;
-  function Chat({ session }) {
-    latest = useAgentSession({ session, newSessionCwd: null, ...(onAgentEnd ? { onAgentEnd } : {}) });
-    return null;
-  }
-  let renderer;
-  await act(async () => {
-    const chat = React.createElement(Chat, { session: sessionInfo(sid) });
-    renderer = TestRenderer.create(strictMode ? React.createElement(React.StrictMode, null, chat) : chat);
-  });
->>>>>>> 4c6391c (fix: promote queued follow-ups through native RPC)
   await settle(); // hydration: loadSession + /state + models + subagents
   return {
     unmount,
