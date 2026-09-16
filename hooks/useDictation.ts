@@ -160,6 +160,11 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
+    if (audioContextRef.current) {
+      void audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+    captureRef.current.analyser = null;
     setIsRecording(false);
     setIsPaused(false);
     setIsTranscribing(true);
@@ -216,7 +221,10 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
         if (cancelledRef.current) return;
         clearMaxTimeout();
         if (chunks.length === 0) {
+          const message = "No speech detected";
+          setTranscribeError(message);
           setIsTranscribing(false);
+          onError?.(message);
           return;
         }
         const mimeType = recorder.mimeType || "audio/webm";

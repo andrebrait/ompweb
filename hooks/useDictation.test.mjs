@@ -81,9 +81,13 @@ test("ChatInput replaces the composer with the deck and routes dictation keys at
 test("ChatInput supports transcribe-only and transcribe-and-send endings", async () => {
   const source = await readFile(new URL("../components/ChatInput.tsx", import.meta.url), "utf8");
 
-  // Send mode flags the transcript to be sent once transcription succeeds
-  assert.match(source, /dictationAfterRef\.current = "send";/);
-  assert.match(source, /void handleSend\(finalText\)/);
+  // Send mode flags the transcript to be sent once transcription succeeds,
+  // and queue modes route through sendQueued — asserted as one wired block
+  // so a regression in the branch cannot pass via unrelated string matches.
+  assert.match(
+    source,
+    /const after = dictationAfterRef\.current;[\s\S]*?if \(after === "send"\) \{\s*\n\s*void handleSend\(finalText\);\s*\n\s*\} else if \(after === "steer" \|\| after === "followup"\) \{\s*\n\s*sendQueued\(after, finalText\);/,
+  );
 
   // handleSend accepts the composed dictation text override
   assert.match(source, /async \(overrideText\?: string\) =>/);
