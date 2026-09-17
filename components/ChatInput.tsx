@@ -679,7 +679,11 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const {
     isRecording,
     isPaused,
+    isReviewing,
     isTranscribing,
+    isPlayingPreview,
+    previewCurrentTime,
+    previewDuration,
     transcribeError,
     captureRef,
     toggle: toggleDictation,
@@ -687,6 +691,10 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     stop: stopDictation,
     togglePause: togglePauseDictation,
     retry: retryDictation,
+    playPreview: playPreviewDictation,
+    pausePreview: pausePreviewDictation,
+    seekPreview: seekPreviewDictation,
+    confirmTranscribe: confirmTranscribeDictation,
   } = useDictation({
     onTranscript: (text) => {
       const after = dictationAfterRef.current;
@@ -725,11 +733,11 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   }, [stopDictation]);
   const stopAndSendDictation = useCallback(() => {
     dictationAfterRef.current = "send";
-    stopDictation();
+    stopDictation({ immediateSend: true });
   }, [stopDictation]);
   const stopAndQueueDictation = useCallback((mode: "steer" | "followup") => {
     dictationAfterRef.current = mode;
-    stopDictation();
+    stopDictation({ immediateSend: true });
   }, [stopDictation]);
   const cancelDictationAndReset = useCallback(() => {
     dictationAfterRef.current = null;
@@ -743,7 +751,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   // so Escape/Enter are handled at window level: Escape cancels/discard, Enter
   // retries after an error or converts the recording to text.
   useEffect(() => {
-    if (!(isRecording || isPaused || isTranscribing || transcribeError)) return;
+    if (!(isRecording || isPaused || isReviewing || isTranscribing || transcribeError)) return;
     const onKeyDown = (e: globalThis.KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -755,12 +763,13 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         if (target && target.closest("button, input, textarea, select, a, [role='button']")) return;
         e.preventDefault();
         if (transcribeError) retryDictation();
+        else if (isReviewing) confirmTranscribeDictation();
         else stopAndInsertDictation();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isRecording, isPaused, isTranscribing, transcribeError, cancelDictationAndReset, retryDictation, stopAndInsertDictation]);
+  }, [isRecording, isPaused, isReviewing, isTranscribing, transcribeError, cancelDictationAndReset, retryDictation, confirmTranscribeDictation, stopAndInsertDictation]);
 
   const slashQuery = value.startsWith("/") && !/\s/.test(value.slice(1))
     ? value.slice(1).toLowerCase()
@@ -2309,15 +2318,23 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               transition: "border-color var(--dur-fast) var(--ease-out-warm), background var(--dur-fast) var(--ease-out-warm), box-shadow var(--dur-fast) var(--ease-out-warm)",
             } as React.CSSProperties}
           >
-          {isRecording || isPaused || isTranscribing || transcribeError ? (
+          {isRecording || isPaused || isReviewing || isTranscribing || transcribeError ? (
             <RecordingDeck
               captureRef={captureRef}
               isPaused={isPaused}
+              isReviewing={isReviewing}
               isTranscribing={isTranscribing}
+              isPlayingPreview={isPlayingPreview}
+              previewCurrentTime={previewCurrentTime}
+              previewDuration={previewDuration}
               transcribeError={transcribeError}
               onPauseResume={togglePauseDictation}
               onConvert={stopAndInsertDictation}
               onRetry={retryDictation}
+              onPlayPreview={isPlayingPreview ? pausePreviewDictation : playPreviewDictation}
+              onSeekPreview={seekPreviewDictation}
+              onConfirmTranscribe={confirmTranscribeDictation}
+              onDiscard={cancelDictationAndReset}
             />
           ) : (
           <textarea
@@ -2864,7 +2881,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
             )}
 
             {/* Dictation */}
-            {isRecording || isPaused || isTranscribing || transcribeError ? (
+            {isRecording || isPaused || isReviewing || isTranscribing || transcribeError ? (
               <button
                 type="button"
                 onClick={cancelDictationAndReset}
@@ -2962,15 +2979,15 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               <button
                 type="button"
                 className="composer-primary-action"
-                onClick={isRecording || isPaused ? stopAndSendDictation : () => void handleSend()}
-                disabled={isTranscribing || !(isRecording || isPaused || value.trim() || attachedImages.length || attachedTextFiles.length)}
-                title={isRecording || isPaused ? t("chatInput.sendDictation") : t("chatInput.send")}
+                onClick={isRecording || isPaused || isReviewing ? stopAndSendDictation : () => void handleSend()}
+                disabled={isTranscribing || !(isRecording || isPaused || isReviewing || value.trim() || attachedImages.length || attachedTextFiles.length)}
+                title={isRecording || isPaused || isReviewing ? t("chatInput.sendDictation") : t("chatInput.send")}
                 style={{
                   display: "flex", alignItems: "center", gap: 6,
-                  background: (isRecording || isPaused || isTranscribing || value.trim() || attachedImages.length || attachedTextFiles.length) ? "var(--accent-strong)" : "var(--bg-panel)",
+                  background: (isRecording || isPaused || isReviewing || isTranscribing || value.trim() || attachedImages.length || attachedTextFiles.length) ? "var(--accent-strong)" : "var(--bg-panel)",
                   border: "none",
                   borderRadius: 8,
-                  color: (isRecording || isPaused || isTranscribing || value.trim() || attachedImages.length || attachedTextFiles.length) ? "var(--on-accent)" : "var(--text-dim)",
+                  color: (isRecording || isPaused || isReviewing || isTranscribing || value.trim() || attachedImages.length || attachedTextFiles.length) ? "var(--on-accent)" : "var(--text-dim)",
                   cursor: isTranscribing ? "wait" : (isRecording || isPaused || value.trim() || attachedImages.length || attachedTextFiles.length) ? "pointer" : "not-allowed",
                   fontSize: 12,
                   fontWeight: 600,

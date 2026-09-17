@@ -71,7 +71,7 @@ test("ChatInput replaces the composer with the deck and routes dictation keys at
   const source = await readFile(new URL("../components/ChatInput.tsx", import.meta.url), "utf8");
 
   // The deck covers every dictation state (recording, paused, transcribing, error)
-  assert.match(source, /isRecording \|\| isPaused \|\| isTranscribing \|\| transcribeError \? \(/);
+  assert.match(source, /isRecording \|\| isPaused \|\| (?:isReviewing \|\| )?isTranscribing \|\| transcribeError \? \(/);
 
   // Window-level listener because the textarea is unmounted while the deck shows
   assert.match(source, /window\.addEventListener\("keydown", onKeyDown\)/);
@@ -91,4 +91,34 @@ test("ChatInput supports transcribe-only and transcribe-and-send endings", async
 
   // handleSend accepts the composed dictation text override
   assert.match(source, /async \(overrideText\?: string\) =>/);
+});
+
+test("useDictation supports playback preview while paused and review mode upon stop", async () => {
+  const source = await readFile(new URL("./useDictation.ts", import.meta.url), "utf8");
+
+  // Request data on pause to accumulate chunks for preview
+  assert.match(source, /recorder\.requestData\(\)/);
+
+  // Exposes preview playback and review states
+  assert.match(source, /isReviewing/);
+  assert.match(source, /isPlayingPreview/);
+  assert.match(source, /playPreview/);
+  assert.match(source, /pausePreview/);
+  assert.match(source, /seekPreview/);
+  assert.match(source, /confirmTranscribe/);
+
+  // Stopping capture transitions to review state instead of immediately transcribing
+  assert.match(source, /setIsReviewing\(true\)/);
+});
+
+test("RecordingDeck renders left preview play button when paused and in review mode", async () => {
+  const deckSource = await readFile(new URL("../components/RecordingDeck.tsx", import.meta.url), "utf8");
+
+  // Left play preview button when paused or in review mode
+  assert.match(deckSource, /onPlayPreview/);
+  assert.match(deckSource, /isPlayingPreview/);
+
+  // Review mode renders discard and confirm buttons
+  assert.match(deckSource, /isReviewing/);
+  assert.match(deckSource, /onConfirmTranscribe/);
 });

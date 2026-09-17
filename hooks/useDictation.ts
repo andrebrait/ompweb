@@ -33,6 +33,10 @@ function normalizeErrorMessage(error: unknown, fallback: string): string {
 export function useDictation({ onTranscript, onError }: UseDictationOptions) {
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [isReviewing, setIsReviewing] = useState(false);
+  const [isPlayingPreview, setIsPlayingPreview] = useState(false);
+  const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
+  const [previewDuration, setPreviewDuration] = useState(0);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [transcribeError, setTranscribeError] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -43,9 +47,30 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
   const maxTimeoutRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const captureRef = useRef<DictationCapture>({ analyser: null, startedAt: 0, pausedAccum: 0, pausedAt: null });
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const immediateSendRef = useRef(false);
   // Audio kept after a failed/timed-out transcription so the user can retry
   // instead of losing the recording.
   const pendingAudioRef = useRef<{ blob: Blob; ext: string } | null>(null);
+
+  const teardownPreview = useCallback(() => {
+    if (previewAudioRef.current) {
+      try {
+        previewAudioRef.current.pause();
+        previewAudioRef.current.src = "";
+      } catch {}
+      previewAudioRef.current = null;
+    }
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+    }
+    setIsPlayingPreview(false);
+    setPreviewCurrentTime(0);
+    setPreviewDuration(0);
+  }, []);
 
   const clearMaxTimeout = useCallback(() => {
     if (maxTimeoutRef.current !== null) {
@@ -71,9 +96,11 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
       audioContextRef.current = null;
     }
     captureRef.current = { analyser: null, startedAt: 0, pausedAccum: 0, pausedAt: null };
+    teardownPreview();
     setIsRecording(false);
     setIsPaused(false);
-  }, [clearMaxTimeout]);
+    setIsReviewing(false);
+  }, [clearMaxTimeout, teardownPreview]);
 
   useEffect(() => {
     return () => {
@@ -83,9 +110,10 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
         abortControllerRef.current = null;
       }
       pendingAudioRef.current = null;
+      teardownPreview();
       cleanup();
     };
-  }, [cleanup]);
+  }, [cleanup, teardownPreview]);
 
   const runTranscription = useCallback(async (blob: Blob, ext: string) => {
     setIsTranscribing(true);
@@ -149,8 +177,85 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
   // cap timeout captures this callback from the render that started the
   // recording. Sets isTranscribing eagerly so the deck never flashes back to
   // the text composer between recorder.stop() and the async onstop event.
-  const finishCapture = useCallback(() => {
+  const getCapturedBlob = useCallback(() => {
+    if (pendingAudioRef.current) return pendingAudioRef.current;
+    if (chunksRef.current.length === 0) return null;
+    const recorder = mediaRecorderRef.current;
+    const mimeType = recorder?.mimeType || "audio/webm";
+    const blob = new Blob(chunksRef.current, { type: mimeType });
+    const ext = mimeType.includes("mp4") ? "audio.mp4" : mimeType.includes("ogg") ? "audio.ogg" : "audio.webm";
+    return { blob, ext };
+  }, []);
+
+  const setupPreviewAudio = useCallback((blob: Blob) => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+    }
+    try {
+      const url = URL.createObjectURL(blob);
+      previewUrlRef.current = url;
+      const audio = new Audio(url);
+      previewAudioRef.current = audio;
+      audio.ontimeupdate = () => {
+        setPreviewCurrentTime(audio.currentTime);
+      };
+      audio.onloadedmetadata = () => {
+        if (Number.isFinite(audio.duration)) {
+          setPreviewDuration(audio.duration);
+        }
+      };
+      audio.onended = () => {
+        setIsPlayingPreview(false);
+        setPreviewCurrentTime(0);
+      };
+      audio.onpause = () => {
+        setIsPlayingPreview(false);
+      };
+      audio.onplay = () => {
+        setIsPlayingPreview(true);
+      };
+      return audio;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const playPreview = useCallback(() => {
+    let audio = previewAudioRef.current;
+    if (!audio) {
+      const captured = getCapturedBlob();
+      if (!captured) return;
+      audio = setupPreviewAudio(captured.blob);
+    }
+    if (audio) {
+      audio.play().catch(() => {
+        setIsPlayingPreview(false);
+      });
+    }
+  }, [getCapturedBlob, setupPreviewAudio]);
+
+  const pausePreview = useCallback(() => {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+    }
+    setIsPlayingPreview(false);
+  }, []);
+
+  const seekPreview = useCallback((seconds: number) => {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.currentTime = Math.max(0, seconds);
+      setPreviewCurrentTime(Math.max(0, seconds));
+    }
+  }, []);
+
+  // Ends capture and moves the session into transcription or review. Gates on the live
+  // MediaRecorder state (not the isRecording closure) because the 5-minute
+  // cap timeout captures this callback from the render that started the
+  // recording.
+  const finishCapture = useCallback((options?: { immediateSend?: boolean }) => {
     clearMaxTimeout();
+    immediateSendRef.current = options?.immediateSend ?? false;
     const recorder = mediaRecorderRef.current;
     if (!recorder || recorder.state === "inactive") return;
     try {
@@ -167,7 +272,11 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
     captureRef.current.analyser = null;
     setIsRecording(false);
     setIsPaused(false);
-    setIsTranscribing(true);
+    if (options?.immediateSend) {
+      setIsTranscribing(true);
+    } else {
+      setIsReviewing(true);
+    }
   }, [clearMaxTimeout]);
 
   const start = useCallback(async () => {
@@ -179,9 +288,13 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
       abortControllerRef.current = null;
     }
     cancelledRef.current = false;
+    chunksRef.current = [];
+    immediateSendRef.current = false;
     pendingAudioRef.current = null;
+    teardownPreview();
     setTranscribeError(null);
     setIsTranscribing(false);
+    setIsReviewing(false);
     if (
       typeof navigator?.mediaDevices?.getUserMedia !== "function" ||
       typeof window === "undefined" ||
@@ -216,27 +329,33 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
 
       const recorder = new MediaRecorder(stream);
       mediaRecorderRef.current = recorder;
-      const chunks: Blob[] = [];
+      chunksRef.current = [];
 
       recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunks.push(event.data);
+        if (event.data.size > 0) chunksRef.current.push(event.data);
       };
 
       recorder.onstop = () => {
         if (cancelledRef.current) return;
         clearMaxTimeout();
-        if (chunks.length === 0) {
+        if (chunksRef.current.length === 0) {
           const message = "No speech detected";
           setTranscribeError(message);
           setIsTranscribing(false);
+          setIsReviewing(false);
           onError?.(message);
           return;
         }
         const mimeType = recorder.mimeType || "audio/webm";
-        const blob = new Blob(chunks, { type: mimeType });
+        const blob = new Blob(chunksRef.current, { type: mimeType });
         const ext = mimeType.includes("mp4") ? "audio.mp4" : mimeType.includes("ogg") ? "audio.ogg" : "audio.webm";
         pendingAudioRef.current = { blob, ext };
-        void runTranscription(blob, ext);
+        if (immediateSendRef.current) {
+          void runTranscription(blob, ext);
+        } else {
+          setIsReviewing(true);
+          setupPreviewAudio(blob);
+        }
       };
 
       recorder.start();
@@ -256,10 +375,19 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
     const recorder = mediaRecorderRef.current;
     if (!recorder || isTranscribing || transcribeError) return;
     if (recorder.state === "recording") {
+      try {
+        recorder.requestData();
+      } catch {}
       recorder.pause();
       captureRef.current.pausedAt = performance.now();
       setIsPaused(true);
+      setTimeout(() => {
+        const captured = getCapturedBlob();
+        if (captured) setupPreviewAudio(captured.blob);
+      }, 0);
     } else if (recorder.state === "paused") {
+      pausePreview();
+      teardownPreview();
       recorder.resume();
       const { pausedAt, pausedAccum } = captureRef.current;
       if (pausedAt !== null) {
@@ -268,7 +396,16 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
       captureRef.current.pausedAt = null;
       setIsPaused(false);
     }
-  }, [isTranscribing, transcribeError]);
+  }, [isTranscribing, transcribeError, getCapturedBlob, setupPreviewAudio, pausePreview, teardownPreview]);
+
+  const confirmTranscribe = useCallback(() => {
+    const pending = pendingAudioRef.current || getCapturedBlob();
+    if (!pending || isTranscribing) return;
+    pausePreview();
+    setIsReviewing(false);
+    setTranscribeError(null);
+    void runTranscription(pending.blob, pending.ext);
+  }, [getCapturedBlob, isTranscribing, pausePreview, runTranscription]);
 
   const cancel = useCallback(() => {
     cancelledRef.current = true;
@@ -279,8 +416,10 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
     pendingAudioRef.current = null;
     setTranscribeError(null);
     setIsTranscribing(false);
+    setIsReviewing(false);
+    teardownPreview();
     cleanup();
-  }, [cleanup]);
+  }, [cleanup, teardownPreview]);
 
   const retry = useCallback(() => {
     const pending = pendingAudioRef.current;
@@ -297,7 +436,11 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
   return {
     isRecording,
     isPaused,
+    isReviewing,
     isTranscribing,
+    isPlayingPreview,
+    previewCurrentTime,
+    previewDuration,
     transcribeError,
     captureRef,
     start,
@@ -306,5 +449,9 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
     toggle,
     togglePause,
     retry,
+    playPreview,
+    pausePreview,
+    seekPreview,
+    confirmTranscribe,
   };
 }
