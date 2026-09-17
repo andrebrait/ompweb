@@ -98,6 +98,10 @@ export function RecordingDeck({
   useEffect(() => {
     const compute = () => {
       const capture = captureRef.current;
+      if (isReviewing && capture?.finalDurationMs != null) {
+        setElapsed(capture.finalDurationMs);
+        return;
+      }
       setElapsed(
         capture
           ? Math.min(
@@ -116,7 +120,7 @@ export function RecordingDeck({
     compute();
     const id = window.setInterval(compute, 100);
     return () => window.clearInterval(id);
-  }, [captureRef]);
+  }, [captureRef, isReviewing]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -195,7 +199,17 @@ export function RecordingDeck({
   return (
     <div
       role="status"
-      aria-label={isTranscribing ? t("chatInput.transcribing") : transcribeError ? transcribeError : t("chatInput.dictationRecording")}
+      aria-label={
+        isTranscribing
+          ? t("chatInput.transcribing")
+          : transcribeError
+          ? transcribeError
+          : isReviewing
+          ? t("chatInput.discardDictation")
+          : isPaused
+          ? t("chatInput.resumeDictation")
+          : t("chatInput.dictationRecording")
+      }
       style={{
         display: "flex",
         flexDirection: "column",
@@ -291,7 +305,11 @@ export function RecordingDeck({
                     title={isPaused ? t("chatInput.resumeDictation") : t("chatInput.pauseDictation")}
                     tone={isPaused ? "accent" : undefined}
                   >
-                    {isPaused ? <Pause size={14} strokeWidth={2} aria-hidden="true" /> : <Pause size={14} strokeWidth={1.8} aria-hidden="true" />}
+                    {isPaused ? (
+                      <Play size={14} strokeWidth={2} aria-hidden="true" style={{ marginLeft: 1 }} />
+                    ) : (
+                      <Pause size={14} strokeWidth={1.8} aria-hidden="true" />
+                    )}
                   </DeckIconButton>
                   <DeckIconButton onClick={onConvert} title={t("chatInput.stopDictation")}>
                     <Square size={11} strokeWidth={2} aria-hidden="true" />

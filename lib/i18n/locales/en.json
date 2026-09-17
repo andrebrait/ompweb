@@ -272,7 +272,6 @@
   "chatInput.dictationRecording": "Recording",
   "chatInput.pauseDictation": "Pause recording",
   "chatInput.resumeDictation": "Resume recording",
-  "chatInput.convertDictation": "Transcribe to text",
   "chatInput.sendDictation": "Transcribe and send",
   "chatInput.retryDictation": "Retry transcription",
   "chatInput.cancelDictation": "Cancel and discard",

@@ -46,6 +46,7 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
   const cancelledRef = useRef(false);
   const isStartingRef = useRef(false);
   const maxTimeoutRef = useRef<number | null>(null);
+  const pausePreviewTimeoutRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const captureRef = useRef<DictationCapture>({ analyser: null, startedAt: 0, pausedAccum: 0, pausedAt: null, finalDurationMs: null });
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -56,7 +57,11 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
   // instead of losing the recording.
   const pendingAudioRef = useRef<{ blob: Blob; ext: string } | null>(null);
 
-  const teardownPreview = useCallback(() => {
+  const teardownPreviewAudio = useCallback(() => {
+    if (pausePreviewTimeoutRef.current !== null) {
+      window.clearTimeout(pausePreviewTimeoutRef.current);
+      pausePreviewTimeoutRef.current = null;
+    }
     if (previewAudioRef.current) {
       try {
         previewAudioRef.current.pause();
@@ -69,10 +74,13 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
       previewUrlRef.current = null;
     }
     setIsPlayingPreview(false);
-    captureRef.current = { analyser: null, startedAt: 0, pausedAccum: 0, pausedAt: null, finalDurationMs: null };
+    setPreviewCurrentTime(0);
     setPreviewDuration(0);
   }, []);
 
+  const resetCaptureState = useCallback(() => {
+    captureRef.current = { analyser: null, startedAt: 0, pausedAccum: 0, pausedAt: null, finalDurationMs: null };
+  }, []);
   const clearMaxTimeout = useCallback(() => {
     if (maxTimeoutRef.current !== null) {
       window.clearTimeout(maxTimeoutRef.current);
@@ -96,12 +104,13 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
       void audioContextRef.current.close().catch(() => {});
       audioContextRef.current = null;
     }
-    captureRef.current = { analyser: null, startedAt: 0, pausedAccum: 0, pausedAt: null };
-    teardownPreview();
+    teardownPreviewAudio();
+    resetCaptureState();
     setIsRecording(false);
     setIsPaused(false);
     setIsReviewing(false);
-  }, [clearMaxTimeout, teardownPreview]);
+    setIsTranscribing(false);
+  }, [clearMaxTimeout, teardownPreviewAudio, resetCaptureState]);
 
   useEffect(() => {
     return () => {
@@ -111,10 +120,10 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
         abortControllerRef.current = null;
       }
       pendingAudioRef.current = null;
-      teardownPreview();
+      teardownPreviewAudio();
       cleanup();
     };
-  }, [cleanup, teardownPreview]);
+  }, [cleanup, teardownPreviewAudio]);
 
   const runTranscription = useCallback(async (blob: Blob, ext: string) => {
     setIsTranscribing(true);
@@ -301,7 +310,7 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
     chunksRef.current = [];
     immediateSendRef.current = false;
     pendingAudioRef.current = null;
-    teardownPreview();
+    teardownPreviewAudio();
     setTranscribeError(null);
     setIsTranscribing(false);
     setIsReviewing(false);
@@ -394,32 +403,40 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
       recorder.pause();
       captureRef.current.pausedAt = performance.now();
       setIsPaused(true);
-      setTimeout(() => {
+      if (pausePreviewTimeoutRef.current !== null) {
+        window.clearTimeout(pausePreviewTimeoutRef.current);
+      }
+      pausePreviewTimeoutRef.current = window.setTimeout(() => {
+        pausePreviewTimeoutRef.current = null;
         const captured = getCapturedBlob();
         if (captured) setupPreviewAudio(captured.blob);
       }, 0);
     } else if (recorder.state === "paused") {
+      if (pausePreviewTimeoutRef.current !== null) {
+        window.clearTimeout(pausePreviewTimeoutRef.current);
+        pausePreviewTimeoutRef.current = null;
+      }
       pausePreview();
-      teardownPreview();
-      recorder.resume();
+      teardownPreviewAudio();
       const { pausedAt, pausedAccum } = captureRef.current;
       if (pausedAt !== null) {
         captureRef.current.pausedAccum = pausedAccum + (performance.now() - pausedAt);
       }
       captureRef.current.pausedAt = null;
+      recorder.resume();
       setIsPaused(false);
     }
-  }, [isTranscribing, transcribeError, getCapturedBlob, setupPreviewAudio, pausePreview, teardownPreview]);
+  }, [isTranscribing, transcribeError, getCapturedBlob, setupPreviewAudio, pausePreview, teardownPreviewAudio]);
 
   const confirmTranscribe = useCallback(() => {
     const pending = pendingAudioRef.current || getCapturedBlob();
     if (!pending || isTranscribing) return;
     pausePreview();
+    teardownPreviewAudio();
     setIsReviewing(false);
     setTranscribeError(null);
     void runTranscription(pending.blob, pending.ext);
-  }, [getCapturedBlob, isTranscribing, pausePreview, runTranscription]);
-
+  }, [getCapturedBlob, isTranscribing, pausePreview, teardownPreviewAudio, runTranscription]);
   const cancel = useCallback(() => {
     cancelledRef.current = true;
     if (abortControllerRef.current) {
@@ -430,17 +447,19 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
     setTranscribeError(null);
     setIsTranscribing(false);
     setIsReviewing(false);
-    teardownPreview();
+    teardownPreviewAudio();
+    resetCaptureState();
     cleanup();
-  }, [cleanup, teardownPreview]);
+  }, [cleanup, teardownPreviewAudio, resetCaptureState]);
 
   const retry = useCallback(() => {
     const pending = pendingAudioRef.current;
     if (!pending || isTranscribing) return;
+    pausePreview();
+    teardownPreviewAudio();
     setTranscribeError(null);
     void runTranscription(pending.blob, pending.ext);
-  }, [isTranscribing, runTranscription]);
-
+  }, [isTranscribing, pausePreview, teardownPreviewAudio, runTranscription]);
   const toggle = useCallback(() => {
     if (isRecording) finishCapture();
     else void start();

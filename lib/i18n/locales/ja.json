@@ -259,7 +259,6 @@
   "chatInput.dictationRecording": "録音中",
   "chatInput.pauseDictation": "録音を一時停止",
   "chatInput.resumeDictation": "録音を再開",
-  "chatInput.convertDictation": "テキストに変換",
   "chatInput.sendDictation": "文字起こしして送信",
   "chatInput.retryDictation": "文字起こしを再試行",
   "chatInput.cancelDictation": "キャンセルして破棄",
