@@ -798,8 +798,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const plusFlip = useDropdownFlip(plusMenuOpen, plusMenuRef, 0.44, 320);
   const [dormantSkillNames, setDormantSkillNames] = useState<Set<string>>(() => new Set());
 
+  const slashMenuOpenActive = slashQuery !== null;
   useEffect(() => {
-    if (slashQuery === null || !cwd) return;
+    if (!slashMenuOpenActive || !cwd) return;
     const controller = new AbortController();
     void fetch(`/api/skills?cwd=${encodeURIComponent(cwd)}`, { signal: controller.signal })
       .then((response) => response.ok ? response.json() as Promise<{ skills?: Array<{ name?: string; disableModelInvocation?: boolean }> }> : null)
@@ -809,7 +810,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       })
       .catch(() => {});
     return () => controller.abort();
-  }, [cwd, slashQuery]);
+  }, [cwd, slashMenuOpenActive]);
 
   const builtinSlashCommands: SlashCommandPaletteItem[] = React.useMemo(
     () => BUILTIN_SLASH_COMMAND_DEFS

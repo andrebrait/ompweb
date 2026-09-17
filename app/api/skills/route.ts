@@ -3,6 +3,7 @@ import { existsSync, readFileSync, realpathSync, writeFileSync } from "fs";
 import { basename } from "path";
 import {
   getSkillScanRootDirs,
+  invalidateSkillsCache,
   loadSkillsWithInstallInfo,
   parseSkillFrontmatter,
   readDisableModelInvocation,
@@ -62,6 +63,7 @@ export async function PATCH(req: Request) {
     const content = readFileSync(resolvedFilePath, "utf8");
     const updated = setDisableModelInvocation(content, disableModelInvocation);
     if (updated !== content) writeFileSync(resolvedFilePath, updated, "utf8");
+    invalidateSkillsCache(cwd);
 
     // Report what the file now says rather than what was asked for.
     const { frontmatter } = parseSkillFrontmatter(updated);
