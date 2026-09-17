@@ -750,26 +750,18 @@ function AssistantMessageView({
           <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 3 }}>
             <MessageCopyActions texts={texts} bodyRef={bodyRef} />
             {ttsSupported && speakableText.trim().length > 0 && (
-              <button
-                type="button"
-                onClick={() => ttsToggle(messageSpeechId, speakableText)}
-                title={isThisSpeaking ? t("messageView.stopSpeech") : t("messageView.readAloud")}
-                aria-label={isThisSpeaking ? t("messageView.stopSpeech") : t("messageView.readAloud")}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  padding: "2px 4px",
-                  borderRadius: 4,
-                  border: "none",
-                  background: isThisSpeaking ? "color-mix(in srgb, var(--accent) 15%, transparent)" : "transparent",
-                  color: isThisSpeaking ? "var(--accent)" : "var(--text-dim)",
-                  cursor: "pointer",
-                  transition: "color var(--dur-fast), background var(--dur-fast)",
-                }}
-              >
-                {isThisSpeaking ? <Square size={12} strokeWidth={2} /> : <Volume2 size={12} strokeWidth={1.8} />}
-              </button>
+              <Tooltip content={isThisSpeaking ? t("messageView.stopSpeech") : t("messageView.readAloud")}>
+                <button
+                  type="button"
+                  className="message-copy-action"
+                  onClick={() => ttsToggle(messageSpeechId, speakableText)}
+                  aria-label={isThisSpeaking ? t("messageView.stopSpeech") : t("messageView.readAloud")}
+                  style={isThisSpeaking ? { color: "var(--accent)", background: "var(--bg-hover)" } : undefined}
+                >
+                  {isThisSpeaking ? <Square size={13} aria-hidden="true" /> : <Volume2 size={13} aria-hidden="true" />}
+                  <span>{isThisSpeaking ? t("messageView.stopSpeech") : t("messageView.readAloud")}</span>
+                </button>
+              </Tooltip>
             )}
             {canFork && <ForkSessionButton entryId={forkEntryId!} onFork={onFork!} forking={forking} />}
           </div>
