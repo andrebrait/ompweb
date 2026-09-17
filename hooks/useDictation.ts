@@ -19,6 +19,7 @@ export interface DictationCapture {
   startedAt: number;
   pausedAccum: number;
   pausedAt: number | null;
+  finalDurationMs?: number | null;
 }
 
 function normalizeErrorMessage(error: unknown, fallback: string): string {
@@ -46,7 +47,7 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
   const isStartingRef = useRef(false);
   const maxTimeoutRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const captureRef = useRef<DictationCapture>({ analyser: null, startedAt: 0, pausedAccum: 0, pausedAt: null });
+  const captureRef = useRef<DictationCapture>({ analyser: null, startedAt: 0, pausedAccum: 0, pausedAt: null, finalDurationMs: null });
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const previewUrlRef = useRef<string | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -68,7 +69,7 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
       previewUrlRef.current = null;
     }
     setIsPlayingPreview(false);
-    setPreviewCurrentTime(0);
+    captureRef.current = { analyser: null, startedAt: 0, pausedAccum: 0, pausedAt: null, finalDurationMs: null };
     setPreviewDuration(0);
   }, []);
 
@@ -196,6 +197,7 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
       const url = URL.createObjectURL(blob);
       previewUrlRef.current = url;
       const audio = new Audio(url);
+      audio.preload = "auto";
       previewAudioRef.current = audio;
       audio.ontimeupdate = () => {
         setPreviewCurrentTime(audio.currentTime);
@@ -215,6 +217,9 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
       audio.onplay = () => {
         setIsPlayingPreview(true);
       };
+      audio.onerror = () => {
+        setIsPlayingPreview(false);
+      };
       return audio;
     } catch {
       return null;
@@ -229,6 +234,9 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
       audio = setupPreviewAudio(captured.blob);
     }
     if (audio) {
+      if (audio.ended || (Number.isFinite(audio.duration) && audio.currentTime >= audio.duration)) {
+        audio.currentTime = 0;
+      }
       audio.play().catch(() => {
         setIsPlayingPreview(false);
       });
@@ -258,13 +266,15 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
     immediateSendRef.current = options?.immediateSend ?? false;
     const recorder = mediaRecorderRef.current;
     if (!recorder || recorder.state === "inactive") return;
+    const capture = captureRef.current;
+    const finalMs = Math.max(
+      0,
+      performance.now() - capture.startedAt - (capture.pausedAccum + (capture.pausedAt !== null ? performance.now() - capture.pausedAt : 0)),
+    );
+    capture.finalDurationMs = finalMs;
     try {
       recorder.stop();
     } catch {}
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-    }
     if (audioContextRef.current) {
       void audioContextRef.current.close().catch(() => {});
       audioContextRef.current = null;
@@ -336,6 +346,10 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
       };
 
       recorder.onstop = () => {
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((track) => track.stop());
+          streamRef.current = null;
+        }
         if (cancelledRef.current) return;
         clearMaxTimeout();
         if (chunksRef.current.length === 0) {
@@ -358,8 +372,7 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
         }
       };
 
-      recorder.start();
-      setIsRecording(true);
+      recorder.start(100);
       maxTimeoutRef.current = window.setTimeout(() => {
         finishCapture();
       }, MAX_RECORDING_MS);
