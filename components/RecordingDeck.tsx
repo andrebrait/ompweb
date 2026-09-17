@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { AlertCircle, Loader2, Pause, Play, RotateCw, Square } from "lucide-react";
+import { AlertCircle, ArrowUp, Loader2, Pause, Play, RotateCw, Square, Trash2 } from "lucide-react";
 import { MAX_RECORDING_MS, type DictationCapture } from "@/hooks/useDictation";
 import { useI18n } from "@/lib/i18n";
 
@@ -13,11 +13,19 @@ const BAR_SCALE = 3;
 interface RecordingDeckProps {
   captureRef: React.RefObject<DictationCapture>;
   isPaused: boolean;
+  isReviewing?: boolean;
   isTranscribing: boolean;
+  isPlayingPreview?: boolean;
+  previewCurrentTime?: number;
+  previewDuration?: number;
   transcribeError: string | null;
   onPauseResume: () => void;
   onConvert: () => void;
   onRetry: () => void;
+  onPlayPreview?: () => void;
+  onSeekPreview?: (seconds: number) => void;
+  onConfirmTranscribe?: () => void;
+  onDiscard?: () => void;
 }
 
 function formatElapsed(ms: number): string {
@@ -66,18 +74,26 @@ function DeckIconButton({
 export function RecordingDeck({
   captureRef,
   isPaused,
+  isReviewing = false,
   isTranscribing,
+  isPlayingPreview = false,
+  previewCurrentTime = 0,
+  previewDuration = 0,
   transcribeError,
   onPauseResume,
   onConvert,
   onRetry,
+  onPlayPreview,
+  onSeekPreview,
+  onConfirmTranscribe,
+  onDiscard,
 }: RecordingDeckProps) {
   const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const barsRef = useRef<number[]>([]);
   const [elapsed, setElapsed] = useState(0);
 
-  const captureActive = !isTranscribing && !transcribeError;
+  const captureActive = !isTranscribing && !transcribeError && !isReviewing;
 
   useEffect(() => {
     const compute = () => {
@@ -112,7 +128,7 @@ export function RecordingDeck({
     let lastW = 0;
 
     const style = getComputedStyle(canvas);
-    const barColor = (isPaused ? style.getPropertyValue("--text-muted") : style.getPropertyValue("--status-error")).trim();
+    const barColor = (isPaused || isReviewing ? style.getPropertyValue("--text-muted") : style.getPropertyValue("--status-error")).trim();
 
     const data = new Uint8Array(256);
     let raf = 0;
@@ -147,20 +163,34 @@ export function RecordingDeck({
       while (bars.length > barCount) bars.shift();
 
       ctx.clearRect(0, 0, cssW, WAVE_HEIGHT);
-      ctx.fillStyle = barColor;
       const gap = 2;
       const barW = Math.max(1, (cssW - gap * (barCount - 1)) / barCount);
-      // Newest samples hug the buttons (right edge); history trails left.
       const visible = bars.slice(-barCount);
       const offset = cssW - visible.length * (barW + gap) + gap;
+
+      // Determine playback progress ratio if previewing or reviewing
+      const isPreviewActive = isReviewing || (isPaused && isPlayingPreview);
+      const activeDuration = previewDuration > 0 ? previewDuration : Math.max(1, elapsed / 1000);
+      const progressRatio = isPreviewActive ? Math.min(1, Math.max(0, previewCurrentTime / activeDuration)) : 0;
+      const progressCutoff = isPreviewActive ? offset + progressRatio * (cssW - offset) : -1;
+
+      const accentColor = style.getPropertyValue("--accent").trim() || "var(--accent)";
+
       for (let i = 0; i < visible.length; i++) {
         const h = Math.max(2, visible[i] * (WAVE_HEIGHT - 2));
-        ctx.fillRect(offset + i * (barW + gap), (WAVE_HEIGHT - h) / 2, barW, h);
+        const x = offset + i * (barW + gap);
+        ctx.fillStyle = isPreviewActive && x <= progressCutoff ? accentColor : barColor;
+        ctx.fillRect(x, (WAVE_HEIGHT - h) / 2, barW, h);
+      }
+
+      if (isPreviewActive && progressCutoff >= offset) {
+        ctx.fillStyle = accentColor;
+        ctx.fillRect(Math.min(cssW - 2, progressCutoff), 2, 2, WAVE_HEIGHT - 4);
       }
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [captureRef, captureActive, isPaused]);
+  }, [captureRef, captureActive, isPaused, isReviewing, isPlayingPreview, previewCurrentTime, previewDuration]);
 
   return (
     <div
@@ -196,29 +226,78 @@ export function RecordingDeck({
       ) : (
         <>
           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-            <span
-              aria-hidden="true"
-              style={{ width: 8, height: 8, borderRadius: "50%", background: isPaused ? "var(--text-muted)" : "var(--status-error)", flexShrink: 0 }}
-            />
+            {isReviewing ? (
+              <DeckIconButton
+                onClick={onPlayPreview ?? (() => {})}
+                title={isPlayingPreview ? t("chatInput.pausePreview") : t("chatInput.playPreview")}
+                tone="accent"
+              >
+                {isPlayingPreview ? <Pause size={14} strokeWidth={1.8} aria-hidden="true" /> : <Play size={14} strokeWidth={1.8} aria-hidden="true" style={{ marginLeft: 1 }} />}
+              </DeckIconButton>
+            ) : isPaused ? (
+              <DeckIconButton
+                onClick={onPlayPreview ?? (() => {})}
+                title={isPlayingPreview ? t("chatInput.pausePreview") : t("chatInput.playPreview")}
+              >
+                {isPlayingPreview ? <Pause size={12} strokeWidth={2} aria-hidden="true" /> : <Play size={12} strokeWidth={2} aria-hidden="true" style={{ marginLeft: 1 }} />}
+              </DeckIconButton>
+            ) : (
+              <span
+                aria-hidden="true"
+                style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--status-error)", flexShrink: 0 }}
+              />
+            )}
             <span
               style={{
                 fontSize: 12,
                 fontVariantNumeric: "tabular-nums",
                 color: "var(--text)",
                 flexShrink: 0,
-                minWidth: 34,
+                minWidth: isReviewing ? 70 : 34,
               }}
             >
-              {formatElapsed(elapsed)}
+              {isReviewing
+                ? `${formatElapsed(previewCurrentTime * 1000)} / ${formatElapsed((previewDuration || elapsed / 1000) * 1000)}`
+                : isPlayingPreview
+                ? `${formatElapsed(previewCurrentTime * 1000)} / ${formatElapsed(elapsed)}`
+                : formatElapsed(elapsed)}
             </span>
-            <canvas ref={canvasRef} style={{ flex: 1, minWidth: 0, height: WAVE_HEIGHT, alignSelf: "center" }} aria-hidden="true" />
-            <div style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: "auto", flexShrink: 0 }}>
-              <DeckIconButton onClick={onPauseResume} title={isPaused ? t("chatInput.resumeDictation") : t("chatInput.pauseDictation")}>
-                {isPaused ? <Play size={14} strokeWidth={1.8} aria-hidden="true" /> : <Pause size={14} strokeWidth={1.8} aria-hidden="true" />}
-              </DeckIconButton>
-              <DeckIconButton onClick={onConvert} title={t("chatInput.convertDictation")}>
-                <Square size={11} strokeWidth={2} aria-hidden="true" />
-              </DeckIconButton>
+            <canvas
+              ref={canvasRef}
+              style={{ flex: 1, minWidth: 0, height: WAVE_HEIGHT, alignSelf: "center", cursor: isReviewing || isPaused ? "pointer" : "default" }}
+              aria-hidden="true"
+              onClick={(e) => {
+                if (!isReviewing && !isPaused) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+                const totalSec = previewDuration > 0 ? previewDuration : elapsed / 1000;
+                onSeekPreview?.(ratio * totalSec);
+              }}
+            />
+            <div style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: "auto", flexShrink: 0 }}>
+              {isReviewing ? (
+                <>
+                  <DeckIconButton onClick={onDiscard ?? onConvert} title={t("chatInput.discardDictation")} tone="danger">
+                    <Trash2 size={14} strokeWidth={1.8} aria-hidden="true" />
+                  </DeckIconButton>
+                  <DeckIconButton onClick={onConfirmTranscribe ?? onConvert} title={t("chatInput.transcribeDictation")} tone="accent">
+                    <ArrowUp size={14} strokeWidth={2} aria-hidden="true" />
+                  </DeckIconButton>
+                </>
+              ) : (
+                <>
+                  <DeckIconButton
+                    onClick={onPauseResume}
+                    title={isPaused ? t("chatInput.resumeDictation") : t("chatInput.pauseDictation")}
+                    tone={isPaused ? "accent" : undefined}
+                  >
+                    {isPaused ? <Pause size={14} strokeWidth={2} aria-hidden="true" /> : <Pause size={14} strokeWidth={1.8} aria-hidden="true" />}
+                  </DeckIconButton>
+                  <DeckIconButton onClick={onConvert} title={t("chatInput.stopDictation")}>
+                    <Square size={11} strokeWidth={2} aria-hidden="true" />
+                  </DeckIconButton>
+                </>
+              )}
             </div>
           </div>
           <div
@@ -231,8 +310,8 @@ export function RecordingDeck({
             <div
               style={{
                 height: "100%",
-                width: `${Math.min(100, (elapsed / MAX_RECORDING_MS) * 100)}%`,
-                background: "var(--status-error)",
+                width: isReviewing ? "100%" : `${Math.min(100, (elapsed / MAX_RECORDING_MS) * 100)}%`,
+                background: isReviewing ? "var(--accent)" : isPaused ? "var(--text-muted)" : "var(--status-error)",
                 transition: "width 0.1s linear",
               }}
             />
