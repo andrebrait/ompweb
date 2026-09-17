@@ -300,23 +300,63 @@ async function discoverSkillsViaCli(cwd: string): Promise<SkillsWithDiagnostics 
   }
 }
 
-/** Discover skills for a cwd the way omp does. Name collisions resolve to the
- * highest-priority provider (scan-root order); result is sorted by name. */
-export async function discoverSkills(cwd: string): Promise<SkillsWithDiagnostics> {
-  const viaCli = await discoverSkillsViaCli(cwd);
-  if (viaCli) return viaCli;
-  const diagnostics: SkillDiagnostic[] = [];
-  const byName = new Map<string, SkillInfo>();
-  for (const root of buildScanRoots(cwd)) {
-    for (const skill of await scanRoot(root, diagnostics)) {
-      if (!byName.has(skill.name)) byName.set(skill.name, skill);
-    }
+interface CachedSkills {
+  result: SkillsWithDiagnostics;
+  expiresAt: number;
+}
+
+const SKILLS_CACHE_TTL_MS = 30_000;
+const skillsCache = new Map<string, CachedSkills>();
+const skillsInFlight = new Map<string, Promise<SkillsWithDiagnostics>>();
+
+export function invalidateSkillsCache(cwd?: string): void {
+  if (cwd) {
+    skillsCache.delete(cwd);
+    skillsInFlight.delete(cwd);
+  } else {
+    skillsCache.clear();
+    skillsInFlight.clear();
   }
-  const skills = [...byName.values()].sort((a, b) => {
-    const cmp = a.name.toLowerCase().localeCompare(b.name.toLowerCase());
-    return cmp !== 0 ? cmp : a.filePath.localeCompare(b.filePath);
-  });
-  return { skills, diagnostics };
+}
+
+/** Discover skills for a cwd the way omp does. Name collisions resolve to the
+ * highest-priority provider (scan-root order); result is sorted by name. Results
+ * are cached in memory for 30 seconds per cwd with in-flight request deduplication. */
+export async function discoverSkills(cwd: string): Promise<SkillsWithDiagnostics> {
+  const now = Date.now();
+  const cached = skillsCache.get(cwd);
+  if (cached && cached.expiresAt > now) {
+    return cached.result;
+  }
+
+  const inFlight = skillsInFlight.get(cwd);
+  if (inFlight) return inFlight;
+
+  const promise = (async () => {
+    try {
+      const viaCli = await discoverSkillsViaCli(cwd);
+      if (viaCli) return viaCli;
+      const diagnostics: SkillDiagnostic[] = [];
+      const byName = new Map<string, SkillInfo>();
+      for (const root of buildScanRoots(cwd)) {
+        for (const skill of await scanRoot(root, diagnostics)) {
+          if (!byName.has(skill.name)) byName.set(skill.name, skill);
+        }
+      }
+      const skills = [...byName.values()].sort((a, b) => {
+        const cmp = a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+        return cmp !== 0 ? cmp : a.filePath.localeCompare(b.filePath);
+      });
+      return { skills, diagnostics };
+    } finally {
+      skillsInFlight.delete(cwd);
+    }
+  })();
+
+  skillsInFlight.set(cwd, promise);
+  const result = await promise;
+  skillsCache.set(cwd, { result, expiresAt: Date.now() + SKILLS_CACHE_TTL_MS });
+  return result;
 }
 
 export async function loadSkillsWithInstallInfo(cwd: string) {
