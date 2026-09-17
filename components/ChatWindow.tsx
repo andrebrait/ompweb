@@ -17,6 +17,7 @@ import OmpWebLogo from "./OmpWebLogo";
 import { CHAT_COLUMN_MAX_WIDTH, MINIMAP_WIDTH } from "@/lib/chat-layout";
 import { useAgentSession, type AgentPhase, type NoticeItem, type SubagentInfo } from "@/hooks/useAgentSession";
 import { useAudio } from "@/hooks/useAudio";
+import { useSpeechSynthesis } from "@/hooks/useSpeechSynthesis";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type { SessionStatsInfo, GenerationSpeedInfo } from "@/lib/pi-types";
@@ -530,11 +531,37 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
   // checks the sound preference itself.
   const playDoneSoundRef = useRef(playDoneSound);
   playDoneSoundRef.current = playDoneSound;
+  const tts = useSpeechSynthesis();
+  const ttsRef = useRef(tts);
+  useEffect(() => { ttsRef.current = tts; }, [tts]);
+  const messagesRef = useRef<AgentMessage[]>([]);
+  const entryIdsRef = useRef<string[]>([]);
+
   const wrappedOnAgentEnd = useCallback(() => {
     playDoneSoundRef.current();
+    if (ttsRef.current.autoPlayEnabled) {
+      const msgs = messagesRef.current;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const msg = msgs[i];
+        if (msg.role === "assistant" && Array.isArray(msg.content)) {
+          const text = msg.content
+            .filter((b: unknown): b is { type: "text"; text: string } => {
+              if (!b || typeof b !== "object") return false;
+              if (!("type" in b) || b.type !== "text") return false;
+              return "text" in b && typeof b.text === "string";
+            })
+            .map((b) => b.text)
+            .join("\n\n");
+          if (text.trim()) {
+            const speechId = entryIdsRef.current[i] ?? (msg.timestamp ? String(msg.timestamp) : "msg");
+            ttsRef.current.speak(speechId, text);
+          }
+          break;
+        }
+      }
+    }
     onAgentEnd?.();
   }, [onAgentEnd]);
-
   // Stabilize the onEditContent ref; pairs with React.memo to avoid re-rendering history messages
   const handleEditContent = useCallback((content: string) => {
     chatInputRef?.current?.insertIfEmpty(content);
@@ -566,6 +593,8 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
     modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsPanelOpen,
     onOpenFile,
   });
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { entryIdsRef.current = entryIds; }, [entryIds]);
   const sessionBusy = agentRunning || bashRunning;
   const modelCapacity = useMemo(() => {
     if (!displayModelValue) return null;
