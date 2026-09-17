@@ -753,8 +753,8 @@ function AssistantMessageView({
               <button
                 type="button"
                 onClick={() => ttsToggle(messageSpeechId, speakableText)}
-                title={isThisSpeaking ? "Stop speaking" : "Read aloud"}
-                aria-label={isThisSpeaking ? "Stop speaking" : "Read aloud"}
+                title={isThisSpeaking ? t("messageView.stopSpeech") : t("messageView.readAloud")}
+                aria-label={isThisSpeaking ? t("messageView.stopSpeech") : t("messageView.readAloud")}
                 style={{
                   display: "inline-flex",
                   alignItems: "center",

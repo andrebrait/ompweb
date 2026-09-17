@@ -802,7 +802,7 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
                             value={ttsVoiceURI || ""}
                             onChange={(e) => setTtsVoiceURI(e.target.value || null)}
                           >
-                            <option value="">Default system voice</option>
+                            <option value="">{t("settingsConfig.defaultVoice")}</option>
                             {ttsVoices.map((v) => (
                               <option key={v.voiceURI} value={v.voiceURI}>
                                 {v.name} ({v.lang})
