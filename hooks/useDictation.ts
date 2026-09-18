@@ -198,10 +198,9 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
   }, []);
 
   const setupPreviewAudio = useCallback((blob: Blob) => {
-    if (previewUrlRef.current) {
-      URL.revokeObjectURL(previewUrlRef.current);
-      previewUrlRef.current = null;
-    }
+    // Pause/detach any previous preview element before replacing it so a
+    // still-playing preview cannot outlive the controls that reference it.
+    teardownPreviewAudio();
     try {
       const url = URL.createObjectURL(blob);
       previewUrlRef.current = url;
@@ -233,7 +232,7 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
     } catch {
       return null;
     }
-  }, []);
+  }, [teardownPreviewAudio]);
 
   const playPreview = useCallback(() => {
     let audio = previewAudioRef.current;

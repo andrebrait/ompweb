@@ -264,7 +264,7 @@
   "chatInput.playPreview": "播放预览",
   "chatInput.pausePreview": "暂停预览",
   "chatInput.stopDictation": "停止录音",
-  "chatInput.transcribeDictation": "转写并发送",
+  "chatInput.transcribeDictation": "转写",
   "chatInput.fastLabel": "快速",
   "chatInput.queuedDelete": "删除",
   "chatInput.queuedDeleteTitle": "移除这条已排队消息",
