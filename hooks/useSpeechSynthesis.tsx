@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { sanitizeTextForSpeech } from "@/lib/speech-sanitizer";
 
 export const TTS_AUTOPLAY_PREF_KEY = "omp-tts-autoplay";
@@ -92,13 +92,11 @@ export function useSpeechSynthesis(): SpeechSynthesisState {
 
     updateVoices();
 
-    if (window.speechSynthesis.onvoiceschanged !== undefined) {
-      window.speechSynthesis.onvoiceschanged = updateVoices;
-    }
+    window.speechSynthesis.addEventListener("voiceschanged", updateVoices);
 
     return () => {
       if (typeof window !== "undefined" && "speechSynthesis" in window) {
-        window.speechSynthesis.onvoiceschanged = null;
+        window.speechSynthesis.removeEventListener("voiceschanged", updateVoices);
       }
     };
   }, []);
@@ -267,4 +265,21 @@ export function useSpeechSynthesis(): SpeechSynthesisState {
     setAutoPlay,
     setSelectedVoiceURI,
   };
+}
+
+const SpeechSynthesisContext = createContext<SpeechSynthesisState | null>(null);
+
+export function SpeechSynthesisProvider({ children }: { children: ReactNode }) {
+  const speech = useSpeechSynthesis();
+  return (
+    <SpeechSynthesisContext.Provider value={speech}>
+      {children}
+    </SpeechSynthesisContext.Provider>
+  );
+}
+
+export function useSpeechContext(): SpeechSynthesisState {
+  const ctx = useContext(SpeechSynthesisContext);
+  const fallback = useSpeechSynthesis();
+  return ctx ?? fallback;
 }

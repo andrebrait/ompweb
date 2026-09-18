@@ -1433,5 +1433,6 @@
   "settingsConfig.ttsVoiceDesc": "Select the browser voice for text-to-speech reading.",
   "settingsConfig.defaultVoice": "Default system voice",
   "messageView.readAloud": "Read aloud",
-  "messageView.stopSpeech": "Stop speaking"
+  "messageView.stopSpeech": "Stop speaking",
+  "settingsConfig.ttsNotSupported": "Not supported in this browser"
 }
