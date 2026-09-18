@@ -1188,21 +1188,21 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
                 </div>
 
                 {/* ompweb app update card */}
-                <section style={{ padding: 14, border: appUpdate?.updateAvailable ? "1px solid color-mix(in srgb, var(--accent) 45%, var(--border))" : "1px solid var(--border)", borderRadius: "var(--radius-card)", background: "var(--bg-panel)", display: "flex", flexDirection: "column", gap: 10 }}>
+                <section style={{ padding: 14, border: appUpdateIsAvailable ? "1px solid color-mix(in srgb, var(--accent) 45%, var(--border))" : "1px solid var(--border)", borderRadius: "var(--radius-card)", background: "var(--bg-panel)", display: "flex", flexDirection: "column", gap: 10 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                     <div>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <span style={{ fontSize: 13, fontWeight: 600 }}>{t("settingsConfig.appLabel")}</span>
-                        {appUpdate?.updateAvailable && (
+                        {appUpdateIsAvailable && (
                           <span
                             role="status"
-                            aria-label={t("skillsConfig.updateAvailable")}
-                            title={t("skillsConfig.updateAvailable")}
+                            aria-label={t("settingsTabs.updateAvailable")}
+                            title={t("settingsTabs.updateAvailable")}
                             style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }}
                           />
                         )}
                       </div>
-                      <div style={{ marginTop: 4, color: appUpdate?.updateAvailable ? "var(--accent)" : "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                      <div style={{ marginTop: 4, color: appUpdateIsAvailable ? "var(--accent)" : "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: 12 }}>
                         {checkingAppUpdate ? t("settingsConfig.checkingUpdates") : appUpdate?.updateAvailable ? t("appShell.updateVersion", { current: appUpdate.currentVersion ?? "?", available: appUpdate.availableVersion ?? "?" }) : appUpdate?.currentVersion ? t("settingsConfig.upToDate", { version: appUpdate.currentVersion }) : t("settingsConfig.versionUnavailable")}
                       </div>
                     </div>
@@ -1256,14 +1256,14 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
                         {ompUpdateIsAvailable && (
                           <span
                             role="status"
-                            aria-label={t("skillsConfig.updateAvailable")}
-                            title={t("skillsConfig.updateAvailable")}
+                            aria-label={t("settingsTabs.updateAvailable")}
+                            title={t("settingsTabs.updateAvailable")}
                             style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }}
                           />
                         )}
                       </div>
-                      <div style={{ marginTop: 4, color: (update?.updateAvailable ?? ompUpdateIsAvailable) ? "var(--accent)" : "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                        {checking ? t("settingsConfig.checkingUpdates") : (update?.updateAvailable ?? ompUpdateIsAvailable) ? t("appShell.updateVersion", { current: update?.currentVersion ?? "?", available: update?.availableVersion ?? "?" }) : update?.currentVersion ? t("settingsConfig.upToDate", { version: update.currentVersion }) : t("settingsConfig.versionUnavailable")}
+                      <div style={{ marginTop: 4, color: update?.updateAvailable ? "var(--accent)" : "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                        {checking || !update ? t("settingsConfig.checkingUpdates") : update.updateAvailable ? t("appShell.updateVersion", { current: update.currentVersion ?? "?", available: update.availableVersion ?? "?" }) : update.currentVersion ? t("settingsConfig.upToDate", { version: update.currentVersion }) : t("settingsConfig.versionUnavailable")}
                       </div>
                     </div>
                     <button type="button" onClick={() => void checkForUpdate(true)} disabled={checking} aria-label={t("settingsConfig.checkOmpUpdates")} style={{ padding: "6px 10px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "transparent", color: "var(--text)", cursor: checking ? "wait" : "pointer", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 5 }}>

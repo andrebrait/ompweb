@@ -30,8 +30,10 @@ test("settings tabs render attention indicator when tab needs attention", () => 
     attentionTabs: { system: "Update available" },
   }));
 
-  assert.ok(verticalHtml.includes('aria-label="Update available"'), "vertical tab should render attention indicator with aria-label");
-  assert.ok(verticalHtml.includes('role="status"'), "vertical tab should render role=status");
+  const verticalButtonMatch = verticalHtml.match(/<button[^>]+id="settings-tab-system"[^>]*>[\s\S]*?<\/button>/);
+  assert.ok(verticalButtonMatch, "system tab button should be rendered in vertical layout");
+  assert.match(verticalButtonMatch[0], /role="status"/, "vertical tab should render role=status");
+  assert.match(verticalButtonMatch[0], /aria-label="Update available"/, "vertical tab should render attention indicator with aria-label");
 
   const horizontalHtml = renderToStaticMarkup(React.createElement(SettingsTabs, {
     active: "general",
@@ -40,9 +42,10 @@ test("settings tabs render attention indicator when tab needs attention", () => 
     attentionTabs: { system: "Update available" },
   }));
 
-  assert.ok(horizontalHtml.includes('aria-label="Update available"'), "horizontal tab should render attention indicator with aria-label");
-  assert.ok(horizontalHtml.includes('(Update available)'), "horizontal tab title should include attention label");
-
+  const horizontalButtonMatch = horizontalHtml.match(/<button[^>]+id="settings-tab-system"[^>]*>/);
+  assert.ok(horizontalButtonMatch, "system tab button should be rendered in horizontal layout");
+  assert.match(horizontalButtonMatch[0], /aria-label="[^"]*\(Update available\)[^"]*"/, "horizontal tab button aria-label should include attention label");
+  assert.match(horizontalButtonMatch[0], /title="[^"]*\(Update available\)[^"]*"/, "horizontal tab title should include attention label");
   const noAttentionHtml = renderToStaticMarkup(React.createElement(SettingsTabs, {
     active: "general",
     onSelect: () => {},
