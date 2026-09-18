@@ -17,7 +17,7 @@ import OmpWebLogo from "./OmpWebLogo";
 import { CHAT_COLUMN_MAX_WIDTH, MINIMAP_WIDTH } from "@/lib/chat-layout";
 import { useAgentSession, type AgentPhase, type NoticeItem, type SubagentInfo } from "@/hooks/useAgentSession";
 import { useAudio } from "@/hooks/useAudio";
-import { useSpeechSynthesis } from "@/hooks/useSpeechSynthesis";
+import { useSpeechSynthesis, SpeechSynthesisProvider } from "@/hooks/useSpeechSynthesis";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type { SessionStatsInfo, GenerationSpeedInfo } from "@/lib/pi-types";
@@ -536,28 +536,48 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
   useEffect(() => { ttsRef.current = tts; }, [tts]);
   const messagesRef = useRef<AgentMessage[]>([]);
   const entryIdsRef = useRef<string[]>([]);
+  const streamStateRef = useRef<Partial<AgentMessage> | null>(null);
 
   const wrappedOnAgentEnd = useCallback(() => {
     playDoneSoundRef.current();
     if (ttsRef.current.autoPlayEnabled) {
-      const msgs = messagesRef.current;
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        const msg = msgs[i];
-        if (msg.role === "assistant" && Array.isArray(msg.content)) {
-          const text = msg.content
-            .filter((b: unknown): b is { type: "text"; text: string } => {
-              if (!b || typeof b !== "object") return false;
-              if (!("type" in b) || b.type !== "text") return false;
-              return "text" in b && typeof b.text === "string";
-            })
-            .map((b) => b.text)
-            .join("\n\n");
-          if (text.trim()) {
-            const speechId = entryIdsRef.current[i] ?? (msg.timestamp ? String(msg.timestamp) : "msg");
-            ttsRef.current.speak(speechId, text);
+      const streamingMsg = streamStateRef.current;
+      let textToSpeak = "";
+      let speechId = "msg";
+
+      if (streamingMsg && streamingMsg.role === "assistant" && Array.isArray(streamingMsg.content)) {
+        textToSpeak = streamingMsg.content
+          .filter((b: unknown): b is { type: "text"; text: string } => {
+            if (!b || typeof b !== "object") return false;
+            if (!("type" in b) || b.type !== "text") return false;
+            return "text" in b && typeof b.text === "string";
+          })
+          .map((b: { text: string }) => b.text)
+          .join("\n\n");
+        speechId = streamingMsg.timestamp ? String(streamingMsg.timestamp) : "msg";
+      }
+
+      if (!textToSpeak.trim()) {
+        const msgs = messagesRef.current;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const msg = msgs[i];
+          if (msg.role === "assistant" && Array.isArray(msg.content)) {
+            textToSpeak = msg.content
+              .filter((b: unknown): b is { type: "text"; text: string } => {
+                if (!b || typeof b !== "object") return false;
+                if (!("type" in b) || b.type !== "text") return false;
+                return "text" in b && typeof b.text === "string";
+              })
+              .map((b) => b.text)
+              .join("\n\n");
+            speechId = entryIdsRef.current[i] ?? (msg.timestamp ? String(msg.timestamp) : "msg");
+            break;
           }
-          break;
         }
+      }
+
+      if (textToSpeak.trim()) {
+        ttsRef.current.speak(speechId, textToSpeak);
       }
     }
     onAgentEnd?.();
@@ -595,6 +615,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
   });
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { entryIdsRef.current = entryIds; }, [entryIds]);
+  useEffect(() => { streamStateRef.current = streamState.streamingMessage; }, [streamState]);
   const sessionBusy = agentRunning || bashRunning;
   const modelCapacity = useMemo(() => {
     if (!displayModelValue) return null;
@@ -1107,8 +1128,8 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
       </div>
     );
   }
-
   return (
+    <SpeechSynthesisProvider>
     <div
       className="relative flex h-full flex-col overflow-hidden"
       onDragEnter={handleDragEnter}
@@ -1401,7 +1422,8 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
       </div>
       </>
       )}
-    </div>
+      </div>
+    </SpeechSynthesisProvider>
   );
 }
 

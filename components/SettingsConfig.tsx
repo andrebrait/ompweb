@@ -787,32 +787,38 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
                       }}
                     />
                   </NativeSetting>
-                  {ttsSupported && (
-                    <>
-                      <NativeSetting searchId="tts-autoplay" label={t("settingsConfig.ttsAutoplay") || "Auto-read assistant responses"} description={t("settingsConfig.ttsAutoplayDesc") || "Automatically read aloud new assistant replies when completed."} scope="UI">
-                        <ToggleSwitch
-                          checked={ttsAutoPlay}
-                          onChange={setTtsAutoPlay}
-                        />
-                      </NativeSetting>
-                      {ttsVoices.length > 0 && (
-                        <NativeSetting searchId="tts-voice" label={t("settingsConfig.ttsVoice") || "Speech Voice"} description={t("settingsConfig.ttsVoiceDesc") || "Select the browser voice for text-to-speech reading."} scope="UI">
-                          <select
-                            style={nativeSelectStyle}
-                            value={ttsVoiceURI || ""}
-                            onChange={(e) => setTtsVoiceURI(e.target.value || null)}
-                          >
-                            <option value="">{t("settingsConfig.defaultVoice")}</option>
-                            {ttsVoices.map((v) => (
-                              <option key={v.voiceURI} value={v.voiceURI}>
-                                {v.name} ({v.lang})
-                              </option>
-                            ))}
-                          </select>
-                        </NativeSetting>
-                      )}
-                    </>
-                  )}
+                  <NativeSetting
+                    searchId="tts-autoplay"
+                    label={t("settingsConfig.ttsAutoplay") || "Auto-read assistant responses"}
+                    description={ttsSupported ? (t("settingsConfig.ttsAutoplayDesc") || "Automatically read aloud new assistant replies when completed.") : `${t("settingsConfig.ttsAutoplayDesc") || "Automatically read aloud new assistant replies when completed."} (${t("settingsConfig.ttsNotSupported") || "Not supported in this browser"})`}
+                    scope="UI"
+                  >
+                    <ToggleSwitch
+                      checked={ttsSupported ? ttsAutoPlay : false}
+                      disabled={!ttsSupported}
+                      onChange={setTtsAutoPlay}
+                    />
+                  </NativeSetting>
+                  <NativeSetting
+                    searchId="tts-voice"
+                    label={t("settingsConfig.ttsVoice") || "Speech Voice"}
+                    description={ttsSupported ? (t("settingsConfig.ttsVoiceDesc") || "Select the browser voice for text-to-speech reading.") : `${t("settingsConfig.ttsVoiceDesc") || "Select the browser voice for text-to-speech reading."} (${t("settingsConfig.ttsNotSupported") || "Not supported in this browser"})`}
+                    scope="UI"
+                  >
+                    <select
+                      style={nativeSelectStyle}
+                      value={ttsVoiceURI || ""}
+                      disabled={!ttsSupported || ttsVoices.length === 0}
+                      onChange={(e) => setTtsVoiceURI(e.target.value || null)}
+                    >
+                      <option value="">{t("settingsConfig.defaultVoice") || "Default system voice"}</option>
+                      {ttsVoices.map((v) => (
+                        <option key={v.voiceURI} value={v.voiceURI}>
+                          {v.name} ({v.lang})
+                        </option>
+                      ))}
+                    </select>
+                  </NativeSetting>
                   <NativeSetting searchId="provider-usage" label={t("settingsConfig.providerUsage")} description={t("settingsConfig.providerUsageDesc")} scope="UI">
                     <ToggleSwitch checked={providerUsageVisible} onChange={onProviderUsageVisibleChange} />
                   </NativeSetting>

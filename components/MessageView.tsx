@@ -4,7 +4,7 @@ import { memo, useState, useId, useRef, useEffect, useMemo, useCallback, type Co
 import { Copy, Check, GitFork, CornerUpLeft, ChevronRight, ChevronDown, Brain, EyeOff, CircleAlert, CircleSlash, LoaderCircle, FileText, Search, FileEdit, Terminal, CheckSquare, Bot, Code2, Globe, MessagesSquare, Wrench, Volume2, Square } from "lucide-react";
 import { MarkdownBody } from "./MarkdownBody";
 import { MessageCopyActions } from "./MessageCopyActions";
-import { useSpeechSynthesis } from "@/hooks/useSpeechSynthesis";
+import { useSpeechContext } from "@/hooks/useSpeechSynthesis";
 import { ClickableImage } from "./ImageLightbox";
 import { translate, useI18n, type Locale } from "@/lib/i18n";
 import { parseCompactionSummary } from "@/lib/compaction-summary";
@@ -511,7 +511,7 @@ function AssistantMessageView({
   liveTokensPerSecond?: number | null;
 }) {
   const { t, locale } = useI18n();
-  const { isSupported: ttsSupported, isSpeaking: ttsSpeaking, speakingId: ttsSpeakingId, toggle: ttsToggle } = useSpeechSynthesis();
+  const { isSupported: ttsSupported, isSpeaking: ttsSpeaking, speakingId: ttsSpeakingId, toggle: ttsToggle } = useSpeechContext();
   const speakableText = useMemo(() => {
     return (message.content ?? [])
       .filter((b): b is TextContent => b.type === "text" && typeof b.text === "string")
