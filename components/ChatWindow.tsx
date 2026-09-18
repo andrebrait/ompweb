@@ -571,7 +571,9 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
   playDoneSoundRef.current = playDoneSound;
   const tts = useSpeechSynthesis();
   const ttsRef = useRef(tts);
-  ttsRef.current = tts;
+  useEffect(() => {
+    ttsRef.current = tts;
+  }, [tts]);
   // omp calls onAgentEnd in the same tick as the state update that commits the
   // finished reply, so reading the transcript here would still see the previous
   // one. Flag it instead and speak from the render that carries it.
