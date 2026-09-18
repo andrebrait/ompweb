@@ -382,6 +382,7 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
       };
 
       recorder.start(100);
+      setIsRecording(true);
       maxTimeoutRef.current = window.setTimeout(() => {
         finishCapture();
       }, MAX_RECORDING_MS);
