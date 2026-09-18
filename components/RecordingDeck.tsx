@@ -124,7 +124,9 @@ export function RecordingDeck({
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !captureActive) return;
+    // Review mode has no live capture but still draws the recorded bars and
+    // the playback progress overlay.
+    if (!canvas || (!captureActive && !isReviewing)) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
@@ -173,7 +175,7 @@ export function RecordingDeck({
       const offset = cssW - visible.length * (barW + gap) + gap;
 
       // Determine playback progress ratio if previewing or reviewing
-      const isPreviewActive = isReviewing || (isPaused && isPlayingPreview);
+      const isPreviewActive = (isReviewing || isPaused) && (isPlayingPreview || previewCurrentTime > 0);
       const activeDuration = previewDuration > 0 ? previewDuration : Math.max(1, elapsed / 1000);
       const progressRatio = isPreviewActive ? Math.min(1, Math.max(0, previewCurrentTime / activeDuration)) : 0;
       const progressCutoff = isPreviewActive ? offset + progressRatio * (cssW - offset) : -1;
