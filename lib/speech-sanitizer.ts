@@ -22,8 +22,8 @@ export function sanitizeTextForSpeech(text: string): string {
   // 5. Remove bare URLs
   cleaned = cleaned.replace(/https?:\/\/\S+/g, "");
 
-  // 6. Remove HTML tags
-  cleaned = cleaned.replace(/<[^>]+>/g, "");
+  // 6. Remove HTML tags — tag-shaped only, so "x < y and z > 0" survives
+  cleaned = cleaned.replace(/<\/?[A-Za-z][^<>]*>/g, "");
 
   // 7. Remove headers (# Header -> Header)
   cleaned = cleaned.replace(/^#{1,6}\s+/gm, "");

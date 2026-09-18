@@ -93,6 +93,44 @@ function getUserInputText(message: AgentMessage): string | null {
   return text.length > 0 ? text : null;
 }
 
+/**
+ * Text of the newest assistant reply for read-aloud. The live streaming
+ * message wins when present; otherwise the last committed assistant row is
+ * used, keyed by its entry id so the row's own speaker button lights up.
+ */
+function assistantSpeech(
+  messages: AgentMessage[],
+  entryIds: string[],
+  streaming: Partial<AgentMessage> | null,
+): { id: string; text: string } | null {
+  const textOf = (content: unknown): string => {
+    if (!Array.isArray(content)) return "";
+    return content
+      .filter((block: unknown): block is { type: "text"; text: string } => {
+        if (!block || typeof block !== "object") return false;
+        if (!("type" in block) || block.type !== "text") return false;
+        return "text" in block && typeof block.text === "string";
+      })
+      .map((block) => block.text)
+      .join("\n\n");
+  };
+
+  if (streaming && streaming.role === "assistant") {
+    const text = textOf(streaming.content);
+    if (text.trim()) {
+      return { id: streaming.timestamp ? String(streaming.timestamp) : "msg", text };
+    }
+  }
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== "assistant") continue;
+    const text = textOf(message.content);
+    if (!text.trim()) break;
+    return { id: entryIds[i] ?? (message.timestamp ? String(message.timestamp) : "msg"), text };
+  }
+  return null;
+}
+
 function withAssistantBlocks(
   message: AssistantMessage,
   content: AssistantContentBlock[],
@@ -533,53 +571,15 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
   playDoneSoundRef.current = playDoneSound;
   const tts = useSpeechSynthesis();
   const ttsRef = useRef(tts);
-  useEffect(() => { ttsRef.current = tts; }, [tts]);
-  const messagesRef = useRef<AgentMessage[]>([]);
-  const entryIdsRef = useRef<string[]>([]);
-  const streamStateRef = useRef<Partial<AgentMessage> | null>(null);
+  ttsRef.current = tts;
+  // omp calls onAgentEnd in the same tick as the state update that commits the
+  // finished reply, so reading the transcript here would still see the previous
+  // one. Flag it instead and speak from the render that carries it.
+  const autoplayPendingRef = useRef(false);
 
   const wrappedOnAgentEnd = useCallback(() => {
     playDoneSoundRef.current();
-    if (ttsRef.current.autoPlayEnabled) {
-      const streamingMsg = streamStateRef.current;
-      let textToSpeak = "";
-      let speechId = "msg";
-
-      if (streamingMsg && streamingMsg.role === "assistant" && Array.isArray(streamingMsg.content)) {
-        textToSpeak = streamingMsg.content
-          .filter((b: unknown): b is { type: "text"; text: string } => {
-            if (!b || typeof b !== "object") return false;
-            if (!("type" in b) || b.type !== "text") return false;
-            return "text" in b && typeof b.text === "string";
-          })
-          .map((b: { text: string }) => b.text)
-          .join("\n\n");
-        speechId = streamingMsg.timestamp ? String(streamingMsg.timestamp) : "msg";
-      }
-
-      if (!textToSpeak.trim()) {
-        const msgs = messagesRef.current;
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          const msg = msgs[i];
-          if (msg.role === "assistant" && Array.isArray(msg.content)) {
-            textToSpeak = msg.content
-              .filter((b: unknown): b is { type: "text"; text: string } => {
-                if (!b || typeof b !== "object") return false;
-                if (!("type" in b) || b.type !== "text") return false;
-                return "text" in b && typeof b.text === "string";
-              })
-              .map((b) => b.text)
-              .join("\n\n");
-            speechId = entryIdsRef.current[i] ?? (msg.timestamp ? String(msg.timestamp) : "msg");
-            break;
-          }
-        }
-      }
-
-      if (textToSpeak.trim()) {
-        ttsRef.current.speak(speechId, textToSpeak);
-      }
-    }
+    if (ttsRef.current.autoPlayEnabled) autoplayPendingRef.current = true;
     onAgentEnd?.();
   }, [onAgentEnd]);
   // Stabilize the onEditContent ref; pairs with React.memo to avoid re-rendering history messages
@@ -613,9 +613,12 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
     modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsPanelOpen,
     onOpenFile,
   });
-  useEffect(() => { messagesRef.current = messages; }, [messages]);
-  useEffect(() => { entryIdsRef.current = entryIds; }, [entryIds]);
-  useEffect(() => { streamStateRef.current = streamState.streamingMessage; }, [streamState]);
+  useEffect(() => {
+    if (!autoplayPendingRef.current) return;
+    autoplayPendingRef.current = false;
+    const speech = assistantSpeech(messages, entryIds, streamState.streamingMessage);
+    if (speech) ttsRef.current.speak(speech.id, speech.text);
+  }, [messages, entryIds, streamState, agentRunning]);
   const sessionBusy = agentRunning || bashRunning;
   const modelCapacity = useMemo(() => {
     if (!displayModelValue) return null;
@@ -1129,7 +1132,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
     );
   }
   return (
-    <SpeechSynthesisProvider>
+    <SpeechSynthesisProvider value={tts}>
     <div
       className="relative flex h-full flex-col overflow-hidden"
       onDragEnter={handleDragEnter}

@@ -181,11 +181,15 @@ export function useSpeechSynthesis(): SpeechSynthesisState {
         utterance.voice = voice;
       }
 
+      // A cancelled utterance can still fire a late callback after `speak`
+      // installed its replacement — identity-check before touching state.
       utterance.onstart = () => {
+        if (activeGlobalUtterance !== utterance) return;
         broadcastState(id, true);
       };
 
       utterance.onend = () => {
+        if (activeGlobalUtterance !== utterance) return;
         activeGlobalUtterance = null;
         broadcastState(null, false);
       };
@@ -194,6 +198,7 @@ export function useSpeechSynthesis(): SpeechSynthesisState {
         if (e.error !== "canceled" && e.error !== "interrupted") {
           console.warn("SpeechSynthesis error:", e.error);
         }
+        if (activeGlobalUtterance !== utterance) return;
         activeGlobalUtterance = null;
         broadcastState(null, false);
       };
@@ -269,17 +274,31 @@ export function useSpeechSynthesis(): SpeechSynthesisState {
 
 const SpeechSynthesisContext = createContext<SpeechSynthesisState | null>(null);
 
-export function SpeechSynthesisProvider({ children }: { children: ReactNode }) {
-  const speech = useSpeechSynthesis();
+export function SpeechSynthesisProvider({ value, children }: { value: SpeechSynthesisState; children: ReactNode }) {
   return (
-    <SpeechSynthesisContext.Provider value={speech}>
+    <SpeechSynthesisContext.Provider value={value}>
       {children}
     </SpeechSynthesisContext.Provider>
   );
 }
 
+// Outside a provider there is no controller to share. Returning an inert state
+// keeps consumers renderable (the read-aloud action just stays hidden) without
+// mounting one more controller — and its window listeners — per message row.
+const INERT_SPEECH_STATE: SpeechSynthesisState = {
+  isSupported: false,
+  isSpeaking: false,
+  speakingId: null,
+  voices: [],
+  selectedVoiceURI: null,
+  autoPlayEnabled: false,
+  speak: () => {},
+  stop: () => {},
+  toggle: () => {},
+  setAutoPlay: () => {},
+  setSelectedVoiceURI: () => {},
+};
+
 export function useSpeechContext(): SpeechSynthesisState {
-  const ctx = useContext(SpeechSynthesisContext);
-  const fallback = useSpeechSynthesis();
-  return ctx ?? fallback;
+  return useContext(SpeechSynthesisContext) ?? INERT_SPEECH_STATE;
 }
