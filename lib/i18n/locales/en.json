@@ -279,7 +279,7 @@
   "chatInput.playPreview": "Play preview",
   "chatInput.pausePreview": "Pause preview",
   "chatInput.stopDictation": "Stop recording",
-  "chatInput.transcribeDictation": "Transcribe and send",
+  "chatInput.transcribeDictation": "Transcribe",
   "chatInput.fastLabel": "Fast",
   "chatInput.queuedDelete": "Delete",
   "chatInput.queuedDeleteTitle": "Remove this queued message",

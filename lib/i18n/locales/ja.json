@@ -266,7 +266,7 @@
   "chatInput.playPreview": "プレビューを再生",
   "chatInput.pausePreview": "プレビューを一時停止",
   "chatInput.stopDictation": "録音を停止",
-  "chatInput.transcribeDictation": "文字起こしして送信",
+  "chatInput.transcribeDictation": "文字起こし",
   "chatInput.fastLabel": "高速",
   "chatInput.queuedDelete": "削除",
   "chatInput.queuedDeleteTitle": "このキューされたメッセージを削除",
