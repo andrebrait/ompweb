@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { AlertCircle, ArrowUp, Loader2, Pause, Play, RotateCw, Square, Trash2 } from "lucide-react";
+import { AlertCircle, ArrowUp, Loader2, Mic, Pause, Play, RotateCw, Square, Trash2 } from "lucide-react";
 import { MAX_RECORDING_MS, type DictationCapture } from "@/hooks/useDictation";
 import { useI18n } from "@/lib/i18n";
 
@@ -306,7 +306,7 @@ export function RecordingDeck({
                     tone={isPaused ? "accent" : undefined}
                   >
                     {isPaused ? (
-                      <Play size={14} strokeWidth={2} aria-hidden="true" style={{ marginLeft: 1 }} />
+                      <Mic size={14} strokeWidth={1.8} aria-hidden="true" />
                     ) : (
                       <Pause size={14} strokeWidth={1.8} aria-hidden="true" />
                     )}
