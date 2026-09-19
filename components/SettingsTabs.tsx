@@ -105,6 +105,8 @@ export function SettingsTabs({
               id={`settings-tab-${id}`}
               aria-selected={selected}
               aria-controls={`settings-panel-${id}`}
+              aria-label={hasAttention ? `${displayLabel}: ${displayDescription} (${attentionLabel})` : undefined}
+              title={hasAttention ? `${displayDescription} (${attentionLabel})` : displayDescription}
               tabIndex={selected ? 0 : -1}
               disabled={disabled}
               onClick={() => onSelect(id)}
@@ -119,9 +121,7 @@ export function SettingsTabs({
                 <Icon size={16} aria-hidden="true" />
                 {hasAttention && (
                   <span
-                    aria-label={attentionLabel}
-                    title={attentionLabel}
-                    role="status"
+                    aria-hidden="true"
                     style={{
                       position: "absolute",
                       top: -3,
@@ -184,9 +184,7 @@ export function SettingsTabs({
               <Icon size={13} aria-hidden="true" />
               {hasAttention && (
                 <span
-                  aria-label={attentionLabel}
-                  title={attentionLabel}
-                  role="status"
+                  aria-hidden="true"
                   style={{
                     position: "absolute",
                     top: -3,

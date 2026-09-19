@@ -30,10 +30,10 @@ test("settings tabs render attention indicator when tab needs attention", () => 
     attentionTabs: { system: "Update available" },
   }));
 
-  const verticalButtonMatch = verticalHtml.match(/<button[^>]+id="settings-tab-system"[^>]*>[\s\S]*?<\/button>/);
+  const verticalButtonMatch = verticalHtml.match(/<button[^>]+id="settings-tab-system"[^>]*>/);
   assert.ok(verticalButtonMatch, "system tab button should be rendered in vertical layout");
-  assert.match(verticalButtonMatch[0], /role="status"/, "vertical tab should render role=status");
-  assert.match(verticalButtonMatch[0], /aria-label="Update available"/, "vertical tab should render attention indicator with aria-label");
+  assert.match(verticalButtonMatch[0], /aria-label="[^"]*\(Update available\)[^"]*"/, "vertical tab button aria-label should include attention label");
+  assert.match(verticalButtonMatch[0], /title="[^"]*\(Update available\)[^"]*"/, "vertical tab title should include attention label");
 
   const horizontalHtml = renderToStaticMarkup(React.createElement(SettingsTabs, {
     active: "general",
@@ -51,5 +51,5 @@ test("settings tabs render attention indicator when tab needs attention", () => 
     onSelect: () => {},
     layout: "vertical",
   }));
-  assert.ok(!noAttentionHtml.includes('role="status"'), "no attention indicator when attentionTabs is omitted");
+  assert.ok(!noAttentionHtml.includes('(Update available)'), "no attention indicator when attentionTabs is omitted");
 });

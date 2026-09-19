@@ -405,7 +405,7 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
   const [loadingWindowsService, setLoadingWindowsService] = useState(false);
   const [windowsServiceActionPending, setWindowsServiceActionPending] = useState(false);
 
-  const ompUpdateIsAvailable = update ? Boolean(update.updateAvailable) : Boolean(ompUpdateAvailable);
+  const ompUpdateIsAvailable = Boolean(ompUpdateAvailable || update?.updateAvailable);
   const appUpdateIsAvailable = Boolean(appUpdate?.updateAvailable);
   const systemNeedsAttention = appUpdateIsAvailable || ompUpdateIsAvailable;
 
@@ -1262,8 +1262,8 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
                           />
                         )}
                       </div>
-                      <div style={{ marginTop: 4, color: update?.updateAvailable ? "var(--accent)" : "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                        {checking || !update ? t("settingsConfig.checkingUpdates") : update.updateAvailable ? t("appShell.updateVersion", { current: update.currentVersion ?? "?", available: update.availableVersion ?? "?" }) : update.currentVersion ? t("settingsConfig.upToDate", { version: update.currentVersion }) : t("settingsConfig.versionUnavailable")}
+                      <div style={{ marginTop: 4, color: (update?.updateAvailable ?? ompUpdateIsAvailable) ? "var(--accent)" : "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                        {checking || (!hasCheckedUpdates && !update) ? t("settingsConfig.checkingUpdates") : update?.updateAvailable ? t("appShell.updateVersion", { current: update.currentVersion ?? "?", available: update.availableVersion ?? "?" }) : update?.currentVersion ? t("settingsConfig.upToDate", { version: update.currentVersion }) : t("settingsConfig.versionUnavailable")}
                       </div>
                     </div>
                     <button type="button" onClick={() => void checkForUpdate(true)} disabled={checking} aria-label={t("settingsConfig.checkOmpUpdates")} style={{ padding: "6px 10px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "transparent", color: "var(--text)", cursor: checking ? "wait" : "pointer", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 5 }}>
