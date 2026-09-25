@@ -1222,7 +1222,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
 
       {isEmptyNew ? (
         <div className="relative flex flex-1 flex-col overflow-hidden">
-          <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8" style={{ minHeight: 0 }}>
+          <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto py-8" style={{ minHeight: 0, paddingInline: CHAT_COLUMN_PADDING }}>
           <div className="w-full" style={{ maxWidth: CHAT_COLUMN_MAX_WIDTH }}>
             <div
                className="mb-3 empty-chat-brand"
@@ -1251,9 +1251,11 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
               <h1 className="display-serif">{t("appShell.newSessionTitle")}</h1>
               <p>{t("appShell.newSessionDescription")}</p>
             </div>
-            <div style={{ padding: `0 ${CHAT_COLUMN_PADDING}px` }}>{newSessionWorkspace}</div>
+            {newSessionWorkspace}
             <NoticeShelf notices={notices} onDismiss={dismissNotice} align="right" />
-            {chatInputElement}
+            {/* ChatInput insets itself by CHAT_COLUMN_PADDING; cancel this column's
+                padding so the composer matches its in-session width. */}
+            <div style={{ margin: `0 -${CHAT_COLUMN_PADDING}px` }}>{chatInputElement}</div>
           </div>
         </div>
         </div>
