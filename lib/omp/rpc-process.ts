@@ -1,7 +1,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "child_process";
 import { createInterface } from "readline";
 import { sanitizeProjectCommandEnvironment } from "../project-command-env";
-import { resolveOmpBin } from "./omp-cli";
+import { resolveOmpBin, wrapWindowsScript } from "./omp-cli";
 import { encodeRpcCommand, RpcFrameDecoder, type RpcFrameRecord, type RpcProtocolVersion } from "./rpc-frame";
 
 /**
@@ -110,7 +110,8 @@ export class RpcProcess {
     const childEnv = sanitizeProjectCommandEnvironment({ ...process.env, ...options.env });
     if (options.env?.OMP_PROFILE === undefined) delete childEnv.OMP_PROFILE;
     if (options.env?.PI_PROFILE === undefined) delete childEnv.PI_PROFILE;
-    this.child = this.spawnProcess(bin, args, {
+    const target = wrapWindowsScript(bin, args);
+    this.child = this.spawnProcess(target.file, target.args, {
       cwd: options.cwd,
       env: childEnv,
       stdio: ["pipe", "pipe", "pipe"],

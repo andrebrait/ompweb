@@ -218,6 +218,7 @@ host (KDE Plasma, and most Wayland/X11 desktops).
 | `OMP_WEB_HOSTNAME` | Server bind host | `127.0.0.1` |
 | `OMP_WEB_PASSWORD` | Optional password for web login | _None (auth disabled)_ |
 | `OMP_WEB_NO_OPEN` | Set to `1` to prevent auto-opening browser | `0` |
+| `OMP_WEB_DISABLE_AUTOUPDATE` | Set to `1` to disable update checks and in-app updates; restart after changing | `0` |
 | `OMP_WEB_OMP_BIN` | Path to `omp` binary if not on `PATH` | _auto-detected_ |
 | `PI_CODING_AGENT_DIR` | Custom omp agent directory | `~/.omp/agent` |
 | `OMP_WEB_STT_ENDPOINT` | OpenAI-compatible transcription endpoint URL | _None (disabled)_ |

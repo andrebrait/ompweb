@@ -11,10 +11,62 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 - Add **Copy** and **Copy as Markdown** below user messages and completed assistant replies, with keyboard access and touch-sized controls. Copy only message text, excluding thinking, tool output, and renderer controls; preserve full source for oversized raw-text messages.
 - Scope Ctrl+A / Cmd+A to the selected message, currently loaded chat, or active file contents instead of the whole page. Message selection includes collapsed extension previews and expanded details without toolbar labels. Newer pane focus takes precedence over retained child selections. Text fields and IME composition retain native behavior; browser-menu commands and embedded viewers remain browser-controlled.
 - Add an off-by-default **Scope native Select All (experimental)** switch in Settings → Interface & Behavior. The per-browser preference narrows whole-page selections from native menus while leaving keyboard scoping independent. Disable it if browser selection handles or menus behave unexpectedly; intentional whole-page selections can also be narrowed.
+- Play back a voice recording before transcribing or sending it. Pause keeps a left-side preview control; Stop opens a review deck with play, discard, and transcribe-and-send.
+- Link GitHub issue and pull-request references in chat messages. Bare `#123` links to the session checkout's GitHub repository (the `gh` default remote, else `upstream`, `github`, then `origin`); `owner/repo#123` links to that repository. Code spans and existing links are left unchanged.
 
 ### Fixes & Improvements
 
+- Improve phone and tablet ergonomics with safe-area-aware top chrome, a focus-trapped mobile workspace drawer, an actionable first-run workspace state, touch-sized sidebar actions, narrow-screen composer wrapping, clearer settings loading/retry states, and quieter streaming announcements.
+- Keep the Extensions & Tools settings panel scrollable on desktop and touch layouts, including long MCP server lists.
+- Let non-native settings tabs render while the common OMP configuration loads, and show static MCP configuration before live status resolution.
+- Give the new-session workspace picker a calmer destination card with a folder badge, stronger focus and hover states, a compact path context line, and touch-friendly spacing while retaining the native accessible select behavior.
+- Defer the file panel and its Explorer/Git work until first use, use a fixed overlay for the file panel on tablet widths, increase mobile Explorer row height, enlarge Git touch targets, and keep compact session context available in the mobile overflow menu.
+- Move focus into attached extension requests, contain keyboard focus in the custom extension terminal, and add a local retry action when a text file cannot be loaded.
+- Add local retry actions and status semantics to Explorer, Git, and text-file failure states so transient workspace errors are recoverable without hunting for a toolbar refresh control.
+- Defer Explorer and Git tab work until each tab is first opened, avoiding duplicate status requests and hidden-panel overhead while preserving visited tab state.
+- Pause content fetches and file-watch connections for inactive file tabs, then resume them when the tab becomes active to reduce background network and rendering work.
+- Defer the command-palette chunk until the first Ctrl/Cmd+K shortcut, reducing initial shell work while preserving the existing keyboard workflow.
+- Add a visible command-palette action in the topbar overflow menu with the Ctrl/Cmd+K shortcut exposed to assistive technology, while keeping the palette chunk lazy.
+- Replace the generic file-panel loading label with a shape-matched skeleton toolbar and rows, giving desktop and mobile users a stable visual handoff while the deferred panel chunk loads.
+- Enlarge mobile file-search controls and add inline refresh actions to sidebar load failures, keeping the primary navigation recoverable without relying on the header icon.
+- Keep the full-page Settings header clear of notches and home indicators, and enlarge its search, back, and close controls for touch devices.
+- Add a localized **Return to latest message** control that appears when a long conversation is scrolled away from the bottom, with reduced-motion-aware scrolling and touch-sized mobile controls.
+- Replace the sidebar’s generic loading label with shape-matched workspace/session skeleton rows for a calmer first paint on desktop and mobile.
+- Clarify the mobile file-panel control by switching from a panel icon to an explicit close icon when the panel is open, while retaining the existing accessible toggle labels.
+- Enlarge mobile session-search and composer attachment-remove controls so common mobile cleanup actions meet the same touch-target standard as navigation.
+- Make the compact mobile topbar overflow horizontally navigable so the new command action, session context, and existing controls remain reachable instead of overlapping at narrow widths.
+- Localize the command palette’s session-loading state instead of leaving English-only copy visible in Chinese and Japanese.
+- Localize the workspace login title, password prompt, unlock action, and authentication errors for English, Chinese, and Japanese users.
+- Localize composer attachment limits, skipped-file explanations, read failures, and running-agent attachment errors for English, Chinese, and Japanese users.
+- Localize composer retry-abort and attachment removal labels so mobile cleanup and recovery actions match the active interface language.
+- Close the mobile topbar overflow when launching the command palette from its visible trigger, preventing the menu from remaining open behind the modal.
+- Add localized retry actions to image, audio, and document viewer failures so transient file-loading problems can recover without closing the file panel.
+- Keep the login card clear of device safe areas, enlarge password and unlock controls for touch use, and retain the shared focus-ring treatment.
+- Add localized inline retry recovery to workspace directory-picker failures, so mobile users can recover without closing the picker.
+- Enlarge directory-picker profile, launch toggle, and extra-argument controls on touch devices for reliable workspace setup on phones.
+- Enlarge mobile Settings navigation tabs and provider segmented controls to 44px targets, keeping the horizontal Settings header easy to traverse on phones.
+- Localize the document viewer’s PDF type label so file metadata remains consistent with the selected interface language.
+- Localize workspace-picker profile and extra-argument accessible labels for English, Chinese, and Japanese users.
+- Enlarge archive-browser search and clear controls on touch devices for reliable session-history filtering on phones.
+- Enlarge MCP refresh, server selection, add-server, config fields, and action buttons on touch devices for reliable mobile server setup.
+- Localize MCP connection, enabled/disabled, off, and invalid status labels for English, Chinese, and Japanese users.
+- Localize agent discovery error, warning, and fallback diagnostic messages for English, Chinese, and Japanese users.
+- Announce agent discovery errors with alert semantics while keeping warning-only diagnostics polite, so assistive technology distinguishes failures from informational notices.
+- Give the archive search clear action an explicit localized **Clear search** accessible label instead of reusing the dialog close label.
+- Enlarge agent reload, unpack, create, search, list, copy, save, cancel, and remove controls on touch devices for reliable mobile agent management.
+- Localize bundled, user, and project agent scope badges so agent metadata remains readable across supported languages.
+- Announce MCP configuration load failures with alert semantics while retaining polite status announcements for live-status connectivity notices.
+- Expand the Settings switch hit area to 44px while preserving the existing 40×24 visual track and focus behavior.
+- Replace the text-file viewer’s generic loading label with shape-matched skeleton lines and semantic busy state for smoother first paint.
+- Replace the conversation session-loading label with shape-matched skeleton lines and semantic busy state for a calmer chat first paint.
+- Enlarge the conversation session retry action on touch devices so a failed session can be recovered reliably from mobile.
+- Expose Explorer directory and search loading state through `aria-busy`, improving assistive-technology feedback while mobile file navigation remains touch-friendly.
+- Replace the initial workspace-validation label with a shape-matched skeleton and semantic busy state for a calmer first paint.
+- Show the Ctrl/Cmd+K shortcut in the command-palette toolbar trigger’s tooltip while retaining the existing accessible shortcut metadata.
+- Give the archive search input an explicit localized accessible label instead of relying on placeholder text alone.
 - Refresh the OMP version shown in new sessions after a CLI update without requiring an omp-web server restart. Reuse results while executable metadata is unchanged, with a five-minute fallback expiry for launchers. Keep the last known version visible between visits and distinguish initial loading from an unavailable runtime.
+- Add `OMP_WEB_DISABLE_AUTOUPDATE` to skip npm/OMP update checks and block in-app self-update actions, preserve the setting in service installers, and show the disabled state in Settings.
+- Return browser host-tool and host-URI results as fire-and-forget frames while preserving OMP's original request ID, preventing `open_file` and clipboard bridge calls from hanging.
 - Restore copy-success feedback after React Strict Mode re-runs effect setup.
 - Keep sent-message copy, edit, and fork actions visible without hover or a reveal tap. Also keep file mention/download, Git open-file actions, and sidebar menus visible alongside their metadata; wrap message actions on narrow screens.
 - Expand complete tool inputs inline, including multiline code and edit patches, while keeping command previews compact and output visibility unchanged.

@@ -69,6 +69,7 @@ app/api/
   cwd/validate/route.ts           POST validate/select a cwd
   default-cwd/route.ts            POST create ~/omp-cwd-YYYYMMDD
   files/[...path]/route.ts        GET file contents for viewer
+  github-repo/route.ts            GET ?cwd= — GitHub owner/repo of the checkout (for #N links)
   home/route.ts                   GET user home directory
   models/route.ts                 GET { models, modelList, defaultModel }
   models-config/route.ts          GET/PUT — read/write ~/.omp/agent/models.yml
@@ -88,6 +89,8 @@ lib/
   draft-store.ts       local draft persistence helpers
   file-access.ts       allowed file roots for /api/files and worktrees
   file-paths.ts        client/server path encoding helpers
+  github-refs.ts       remark plugin linking #N / owner/repo#N + GithubRepoContext
+  github-repo.ts       server: pick the gh-default GitHub remote from git config
   markdown.ts          shared markdown helpers
   npx.ts               npx runner used by skill install
   pi-types.ts          local structural types for agent/RPC objects

@@ -1142,7 +1142,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
   ) : null;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", paddingBottom: "env(safe-area-inset-bottom)" }}>
       {addProjectOpen && (
         <DirectoryPicker
           busy={addProjectBusy}
@@ -1242,7 +1242,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
             gap: 7,
             background: "var(--bg-hover)",
             border: "1px solid var(--border)",
-            borderRadius: 9,
+            borderRadius: "var(--radius-control)",
             color: selectedCwd ? "var(--text)" : "var(--text-dim)",
             cursor: selectedCwd ? "pointer" : "not-allowed",
             fontSize: 12.5,
@@ -1315,6 +1315,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
       {searchOpen && (
         <div style={{ padding: "0 10px 6px", flexShrink: 0 }}>
           <input
+            className="sidebar-session-search"
             ref={searchInputRef}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -1355,15 +1356,24 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
           }}
         >
           {loading && (
-            <div style={{ padding: "10px 4px", color: "var(--text-muted)", fontSize: 12 }}>
-              {t("sessionSidebar.loading")}
+            <div role="status" aria-live="polite" aria-label={t("sessionSidebar.loading")} style={{ display: "grid", gap: 10, padding: "10px 4px" }}>
+              <div aria-hidden="true" className="skeleton" style={{ width: "78%", height: 18 }} />
+              <div aria-hidden="true" className="skeleton" style={{ width: "92%", height: 30 }} />
+              <div aria-hidden="true" className="skeleton" style={{ width: "86%", height: 30 }} />
+              <div aria-hidden="true" className="skeleton" style={{ width: "68%", height: 30 }} />
             </div>
           )}
           {projectsError && (
-            <div style={{ padding: "10px 4px", color: "var(--accent)", fontSize: 12 }}>{projectsError}</div>
+            <div role="alert" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "10px 4px", color: "var(--status-error)", fontSize: 12 }}>
+              <span>{projectsError}</span>
+              <button className="load-retry-button" type="button" onClick={() => { loadSessions(false); void loadProjects(); }} style={{ minHeight: 32, padding: "4px 8px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg-panel)", color: "var(--text)", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>{t("sessionSidebar.refresh")}</button>
+            </div>
           )}
           {error && (
-            <div style={{ padding: "10px 4px", color: "var(--accent)", fontSize: 12 }}>{error}</div>
+            <div role="alert" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "10px 4px", color: "var(--status-error)", fontSize: 12 }}>
+              <span>{error}</span>
+              <button className="load-retry-button" type="button" onClick={() => { loadSessions(false); void loadProjects(); }} style={{ minHeight: 32, padding: "4px 8px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg-panel)", color: "var(--text)", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>{t("sessionSidebar.refresh")}</button>
+            </div>
           )}
           {!loading && !projectsError && !error && sortedProjects.length === 0 && (
             <div style={{ padding: "10px 4px", color: "var(--text-muted)", fontSize: 12, lineHeight: 1.5 }}>

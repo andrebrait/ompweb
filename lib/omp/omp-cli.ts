@@ -16,6 +16,18 @@ let versionMiss: { fingerprint: string | null; retryAt: number } | null = null;
 let versionProbe: Promise<string | null> | null = null;
 
 const BIN_NAME = process.platform === "win32" ? "omp.exe" : "omp";
+// .cmd/.bat launchers (e.g. OMP_WEB_OMP_BIN pointing at a wrapper script) cannot
+// be spawned directly by Node — spawning them requires a shell. Route them
+// through `cmd.exe /c`; every other platform and binary passes through.
+const WINDOWS_SCRIPT_RE = /\.cmd$|\.bat$/i;
+
+/** Spawn target for `bin args`, routing Windows script launchers through cmd.exe. */
+export function wrapWindowsScript(bin: string, args: string[]): { file: string; args: string[] } {
+  if (process.platform === "win32" && WINDOWS_SCRIPT_RE.test(bin)) {
+    return { file: "cmd.exe", args: ["/c", bin, ...args] };
+  }
+  return { file: bin, args };
+}
 // Retry missing binaries and failed version probes after a short backoff so
 // a later install or repair is picked up without a web server restart.
 const MISS_TTL_MS = 30_000;
@@ -99,7 +111,8 @@ async function probeOmpVersion(): Promise<string | null> {
   }
   try {
     const output = await new Promise<string>((resolve, reject) => {
-      execFile(bin, ["--version"], { timeout: 10_000, windowsHide: true }, (error, stdout) => {
+      const target = wrapWindowsScript(bin, ["--version"]);
+      execFile(target.file, target.args, { timeout: 10_000, windowsHide: true }, (error, stdout) => {
         if (error) reject(error);
         else resolve(stdout);
       });

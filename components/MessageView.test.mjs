@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import "../tests/setup-dom.mjs";
 import test, { afterEach } from "node:test";
 import React from "react";
-import { act, cleanup, fireEvent, render } from "@testing-library/react/pure.js";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react/pure.js";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createJiti } from "jiti";
 
@@ -52,7 +52,11 @@ test("message Markdown copy preserves source, excludes activity, and confirms su
     const button = view.getByRole("button", { name: "Copy as Markdown" });
     await act(async () => { fireEvent.click(button); });
     assert.equal(clipboard, message.role === "user" ? source : `${source}\n\n## Conclusion\n\nDone.`);
-    assert.equal(button.textContent, "Copied");
+    // The click handler's copy chain (clipboard write -> setCopied) resolves on a
+    // microtask that can land AFTER act's flush under load, leaving the "Copied"
+    // label uncommitted when this line reads the DOM. waitFor lets React commit
+    // instead of racing the scheduler (flaked under parallel suite load).
+    await waitFor(() => assert.equal(button.textContent, "Copied"));
     view.unmount();
   }
 });
@@ -383,6 +387,19 @@ test("advisor custom messages use the localized advisor label", () => {
   assert.doesNotMatch(html, /customType/);
 });
 
+test("async-result notices keep their line breaks and drop the wrapper tag", () => {
+  const html = renderToStaticMarkup(React.createElement(MessageView, {
+    message: {
+      role: "custom",
+      customType: "async-result",
+      content: "<system-notice>\nBackground job bg_1 has completed. Resume your work using the result below.\n/root/repo\n---\nWall time: 0.16 seconds\n</system-notice>",
+      display: true,
+    },
+  }));
+  assert.match(html, /<pre[^>]*>Background job bg_1 has completed\. Resume your work using the result below\.\n\/root\/repo\n---\nWall time: 0\.16 seconds<\/pre>/);
+  assert.doesNotMatch(html, /system-notice|<h2/);
+});
+
 
 test("a running tool call shows a spinner instead of the no-result marker", () => {
   const html = renderToStaticMarkup(React.createElement(MessageView, {
@@ -642,6 +659,8 @@ test("a streaming reply and an unforkable row keep no fork action", () => {
     message: reply, entryId: "assistant-3", forkEntryId: "user-1", onFork: () => {}, isStreaming: true,
   }));
   assert.doesNotMatch(streaming, new RegExp(`aria-label="${FORK_LABEL}"`));
+  assert.doesNotMatch(streaming, /aria-label="Copy message"/);
+  assert.doesNotMatch(streaming, /aria-label="Read aloud"/);
 
   const noTarget = renderToStaticMarkup(React.createElement(MessageView, {
     message: reply, entryId: "assistant-4", onFork: () => {},
