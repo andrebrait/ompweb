@@ -174,7 +174,7 @@ function SubagentsPanel({ subagents, onSelectSubagent, defaultExpanded = false }
         title={`${label}${subagent.detached ? " (async)" : ""}`}
         style={{
           display: "inline-flex", flexDirection: "column", alignItems: "flex-start", gap: 1,
-          maxWidth: 320, padding: "5px 9px",
+          maxWidth: "min(320px, 100%)", padding: "5px 9px",
           border: "1px solid color-mix(in srgb, var(--border) 86%, transparent)",
           borderRadius: "var(--radius-control)",
           background: "var(--bg)",
@@ -252,20 +252,20 @@ function SubagentsPanel({ subagents, onSelectSubagent, defaultExpanded = false }
       </button>
       {!collapsed && (
         <div
-          className="grid gap-2 px-3 py-2.5 animate-slide-down"
+          className="grid grid-cols-1 gap-2 px-3 py-2.5 animate-slide-down"
           style={{ maxHeight: "min(30vh, 240px)", overflowY: "auto" }}
         >
           {running.length > 0 && (
             <div className="flex flex-wrap gap-1.5">{running.map(renderChip)}</div>
           )}
           {completed.length > 0 && (
-            <div className="grid gap-1.5">
+            <div className="grid grid-cols-1 gap-1.5">
               <button
                 type="button"
                 onClick={() => setCompletedExpanded((value) => !value)}
                 aria-expanded={completedExpanded}
-                className="ui-focus-ring flex cursor-pointer items-center gap-1.5 text-left text-xs text-text-muted"
-                style={{ background: "none", border: "none", padding: 0, fontFamily: "inherit" }}
+                className="ui-focus-ring flex cursor-pointer items-center gap-1.5 justify-self-start text-left text-xs text-text-muted"
+                style={{ background: "none", border: "none", padding: "2px 4px", margin: "0 -4px", fontFamily: "inherit" }}
               >
                 <ChevronDown
                   size={12}
