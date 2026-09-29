@@ -4016,6 +4016,10 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
     animation: none;
     background: var(--bg-subtle);
   }
+  /* Hide the closed mobile file panel immediately, not after its slide delay. */
+  .right-panel-container {
+    transition-delay: 0s !important;
+  }
 }
 
 @keyframes saved-pop {
@@ -4140,20 +4144,24 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
     box-shadow: none;
   }
 
+  /* Full-screen overlay that slides in from the right edge. Closed panels are
+     hidden only after the exit slide finishes (visibility delay), which also
+     removes them from the tab order and accessibility tree. */
   .right-panel-container {
+    position: fixed;
+    inset: 0;
+    z-index: 150;
     overflow: hidden;
-    transition: width var(--dur-med) var(--ease-out-warm), min-width var(--dur-med) var(--ease-out-warm);
-    flex-shrink: 0;
+    transition: transform var(--dur-slow) var(--ease-out-warm), visibility 0s;
   }
   .right-panel-container.right-panel-open {
-    width: 100%;
-    min-width: 0;
+    transform: none;
+    visibility: visible;
   }
   .right-panel-container.right-panel-closed {
-    width: 0 !important;
-    min-width: 0 !important;
-    border-left: none !important;
-    display: none !important;
+    transform: translateX(100%);
+    visibility: hidden;
+    transition-delay: 0s, var(--dur-slow);
   }
   .directory-picker-back,
   .directory-picker-entry,
