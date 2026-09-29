@@ -973,10 +973,17 @@ export function AppShell() {
   // User-chosen pixel width (null = fluid 42% default), persisted.
   const [rightPanelWidth, setRightPanelWidth] = useState<number | null>(null);
   const [rightPanelResizing, setRightPanelResizing] = useState(false);
+  // The panel is code-split and mounts a render after its first open, so the
+  // dialog behavior (focus, Escape, Tab wrap) waits until the element exists.
+  const [rightPanelMounted, setRightPanelMounted] = useState(false);
   const rightPanelRef = useModalDialog<HTMLDivElement>({
     onClose: () => setRightPanelOpen(false),
-    active: isCompactOverlay && rightPanelHasOpened && rightPanelOpen && !settingsTab,
+    active: isCompactOverlay && rightPanelMounted && rightPanelOpen && !settingsTab,
   });
+  const attachRightPanel = useCallback((element: HTMLDivElement | null) => {
+    rightPanelRef.current = element;
+    setRightPanelMounted(element !== null);
+  }, [rightPanelRef]);
   const rightPanelIsModal = isCompactOverlay && rightPanelHasOpened && rightPanelOpen && !settingsTab;
   const pendingRightPanelWidthRef = useRef<number | null>(null);
   const rightResizeHandlersRef = useRef<{ onMove: (ev: MouseEvent) => void; onUp: () => void } | null>(null);
@@ -2338,7 +2345,7 @@ export function AppShell() {
         rightPanelOpen={rightPanelOpen}
         rightPanelWidth={rightPanelWidth}
         rightPanelResizing={rightPanelResizing}
-        rightPanelRef={rightPanelRef}
+        rightPanelRef={attachRightPanel}
         fileExplorerRef={fileExplorerRef}
         revealPath={revealPath}
         onRevealDone={handleRevealDone}
