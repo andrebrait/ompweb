@@ -156,8 +156,11 @@ function SubagentsPanel({ subagents, onSelectSubagent, defaultExpanded = false }
   const [collapsed, setCollapsed] = useState(() => loadCollapsed(SUBAGENTS_COLLAPSED_STORAGE_KEY, defaultExpanded));
   // Not persisted: finished runs pile up, so the group re-collapses on remount.
   const [completedExpanded, setCompletedExpanded] = useState(defaultExpanded);
-  const running = subagents.filter((subagent) => subagent.source !== "history" && subagent.status === "started");
-  const completed = subagents.filter((subagent) => !running.includes(subagent));
+  const running: SubagentInfo[] = [];
+  const completed: SubagentInfo[] = [];
+  for (const subagent of subagents) {
+    (subagent.source !== "history" && subagent.status === "started" ? running : completed).push(subagent);
+  }
   const runningCount = running.length;
 
   function renderChip(subagent: SubagentInfo) {
