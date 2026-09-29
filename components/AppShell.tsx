@@ -80,10 +80,12 @@ import {
 } from "./AppUpdateDialog";
 import { ArchiveBrowser } from "./ArchiveBrowser";
 import { publishSessionsChanged } from "@/lib/session-change-bus";
-// The settings shell is part of the app bundle so opening it does not fetch or compile a modal chunk. The right panel (viewer included) remains on demand.
+// The settings shell is part of the app bundle so opening it does not fetch or compile a modal chunk. The right panel (viewer included) is a separate chunk, preloaded shortly after mount and mounted on first open.
+// No loading placeholder: it would take the panel's place in the layout (on
+// phones, squeezing out the chat) for a frame even when the code is cached.
 const RightPanel = dynamic(() => import("./RightPanel").then((m) => m.RightPanel), {
   ssr: false,
-  loading: () => <PanelLoadingFallback />,
+  loading: () => null,
 });
 
 const TOOL_CALLS_COLLAPSED_STORAGE_KEY = "omp-web:tool-calls-collapsed";
@@ -996,6 +998,12 @@ export function AppShell() {
   useEffect(() => {
     if (rightPanelOpen) setRightPanelHasOpened(true);
   }, [rightPanelOpen]);
+  // Fetch the panel's code once the page settles, so the first open does not
+  // wait for a download. A failed preload is retried by the first open.
+  useEffect(() => {
+    const id = setTimeout(() => { import("./RightPanel").catch(() => {}); }, 2000);
+    return () => clearTimeout(id);
+  }, []);
   // One-shot request asking the explorer tab to expand + scroll to a file.
   const [revealPath, setRevealPath] = useState<string | null>(null);
   const [fileSearchOpen, setFileSearchOpen] = useState(false);

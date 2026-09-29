@@ -4145,23 +4145,31 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
   }
 
   /* Full-screen overlay that slides in from the right edge. Closed panels are
-     hidden only after the exit slide finishes (visibility delay), which also
-     removes them from the tab order and accessibility tree. */
+     hidden only after the exit slide finishes (visibility delay). */
   .right-panel-container {
     position: fixed;
     inset: 0;
-    z-index: 150;
     overflow: hidden;
     transition: transform var(--dur-slow) var(--ease-out-warm), visibility 0s;
   }
   .right-panel-container.right-panel-open {
     transform: none;
     visibility: visible;
+    /* The panel mounts on its first open, already open: start that first
+       render off-screen so it slides in too. */
+    @starting-style {
+      transform: translateX(100%);
+    }
   }
   .right-panel-container.right-panel-closed {
     transform: translateX(100%);
     visibility: hidden;
     transition-delay: 0s, var(--dur-slow);
+  }
+  /* The panel ends up covering the whole screen, so a dimmed backdrop would
+     only flash over the chat while the panel slides in. */
+  .right-panel-backdrop {
+    display: none;
   }
   .directory-picker-back,
   .directory-picker-entry,
