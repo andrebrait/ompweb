@@ -51,9 +51,16 @@ const LIST_NAME = /^omp-web-interrupted-sessions(?:-(\d+))?\.json$/;
 // writer) leaves that list unresumed, and hosts sharing an agent dir are not detected.
 function ownedByLiveInstance(path: string, pid: number): boolean {
   if (pid === process.pid) return false;
+  let mtimeMs: number;
   try {
-    // A list from before this boot is stale even if its pid is in use again.
-    if (statSync(path).mtimeMs < Date.now() - uptime() * 1000) return false;
+    mtimeMs = statSync(path).mtimeMs;
+  } catch {
+    // Vanished or unreadable: the owner may be rewriting it, so leave it alone.
+    return true;
+  }
+  // A list from before this boot is stale even if its pid is in use again.
+  if (mtimeMs < Date.now() - uptime() * 1000) return false;
+  try {
     process.kill(pid, 0);
     return true;
   } catch (error) {
@@ -76,8 +83,16 @@ function readLeftover(): InterruptibleSession[] {
     if (!match) continue;
     const path = resolve(dir, name);
     if (match[1] && ownedByLiveInstance(path, Number(match[1]))) continue;
+    // Rename claims the list atomically: of two instances starting together,
+    // only one gets it.
+    const claimed = `${path}.claimed-${process.pid}`;
     try {
-      const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
+      renameSync(path, claimed);
+    } catch {
+      continue;
+    }
+    try {
+      const raw: unknown = JSON.parse(readFileSync(claimed, "utf8"));
       const list = isRecord(raw) && Array.isArray(raw.sessions) ? raw.sessions : [];
       for (const entry of list) {
         if (isRecord(entry) && typeof entry.id === "string" && isValidSessionId(entry.id)) {
@@ -87,7 +102,7 @@ function readLeftover(): InterruptibleSession[] {
     } catch {
       // A corrupt list resumes nothing.
     }
-    rmSync(path, { force: true });
+    rmSync(claimed, { force: true });
   }
   return [...sessions.values()];
 }
