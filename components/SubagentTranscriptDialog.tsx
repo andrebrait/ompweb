@@ -75,11 +75,10 @@ const BLOCK_LABEL_STYLE: React.CSSProperties = {
   color: "var(--text-dim)",
 };
 
-/** Agent / model / reasoning-effort row under the dialog title. */
-export function SubagentIdentity({ agent, resolvedModel }: { agent: string; resolvedModel?: string }) {
+/** Model / reasoning-effort row under the dialog title (the title is the agent). */
+export function SubagentModel({ resolvedModel }: { resolvedModel?: string }) {
   const { t } = useI18n();
   const items = [
-    [t("subagentTranscript.agentLabel"), agent],
     [t("subagentTranscript.modelLabel"), shortModel(resolvedModel)],
     [t("subagentTranscript.effortLabel"), modelEffort(resolvedModel)],
   ].filter((item): item is [string, string] => Boolean(item[1]));
@@ -410,7 +409,7 @@ export function SubagentTranscriptDialog({ subagent, sessionId, transcriptVersio
                     {description}
                   </div>
                 )}
-                <SubagentIdentity agent={agent} resolvedModel={progress?.resolvedModel} />
+                <SubagentModel resolvedModel={progress?.resolvedModel} />
                 <div style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {detail?.sessionFile ?? subagent.sessionFile ?? subagent.id}
                 </div>

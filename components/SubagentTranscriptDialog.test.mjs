@@ -8,30 +8,25 @@ const jiti = createJiti(import.meta.url, {
   jsx: { runtime: "automatic" },
   tsconfigPaths: true,
 });
-const { TaskBlock, CompletionBlock, SubagentIdentity } = await jiti.import("./SubagentTranscriptDialog.tsx");
+const { TaskBlock, CompletionBlock, SubagentModel } = await jiti.import("./SubagentTranscriptDialog.tsx");
 
-test("shows agent, model id, and reasoning effort split from the resolved model", () => {
-  const html = renderToStaticMarkup(React.createElement(SubagentIdentity, {
-    agent: "scout",
+test("shows the model id and reasoning effort split from the resolved model", () => {
+  const html = renderToStaticMarkup(React.createElement(SubagentModel, {
     resolvedModel: "anthropic/claude-sonnet-5-5:high",
   }));
-  assert.match(html, /<dt[^>]*>agent<\/dt><dd[^>]*>scout<\/dd>/);
   assert.match(html, /<dt[^>]*>model<\/dt><dd[^>]*>claude-sonnet-5-5<\/dd>/);
   assert.match(html, /<dt[^>]*>effort<\/dt><dd[^>]*>high<\/dd>/);
 });
 
-test("omits model and effort rows when no resolved model is known", () => {
-  const html = renderToStaticMarkup(React.createElement(SubagentIdentity, { agent: "scout" }));
-  assert.match(html, /scout/);
-  assert.doesNotMatch(html, />model</);
-  assert.doesNotMatch(html, />effort</);
+test("renders nothing when no resolved model is known", () => {
+  assert.equal(renderToStaticMarkup(React.createElement(SubagentModel, {})), "");
 });
 
 test("splits the max effort level and keeps a non-effort suffix in the model id", () => {
-  const max = renderToStaticMarkup(React.createElement(SubagentIdentity, { agent: "scout", resolvedModel: "m:max" }));
+  const max = renderToStaticMarkup(React.createElement(SubagentModel, { resolvedModel: "m:max" }));
   assert.match(max, /<dt[^>]*>model<\/dt><dd[^>]*>m<\/dd>/);
   assert.match(max, /<dt[^>]*>effort<\/dt><dd[^>]*>max<\/dd>/);
-  const tagged = renderToStaticMarkup(React.createElement(SubagentIdentity, { agent: "scout", resolvedModel: "p/m:free" }));
+  const tagged = renderToStaticMarkup(React.createElement(SubagentModel, { resolvedModel: "p/m:free" }));
   assert.match(tagged, /<dt[^>]*>model<\/dt><dd[^>]*>m:free<\/dd>/);
   assert.doesNotMatch(tagged, />effort</);
 });

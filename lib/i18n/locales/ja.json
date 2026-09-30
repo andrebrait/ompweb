@@ -505,7 +505,6 @@
   "subagentTranscript.loading": "読み込み中…",
   "subagentTranscript.loadMore": "さらに読み込む",
   "subagentTranscript.taskLabel": "タスク",
-  "subagentTranscript.agentLabel": "エージェント",
   "subagentTranscript.modelLabel": "モデル",
   "subagentTranscript.effortLabel": "思考",
   "subagentTranscript.showTranscript": "トランスクリプトを表示",

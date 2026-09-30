@@ -518,7 +518,6 @@
   "subagentTranscript.loading": "Loading…",
   "subagentTranscript.loadMore": "Load more",
   "subagentTranscript.taskLabel": "Task",
-  "subagentTranscript.agentLabel": "agent",
   "subagentTranscript.modelLabel": "model",
   "subagentTranscript.effortLabel": "effort",
   "subagentTranscript.showTranscript": "Show transcript",
