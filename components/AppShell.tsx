@@ -975,16 +975,19 @@ export function AppShell() {
   const [rightPanelResizing, setRightPanelResizing] = useState(false);
   // The panel is code-split and mounts a render after its first open, so the
   // dialog behavior (focus, Escape, Tab wrap) waits until the element exists.
+  // The rest of the page goes inert at the same moment: made inert earlier,
+  // it would drop focus from the opener (e.g. a file link in the chat) before
+  // the dialog records it, and closing could not return focus there.
   const [rightPanelMounted, setRightPanelMounted] = useState(false);
+  const rightPanelIsModal = isCompactOverlay && rightPanelMounted && rightPanelOpen && !settingsTab;
   const rightPanelRef = useModalDialog<HTMLDivElement>({
     onClose: () => setRightPanelOpen(false),
-    active: isCompactOverlay && rightPanelMounted && rightPanelOpen && !settingsTab,
+    active: rightPanelIsModal,
   });
   const attachRightPanel = useCallback((element: HTMLDivElement | null) => {
     rightPanelRef.current = element;
     setRightPanelMounted(element !== null);
   }, [rightPanelRef]);
-  const rightPanelIsModal = isCompactOverlay && rightPanelHasOpened && rightPanelOpen && !settingsTab;
   const pendingRightPanelWidthRef = useRef<number | null>(null);
   const rightResizeHandlersRef = useRef<{ onMove: (ev: MouseEvent) => void; onUp: () => void } | null>(null);
   useEffect(() => {
