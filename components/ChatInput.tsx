@@ -1519,7 +1519,13 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     const label = fullModelLabelRef.current;
     if (!control) return;
     control.removeAttribute("data-compact");
-    if (label && label.scrollWidth - label.clientWidth > 1) control.setAttribute("data-compact", "");
+    if (!label) return;
+    // Fractional widths: scrollWidth/clientWidth round and miss sub-pixel ellipsis.
+    const text = document.createRange();
+    text.selectNodeContents(label);
+    if (text.getBoundingClientRect().width > label.getBoundingClientRect().width + 0.01) {
+      control.setAttribute("data-compact", "");
+    }
   }, []);
   // ponytail: refits on every render because the sibling controls that share
   // the toolbar row re-render with this component; one small reflow each.
@@ -1529,7 +1535,12 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     if (!toolbar) return;
     const observer = new ResizeObserver(fitModelLabel);
     observer.observe(toolbar);
-    return () => observer.disconnect();
+    // A late web-font swap changes the label width without a resize or render.
+    document.fonts?.addEventListener("loadingdone", fitModelLabel);
+    return () => {
+      observer.disconnect();
+      document.fonts?.removeEventListener("loadingdone", fitModelLabel);
+    };
   }, [fitModelLabel, fullModelName]);
   // A failed load surfaces modelError; only an in-flight load shows the
   // loading chip, so "no models" can only appear after the fetch settled.
@@ -2698,7 +2709,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                   disabled={modelSelectorDisabled}
                   aria-label={`${t("chatInput.changeModel")}: ${currentName ?? (modelOptions.length > 0
                     ? t("chatInput.selectModel")
-                    : showModelsLoading ? t("chatInput.loadingModels") : t("chatInput.noModels"))}`}
+                    : showModelsLoading ? t("chatInput.loadingModels") : t("chatInput.noModels"))}${fullModelName ? ` (${fullModelName})` : ""}`}
                   style={{
                     display: "flex", alignItems: "center", gap: 5,
                     height: "var(--control-height-sm)",

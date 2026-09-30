@@ -67,6 +67,22 @@ test("keeps the model selector visible when a model error leaves no options", ()
   assert.match(html, /title="(No available models|chatInput\.noAvailableModels)"/);
 });
 
+test("labels the model button with the provider-qualified model and its display name fallback", () => {
+  const html = renderToStaticMarkup(
+    React.createElement(ChatInput, {
+      onSend() {},
+      onAbort() {},
+      onModelChange() {},
+      isStreaming: false,
+      model: { provider: "github-copilot", modelId: "claude-opus-5.5" },
+      modelNames: { "github-copilot:claude-opus-5.5": "Claude Opus 5.5" },
+    }),
+  );
+
+  assert.match(html, /data-model-label="full"[^>]*>github-copilot\/claude-opus-5\.5<\/span><span[^>]*>Claude Opus 5\.5<\/span>/);
+  assert.match(html, /aria-label="[^"]*Claude Opus 5\.5 \(github-copilot\/claude-opus-5\.5\)"/);
+});
+
 
 test("renders goal, planning, and advisor indicators at the composer", () => {
   const html = renderToStaticMarkup(
