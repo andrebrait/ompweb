@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync, renameSync, statSync } from "fs";
 import { join } from "path";
-import { getConfigRoot } from "@/lib/omp/paths";
+import { getDiagnosticsDir } from "@/lib/omp/paths";
 
 export async function register(): Promise<void> {
   // Honor HTTP(S)_PROXY/NO_PROXY for server-side fetch (update checks, skill
@@ -62,7 +62,7 @@ export async function register(): Promise<void> {
   // so the next incident explains itself. Node's default crash semantics are
   // preserved — this only adds the record before exiting — except for client
   // aborts, which are journaled and survived (see below).
-  const logDir = join(getConfigRoot(), "omp-web");
+  const logDir = getDiagnosticsDir();
   const logPath = join(logDir, "diagnostics.log");
   const appendDiag = (kind: string, detail: string) => {
     try {
