@@ -1510,6 +1510,27 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         ?? model.modelId)
     : null;
   const currentName = displayModelName;
+  // Same model id can come from several providers: show `provider/model`
+  // while it fits, else fall back to the display name (data-compact).
+  const fullModelName = model ? `${model.provider}/${model.modelId}` : null;
+  const fullModelLabelRef = useRef<HTMLSpanElement>(null);
+  const fitModelLabel = useCallback(() => {
+    const control = dropdownRef.current;
+    const label = fullModelLabelRef.current;
+    if (!control) return;
+    control.removeAttribute("data-compact");
+    if (label && label.scrollWidth - label.clientWidth > 1) control.setAttribute("data-compact", "");
+  }, []);
+  // ponytail: refits on every render because the sibling controls that share
+  // the toolbar row re-render with this component; one small reflow each.
+  useLayoutEffect(fitModelLabel);
+  useEffect(() => {
+    const toolbar = dropdownRef.current?.parentElement;
+    if (!toolbar) return;
+    const observer = new ResizeObserver(fitModelLabel);
+    observer.observe(toolbar);
+    return () => observer.disconnect();
+  }, [fitModelLabel, fullModelName]);
   // A failed load surfaces modelError; only an in-flight load shows the
   // loading chip, so "no models" can only appear after the fetch settled.
   const showModelsLoading = Boolean(modelsLoading) && !modelError;
@@ -2718,6 +2739,11 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                     <line x1="20" y1="9" x2="23" y2="9" /><line x1="20" y1="14" x2="23" y2="14" />
                     <line x1="1" y1="9" x2="4" y2="9" /><line x1="1" y1="14" x2="4" y2="14" />
                   </svg>
+                  {fullModelName && (
+                    <span ref={fullModelLabelRef} data-model-label="full" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
+                      {fullModelName}
+                    </span>
+                  )}
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                     {currentName ?? (modelOptions.length > 0
                       ? t("chatInput.selectModel")

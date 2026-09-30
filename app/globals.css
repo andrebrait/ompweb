@@ -1956,8 +1956,13 @@ pre, code {
 }
 .composer-model-control {
   flex: 1 1 0;
-  max-width: 140px;
+  max-width: max-content;
   min-width: 24px !important;
+}
+/* ChatInput sets data-compact when `provider/model` would be cut off. */
+.composer-model-control:not([data-compact]) [data-model-label="full"] + span,
+.composer-model-control[data-compact] [data-model-label="full"] {
+  display: none;
 }
 .composer-thinking-control {
   flex: 0 1 auto;
