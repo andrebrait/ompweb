@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { sendAgentCommand } from "@/lib/agent-client";
 import { useI18n } from "@/lib/i18n";
-import { formatCost, formatDuration, formatTokens } from "@/lib/subagent-format";
+import { formatCost, formatDuration, formatTokens, modelEffort, shortModel } from "@/lib/subagent-format";
 import { MarkdownBody } from "./MarkdownBody";
 import { Dialog, DialogContent, DialogTitle, DialogClose } from "./ui/primitives";
 import type { SubagentInfo } from "@/hooks/useAgentSession";
@@ -74,6 +74,27 @@ const BLOCK_LABEL_STYLE: React.CSSProperties = {
   textTransform: "uppercase",
   color: "var(--text-dim)",
 };
+
+/** Agent / model / reasoning-effort row under the dialog title. */
+export function SubagentIdentity({ agent, resolvedModel }: { agent: string; resolvedModel?: string }) {
+  const { t } = useI18n();
+  const items = [
+    [t("subagentTranscript.agentLabel"), agent],
+    [t("subagentTranscript.modelLabel"), shortModel(resolvedModel)],
+    [t("subagentTranscript.effortLabel"), modelEffort(resolvedModel)],
+  ].filter((item): item is [string, string] => Boolean(item[1]));
+  if (items.length === 0) return null;
+  return (
+    <dl style={{ display: "flex", flexWrap: "wrap", gap: "2px 12px", margin: "2px 0", fontSize: 11, fontFamily: "var(--font-mono)" }}>
+      {items.map(([label, value]) => (
+        <div key={label} style={{ display: "inline-flex", gap: 5, minWidth: 0 }}>
+          <dt style={{ color: "var(--text-dim)" }}>{label}</dt>
+          <dd style={{ margin: 0, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
 
 /** Recursive renderer for structured completions: string values keep their
  * line breaks (JSON.parse already unescapes them), arrays become bullet
@@ -363,7 +384,6 @@ export function SubagentTranscriptDialog({ subagent, sessionId, transcriptVersio
         historyTokens ? t("chatWindow.tokensUnit", { count: historyTokens }) : null,
         formatCost(progress?.cost),
         formatDuration(progress?.durationMs),
-        progress?.resolvedModel ? progress.resolvedModel.replace(/:.*$/, "") : null,
       ].filter(Boolean).join(" · ")
     : null;
   const outcomeError = subagent?.source === "history"
@@ -390,6 +410,7 @@ export function SubagentTranscriptDialog({ subagent, sessionId, transcriptVersio
                     {description}
                   </div>
                 )}
+                <SubagentIdentity agent={agent} resolvedModel={progress?.resolvedModel} />
                 <div style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {detail?.sessionFile ?? subagent.sessionFile ?? subagent.id}
                 </div>
