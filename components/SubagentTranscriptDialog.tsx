@@ -7,6 +7,7 @@ import { formatCost, formatDuration, formatTokens, fullModel, modelEffort } from
 import { MarkdownBody } from "./MarkdownBody";
 import { Dialog, DialogContent, DialogTitle, DialogClose } from "./ui/primitives";
 import type { SubagentInfo } from "@/hooks/useAgentSession";
+import { parseSubagentProgress } from "@/lib/subagent-types";
 import type { SubagentActivityEvent, SubagentSnapshotLike } from "@/lib/subagent-types";
 import type { AgentMessage, ToolResultMessage } from "@/lib/types";
 
@@ -409,7 +410,7 @@ export function SubagentTranscriptDialog({ subagent, sessionId, transcriptVersio
                     {description}
                   </div>
                 )}
-                <SubagentModel resolvedModel={progress?.resolvedModel} />
+                <SubagentModel resolvedModel={progress?.resolvedModel ?? parseSubagentProgress(detail?.progress)?.resolvedModel} />
                 <div style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {detail?.sessionFile ?? subagent.sessionFile ?? subagent.id}
                 </div>
