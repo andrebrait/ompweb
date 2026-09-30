@@ -2332,7 +2332,7 @@ export function AppShell() {
           </>
         )}
       </main>
-      {!settingsTab && rightPanelHasOpened && rightPanelIsModal && (
+      {rightPanelIsModal && (
         <div
           className="right-panel-backdrop"
           aria-hidden="true"
