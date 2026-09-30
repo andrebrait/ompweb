@@ -60,7 +60,8 @@ export async function register(): Promise<void> {
   // are killed with their terminal; pages then show endless loading until the
   // process is restarted). Append fatal errors and event-loop stalls to a file
   // so the next incident explains itself. Node's default crash semantics are
-  // preserved — this only adds the record before exiting.
+  // preserved — this only adds the record before exiting — except for client
+  // aborts, which are journaled and survived (see below).
   const logDir = join(getConfigRoot(), "omp-web");
   const logPath = join(logDir, "diagnostics.log");
   const appendDiag = (kind: string, detail: string) => {
@@ -78,9 +79,11 @@ export async function register(): Promise<void> {
     // `Error: aborted` (ECONNRESET): for POSTs through proxy.ts, Next's body
     // cloning drops the request's `error` listeners (replaceRequestBody,
     // vercel/next.js#99278). That is a peer event, not a corrupted server:
-    // journal it and keep serving, as Next's own handler does.
-    if (error.message === "aborted" && (error as NodeJS.ErrnoException).code === "ECONNRESET") {
-      appendDiag("client-abort", `uncaughtException ${describe(error)}`);
+    // journal it (one line, no stack, so aborts cannot rotate real crash
+    // records out of the journal quickly) and keep serving, as Next's own
+    // handler does.
+    if (error instanceof Error && error.message === "aborted" && (error as NodeJS.ErrnoException).code === "ECONNRESET") {
+      appendDiag("client-abort", "uncaughtException Error: aborted (ECONNRESET)");
       return;
     }
     appendDiag("crash", `uncaughtException ${describe(error)}`);
