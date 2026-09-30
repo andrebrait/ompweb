@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { sendAgentCommand } from "@/lib/agent-client";
 import { useI18n } from "@/lib/i18n";
-import { formatCost, formatDuration, formatTokens, modelEffort, shortModel } from "@/lib/subagent-format";
+import { formatCost, formatDuration, formatTokens, fullModel, modelEffort } from "@/lib/subagent-format";
 import { MarkdownBody } from "./MarkdownBody";
 import { Dialog, DialogContent, DialogTitle, DialogClose } from "./ui/primitives";
 import type { SubagentInfo } from "@/hooks/useAgentSession";
@@ -79,7 +79,7 @@ const BLOCK_LABEL_STYLE: React.CSSProperties = {
 export function SubagentModel({ resolvedModel }: { resolvedModel?: string }) {
   const { t } = useI18n();
   const items = [
-    [t("subagentTranscript.modelLabel"), shortModel(resolvedModel)],
+    [t("subagentTranscript.modelLabel"), fullModel(resolvedModel)],
     [t("subagentTranscript.effortLabel"), modelEffort(resolvedModel)],
   ].filter((item): item is [string, string] => Boolean(item[1]));
   if (items.length === 0) return null;
@@ -88,7 +88,7 @@ export function SubagentModel({ resolvedModel }: { resolvedModel?: string }) {
       {items.map(([label, value]) => (
         <div key={label} style={{ display: "inline-flex", gap: 5, minWidth: 0 }}>
           <dt style={{ color: "var(--text-dim)" }}>{label}</dt>
-          <dd style={{ margin: 0, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</dd>
+          <dd style={{ margin: 0, minWidth: 0, color: "var(--text-muted)", overflowWrap: "anywhere" }}>{value}</dd>
         </div>
       ))}
     </dl>

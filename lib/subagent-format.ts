@@ -32,6 +32,11 @@ export function shortModel(model: string | undefined): string | null {
   return id.replace(THINKING_SUFFIX, "") || null;
 }
 
+/** `provider/model` of a `provider/model:thinking` resolved-model string. */
+export function fullModel(model: string | undefined): string | null {
+  return model?.replace(THINKING_SUFFIX, "") || null;
+}
+
 /** Thinking level suffix of a `provider/model:thinking` resolved-model string. */
 export function modelEffort(model: string | undefined): string | null {
   return model?.match(THINKING_SUFFIX)?.[1] ?? null;
