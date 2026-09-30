@@ -77,7 +77,13 @@ export function readNativeSettings(): { path: string; settings: NativeSettings }
     ? Object.fromEntries(Object.entries(retry.fallbackChains).filter((entry): entry is [string, string[]] => typeof entry[0] === "string" && stringArray(entry[1]) !== undefined))
     : {};
   const compaction = isRecord(data.compaction) ? data.compaction : {};
-  const methodOrder = effectiveCompactionMethodOrder(compaction);
+  // omp's migration also accepts top-level dotted keys, nested values winning.
+  const methodOrder = effectiveCompactionMethodOrder({
+    methodOrder: data["compaction.methodOrder"],
+    strategy: data["compaction.strategy"],
+    remoteEnabled: data["compaction.remoteEnabled"],
+    ...Object.fromEntries(Object.entries(compaction).filter(([, value]) => value != null)),
+  });
   const memory = isRecord(data.memory) ? data.memory : {};
   const autolearn = isRecord(data.autolearn) ? data.autolearn : {};
   const mnemopi = isRecord(data.mnemopi) ? data.mnemopi : {};
@@ -118,7 +124,7 @@ export function readNativeSettings(): { path: string; settings: NativeSettings }
         ...(FALLBACK_REVERT_POLICIES.has(retry.fallbackRevertPolicy as string) ? { fallbackRevertPolicy: retry.fallbackRevertPolicy as "cooldown-expiry" | "never" } : {}),
         ...(Object.keys(fallbackChains).length ? { fallbackChains } : {}),
       } } : {}),
-      ...(Object.keys(compaction).length ? { compaction: {
+      ...(Object.keys(compaction).length || methodOrder ? { compaction: {
         ...(typeof compaction.enabled === "boolean" ? { enabled: compaction.enabled } : {}),
         ...(typeof compaction.midTurnEnabled === "boolean" ? { midTurnEnabled: compaction.midTurnEnabled } : {}),
         ...(methodOrder ? { methodOrder } : {}),

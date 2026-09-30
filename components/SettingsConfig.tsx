@@ -819,8 +819,9 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        const target = e.target as HTMLElement | null;
-        if (target?.tagName === "INPUT" && (target as HTMLInputElement).value) return;
+        // Keep Escape for clearing a filled field; a checkbox's DOM value is always "on".
+        const target = e.target;
+        if (target instanceof HTMLInputElement && target.type !== "checkbox" && target.value) return;
         onClose();
       }
     };
