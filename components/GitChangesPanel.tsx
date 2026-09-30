@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { AtSign, Check, ChevronRight, ExternalLink, GitBranch, RefreshCw, Search, X } from "lucide-react";
 import { getFileIcon } from "./FileIcons";
 import { DiffView } from "./FileViewer";
@@ -62,6 +62,7 @@ export function GitChangesPanel({ cwd, refreshKey, onOpenFile, onAtMention, onRe
   const [treeRefreshKey, setTreeRefreshKey] = useState(0);
   const [hoveredPath, setHoveredPath] = useState<string | null>(null);
   const [showAttributeFiles, setShowAttributeFiles] = useState(false);
+  const attributeListId = useId();
   const filterInputRef = useRef<HTMLInputElement>(null);
   const patchRequestRef = useRef(0);
   const refreshToken = `${refreshKey ?? 0}:${treeRefreshKey}`;
@@ -89,6 +90,8 @@ export function GitChangesPanel({ cwd, refreshKey, onOpenFile, onAtMention, onRe
             ? prev
             : (nextFiles.find((f) => !f.collapseReason) ?? nextFiles[0])?.filePath ?? null,
         );
+        // Nothing else to review: open the group so the previewed file is visible.
+        if (nextFiles.length > 0 && nextFiles.every((f) => f.collapseReason)) setShowAttributeFiles(true);
       })
       .catch((e) => {
         if (cancelled) return;
@@ -390,16 +393,19 @@ export function GitChangesPanel({ cwd, refreshKey, onOpenFile, onAtMention, onRe
             {tn("gitChanges.filesChanged", files.length)}
           </div>
           <div style={{ flex: "0 1 auto", maxHeight: "38%", minHeight: 60, overflowY: "auto", overflowX: "hidden", padding: "0 4px", flexShrink: 1, borderBottom: "1px solid var(--border)" }}>
-            <div role="listbox" aria-label={t("tabBar.git")}>
-              {primaryFiles.length === 0 && attributeFiles.length === 0 ? (
-                <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>{t("fileExplorer.noMatchingFiles")}</div>
-              ) : primaryFiles.map(renderRow)}
-            </div>
+            {primaryFiles.length === 0 && attributeFiles.length === 0 ? (
+              <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>{t("fileExplorer.noMatchingFiles")}</div>
+            ) : primaryFiles.length > 0 && (
+              <div role="listbox" aria-label={t("tabBar.git")}>
+                {primaryFiles.map(renderRow)}
+              </div>
+            )}
             {attributeFiles.length > 0 && (
               <>
                 <button
                   type="button"
                   aria-expanded={showAttributeFiles}
+                  aria-controls={showAttributeFiles ? attributeListId : undefined}
                   onClick={() => setShowAttributeFiles((v) => !v)}
                   title={t("gitChanges.attributeFilesHint")}
                   style={{
@@ -415,7 +421,7 @@ export function GitChangesPanel({ cwd, refreshKey, onOpenFile, onAtMention, onRe
                   {tn("gitChanges.attributeFiles", attributeFiles.length)}
                 </button>
                 {showAttributeFiles && (
-                  <div role="listbox" aria-label={t("gitChanges.attributeFilesHint")}>
+                  <div id={attributeListId} role="listbox" aria-label={tn("gitChanges.attributeFiles", attributeFiles.length)}>
                     {attributeFiles.map(renderRow)}
                   </div>
                 )}

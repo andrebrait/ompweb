@@ -21,13 +21,18 @@ const execFileAsync = promisify(execFile);
 const GIT_TIMEOUT_MS = 10_000;
 const GIT_STATUS_MAX_BUFFER = 8 * 1024 * 1024;
 
-async function git(cwd: string, args: string[], maxBuffer = GIT_STATUS_MAX_BUFFER): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
+async function git(cwd: string, args: string[], maxBuffer = GIT_STATUS_MAX_BUFFER, input?: string): Promise<string> {
+  const pending = execFileAsync("git", ["-C", cwd, ...args], {
     timeout: GIT_TIMEOUT_MS,
     maxBuffer,
     env: { ...process.env, LC_ALL: "C" },
   });
-  return stdout;
+  if (input !== undefined) {
+    // git may exit before reading stdin (EPIPE); that failure surfaces through `pending`.
+    pending.child.stdin?.on("error", () => {});
+    pending.child.stdin?.end(input);
+  }
+  return (await pending).stdout;
 }
 
 async function findRepositoryRoot(cwd: string): Promise<string | null> {
@@ -59,15 +64,21 @@ async function readStatusEntries(repositoryRoot: string): Promise<GitPorcelainEn
 
 // Honors .gitattributes, $GIT_DIR/info/attributes and core.attributesFile.
 // Paths go over stdin so large change sets cannot exceed the argv limit.
+// Marking is a presentation hint: on failure every file stays in the main list.
 async function readCollapseReasons(repositoryRoot: string, relativePaths: string[]): Promise<Map<string, GitCollapseReason>> {
   if (relativePaths.length === 0) return new Map();
-  const pending = execFileAsync("git", ["-C", repositoryRoot, "check-attr", "-z", "--stdin", ...GIT_REVIEW_ATTRIBUTES], {
-    timeout: GIT_TIMEOUT_MS,
-    maxBuffer: GIT_STATUS_MAX_BUFFER,
-    env: { ...process.env, LC_ALL: "C" },
-  });
-  pending.child.stdin?.end(relativePaths.map((p) => `${p}\0`).join(""));
-  return parseGitCollapseReasons((await pending).stdout);
+  try {
+    const output = await git(
+      repositoryRoot,
+      ["check-attr", "-z", "--stdin", ...GIT_REVIEW_ATTRIBUTES],
+      // One record per queried attribute per path, so scale with the list.
+      GIT_STATUS_MAX_BUFFER * GIT_REVIEW_ATTRIBUTES.length,
+      relativePaths.map((p) => `${p}\0`).join(""),
+    );
+    return parseGitCollapseReasons(output);
+  } catch {
+    return new Map();
+  }
 }
 
 export async function getGitStatus(cwd: string): Promise<GitStatusResponse> {
