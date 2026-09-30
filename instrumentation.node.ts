@@ -74,6 +74,15 @@ export async function register(): Promise<void> {
   };
   const describe = (value: unknown) => (value instanceof Error ? `${value.name}: ${value.message}\n${value.stack ?? ""}` : String(value));
   process.on("uncaughtException", (error) => {
+    // A client disconnecting mid-request can surface here as an unhandled
+    // `Error: aborted` (ECONNRESET): for POSTs through proxy.ts, Next's body
+    // cloning drops the request's `error` listeners (replaceRequestBody,
+    // vercel/next.js#99278). That is a peer event, not a corrupted server:
+    // journal it and keep serving, as Next's own handler does.
+    if (error.message === "aborted" && (error as NodeJS.ErrnoException).code === "ECONNRESET") {
+      appendDiag("client-abort", `uncaughtException ${describe(error)}`);
+      return;
+    }
     appendDiag("crash", `uncaughtException ${describe(error)}`);
     // An uncaughtException listener suppresses Node's default exit; keep the
     // crash-visible semantics by exiting explicitly.
