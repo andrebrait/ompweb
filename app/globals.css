@@ -4016,10 +4016,6 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
     animation: none;
     background: var(--bg-subtle);
   }
-  /* Hide the closed mobile file panel immediately, not after its slide delay. */
-  .right-panel-container {
-    transition-delay: 0s !important;
-  }
 }
 
 @keyframes saved-pop {
@@ -4145,12 +4141,19 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
   }
 
   /* Full-screen overlay that slides in from the right edge. Closed panels are
-     hidden only after the exit slide finishes (visibility delay). */
+     hidden only after the exit slide finishes (visibility delay). Safe-area
+     padding keeps the panel clear of notches and rounded corners; the toolbar
+     takes the top inset so its background fills it, like the top bar's. */
   .right-panel-container {
     position: fixed;
     inset: 0;
+    padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
     overflow: hidden;
     transition: transform var(--dur-slow) var(--ease-out-warm), visibility 0s;
+  }
+  .right-panel-toolbar {
+    padding-top: env(safe-area-inset-top, 0px);
+    min-height: calc(44px + env(safe-area-inset-top, 0px)) !important;
   }
   .right-panel-container.right-panel-open {
     transform: none;
@@ -4165,6 +4168,12 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
     transform: translateX(100%);
     visibility: hidden;
     transition-delay: 0s, var(--dur-slow);
+  }
+  /* Reduced motion: hide the closed panel immediately, not after the slide. */
+  @media (prefers-reduced-motion: reduce) {
+    .right-panel-container {
+      transition-delay: 0s !important;
+    }
   }
   /* The panel ends up covering the whole screen, so a dimmed backdrop would
      only flash over the chat while the panel slides in. */

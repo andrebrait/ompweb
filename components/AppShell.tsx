@@ -80,7 +80,7 @@ import {
 } from "./AppUpdateDialog";
 import { ArchiveBrowser } from "./ArchiveBrowser";
 import { publishSessionsChanged } from "@/lib/session-change-bus";
-// The settings shell is part of the app bundle so opening it does not fetch or compile a modal chunk. The right panel (viewer included) is a separate chunk, preloaded shortly after mount and mounted on first open.
+// The settings shell is part of the app bundle so opening it does not fetch or compile a modal chunk. The right panel (viewer included) is a separate chunk, preloaded on the first pointerdown or keydown and mounted on first open.
 // No loading placeholder: it would take the panel's place in the layout (on
 // phones, squeezing out the chat) for a frame even when the code is cached.
 const RightPanel = dynamic(() => import("./RightPanel").then((m) => m.RightPanel), {
@@ -998,11 +998,21 @@ export function AppShell() {
   useEffect(() => {
     if (rightPanelOpen) setRightPanelHasOpened(true);
   }, [rightPanelOpen]);
-  // Fetch the panel's code once the page settles, so the first open does not
-  // wait for a download. A failed preload is retried by the first open.
+  // Fetch the panel's code on the first interaction, so the first open rarely
+  // waits for a download while pages nobody touches never fetch it. A failed
+  // preload is retried by the first open.
   useEffect(() => {
-    const id = setTimeout(() => { import("./RightPanel").catch(() => {}); }, 2000);
-    return () => clearTimeout(id);
+    const preload = () => {
+      window.removeEventListener("pointerdown", preload, true);
+      window.removeEventListener("keydown", preload, true);
+      import("./RightPanel").catch(() => {});
+    };
+    window.addEventListener("pointerdown", preload, true);
+    window.addEventListener("keydown", preload, true);
+    return () => {
+      window.removeEventListener("pointerdown", preload, true);
+      window.removeEventListener("keydown", preload, true);
+    };
   }, []);
   // One-shot request asking the explorer tab to expand + scroll to a file.
   const [revealPath, setRevealPath] = useState<string | null>(null);
