@@ -61,10 +61,12 @@ function shortVersion(version: string | undefined, t: (key: string) => string): 
 function Toggle({
   enabled,
   loading,
+  readOnly = false,
   onToggle,
 }: {
   enabled: boolean;
   loading: boolean;
+  readOnly?: boolean;
   onToggle: () => void;
 }) {
   const { t } = useI18n();
@@ -72,12 +74,14 @@ function Toggle({
     <button
       type="button"
       onClick={onToggle}
-      disabled={loading}
+      disabled={loading || readOnly}
       aria-pressed={enabled}
       title={
-        enabled
-          ? t("skillsConfig.visibleInPrompt")
-          : t("skillsConfig.hiddenFromPrompt")
+        readOnly
+          ? t("skillsConfig.toggleReadOnly")
+          : enabled
+            ? t("skillsConfig.visibleInPrompt")
+            : t("skillsConfig.hiddenFromPrompt")
       }
       style={{
         flexShrink: 0,
@@ -86,7 +90,8 @@ function Toggle({
         borderRadius: 11,
         border: "none",
         padding: 0,
-        cursor: loading ? "wait" : "pointer",
+        cursor: readOnly ? "not-allowed" : loading ? "wait" : "pointer",
+        opacity: readOnly ? 0.5 : 1,
         background: enabled ? "var(--accent-strong)" : "var(--border)",
         position: "relative",
         transition: "background var(--dur-med) var(--ease-out-warm)",
@@ -183,6 +188,7 @@ function SkillDetail({
         <Toggle
           enabled={enabled}
           loading={toggling}
+          readOnly={skill.togglable === false}
           onToggle={() => onToggle(skill)}
         />
         {saveError && (

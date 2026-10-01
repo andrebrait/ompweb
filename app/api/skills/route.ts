@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "fs";
 import { basename } from "path";
 import {
-  discoverSkills,
-  getSkillScanRootDirs,
+  getSkillToggleRoots,
   loadSkillsWithInstallInfo,
   parseSkillFrontmatter,
   readDisableModelInvocation,
@@ -14,8 +13,9 @@ import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-acces
 export const dynamic = "force-dynamic";
 
 // GET /api/skills?cwd=<path>
-// Scans the same skill roots omp discovers (~/.omp/agent/skills, project
-// .omp/skills, and the .claude/.agents/.codex/.github compat directories).
+// Lists what omp resolves (`omp skill list --json`), falling back to a scan
+// of omp's skill roots on binaries that predate the command. Each skill
+// carries `togglable`, the same check PATCH applies.
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const cwd = searchParams.get("cwd");
@@ -42,19 +42,13 @@ export async function PATCH(req: Request) {
       return NextResponse.json({ error: "not a SKILL.md file", code: "not_a_skill_file" }, { status: 400 });
     }
     if (!existsSync(filePath)) return NextResponse.json({ error: "file not found", code: "file_not_found" }, { status: 404 });
-    // Every root the scanner reads must be writable here, or skills in the
-    // compat dirs (~/.agents/skills — where the app's own global installs land,
-    // ~/.claude/skills, ~/.codex/skills, managed-skills) could be listed but
-    // never toggled. Session cwds cover the project-scope roots.
-    const allowedRoots = new Set(await getAllowedFileRoots());
-    // An optional cwd (already an allowed root) additionally covers the
-    // project walk-up roots discovery visits above the session directory.
-    const scanCwd = cwd && isExistingFilePathAllowed(cwd, allowedRoots) ? cwd : undefined;
-    for (const dir of getSkillScanRootDirs(scanCwd)) allowedRoots.add(dir);
-    // omp's own listing also covers plugin, custom-directory and registry
-    // skills outside the replica roots; anything it lists must be togglable.
-    // Authorize exactly the listed SKILL.md files, not their whole dirs.
-    if (scanCwd) for (const skill of (await discoverSkills(scanCwd)).skills) allowedRoots.add(skill.filePath);
+    // Every user-owned root the scanner reads must be writable here, or skills
+    // in the compat dirs (~/.agents/skills — where the app's own global
+    // installs land, ~/.claude/skills, ~/.codex/skills, managed-skills) could
+    // be listed but never toggled. Session cwds cover the project-scope roots;
+    // an optional cwd (already an allowed root) adds the project walk-up roots.
+    // Plugin/registry skills stay read-only (see getSkillToggleRoots).
+    const allowedRoots = await getSkillToggleRoots(cwd);
     // Resolve symlinks once up front and authorize the resolved path: the
     // read/write below then operate on the same resolved path, so a symlink
     // swapped between the authorization check and the write cannot redirect

@@ -4,7 +4,8 @@ import { homedir } from "os";
 import * as path from "path";
 import { promisify } from "util";
 import { parse as parseYaml } from "yaml";
-import { resolveOmpBin, wrapWindowsScript } from "@/lib/omp/omp-cli";
+import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
+import { resolveOmpBin, versionFingerprint, wrapWindowsScript } from "@/lib/omp/omp-cli";
 import { getAgentDir } from "@/lib/omp/paths";
 import { isRecord } from "@/lib/type-guards";
 import type { SkillInfo } from "@/lib/api-types";
@@ -250,7 +251,9 @@ const SOURCE_LABEL_BY_PROVIDER: Record<string, string> = {
 
 /**
  * Map an `omp skill list --json` payload onto the app's SkillInfo shape.
- * Returns undefined for anything that is not a skills data object.
+ * Returns undefined for anything that is not a skills data object, and when
+ * entries were present but none had the expected shape (upstream drift must
+ * fall back to the replica, not render an empty list).
  */
 export function skillsFromCliPayload(data: unknown): SkillsWithDiagnostics | undefined {
   if (!isRecord(data) || !Array.isArray(data.skills)) return undefined;
@@ -265,10 +268,13 @@ export function skillsFromCliPayload(data: unknown): SkillsWithDiagnostics | und
       description: typeof raw.description === "string" ? raw.description : "",
       filePath: raw.filePath,
       baseDir: typeof raw.baseDir === "string" ? raw.baseDir : raw.filePath.replace(/[\\/]SKILL\.md$/, ""),
+      // omp's `hide` is the frontmatter `hide`/`disableModelInvocation`
+      // (kebab key normalized), the same keys setDisableModelInvocation writes.
       disableModelInvocation: raw.hide === true,
       sourceInfo: { source: SOURCE_LABEL_BY_PROVIDER[provider] ?? provider, scope },
     });
   }
+  if (rawSkills.length > 0 && skills.length === 0) return undefined;
   // omp warnings are { skillPath, message }.
   const diagnostics: SkillDiagnostic[] = [];
   for (const raw of rawWarnings) {
@@ -284,6 +290,10 @@ export function skillsFromCliPayload(data: unknown): SkillsWithDiagnostics | und
 
 const execFileAsync = promisify(execFile);
 const SKILLS_CLI_TIMEOUT_MS = 15_000;
+// A binary whose `skill list` failed (predates the command, hangs, bad
+// output) is not re-spawned until it changes on disk or this expires.
+const SKILLS_CLI_MISS_TTL_MS = 5 * 60_000;
+let skillsCliMiss: { fingerprint: string; retryAt: number } | null = null;
 
 /**
  * Ask the omp binary for its skill listing (`omp skill list <cwd> --json`,
@@ -296,6 +306,8 @@ const SKILLS_CLI_TIMEOUT_MS = 15_000;
  */
 async function discoverSkillsViaCli(cwd: string, ompBin: string | null): Promise<SkillsWithDiagnostics | undefined> {
   if (!ompBin) return undefined;
+  const fingerprint = versionFingerprint(ompBin) ?? ompBin;
+  if (skillsCliMiss?.fingerprint === fingerprint && Date.now() < skillsCliMiss.retryAt) return undefined;
   // Windows .cmd/.bat launchers need cmd.exe, as in the version probe.
   const target = wrapWindowsScript(ompBin, ["skill", "list", path.resolve(cwd), "--json"]);
   try {
@@ -304,11 +316,13 @@ async function discoverSkillsViaCli(cwd: string, ompBin: string | null): Promise
       maxBuffer: 16 * 1024 * 1024,
       windowsHide: true,
     });
-    return skillsFromCliPayload(JSON.parse(stdout));
+    const listed = skillsFromCliPayload(JSON.parse(stdout));
+    if (listed) return listed;
   } catch {
     // Missing/old binary, exec or parse failure — fall back to the replica.
-    return undefined;
   }
+  skillsCliMiss = { fingerprint, retryAt: Date.now() + SKILLS_CLI_MISS_TTL_MS };
+  return undefined;
 }
 
 /** Discover skills for a cwd the way omp does: through the omp binary when it
@@ -335,10 +349,28 @@ export async function discoverSkills(
   return { skills, diagnostics };
 }
 
+/**
+ * Roots a SKILL.md must sit under for PATCH /api/skills to rewrite it: the
+ * allowed file roots plus the replica's user-owned skill roots (with the
+ * project walk-up roots when cwd is itself allowed). Skills omp lists from
+ * elsewhere (plugins, registry, custom directories) are read-only: their
+ * files belong to an installer and an update would discard the edit.
+ */
+export async function getSkillToggleRoots(cwd?: string): Promise<Set<string>> {
+  // Copy: getAllowedFileRoots returns its shared cache set.
+  const roots = new Set(await getAllowedFileRoots());
+  const scanCwd = cwd && isExistingFilePathAllowed(cwd, roots) ? cwd : undefined;
+  for (const dir of getSkillScanRootDirs(scanCwd)) roots.add(dir);
+  return roots;
+}
+
 export async function loadSkillsWithInstallInfo(cwd: string) {
-  const { skills, diagnostics } = await discoverSkills(cwd);
+  const [{ skills, diagnostics }, toggleRoots] = await Promise.all([discoverSkills(cwd), getSkillToggleRoots(cwd)]);
   return {
-    skills: annotateSkillsWithInstallInfo(skills, { cwd, agentDir: getAgentDir() }),
+    skills: annotateSkillsWithInstallInfo(skills, { cwd, agentDir: getAgentDir() }).map((skill) => ({
+      ...skill,
+      togglable: isExistingFilePathAllowed(skill.filePath, toggleRoots),
+    })),
     diagnostics,
   };
 }
