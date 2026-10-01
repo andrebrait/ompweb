@@ -4,7 +4,7 @@ import { homedir } from "os";
 import * as path from "path";
 import { promisify } from "util";
 import { parse as parseYaml } from "yaml";
-import { resolveOmpBin } from "@/lib/omp/omp-cli";
+import { resolveOmpBin, wrapWindowsScript } from "@/lib/omp/omp-cli";
 import { getAgentDir } from "@/lib/omp/paths";
 import { isRecord } from "@/lib/type-guards";
 import type { SkillInfo } from "@/lib/api-types";
@@ -253,8 +253,8 @@ const SOURCE_LABEL_BY_PROVIDER: Record<string, string> = {
  * Returns undefined for anything that is not a skills data object.
  */
 export function skillsFromCliPayload(data: unknown): SkillsWithDiagnostics | undefined {
-  if (!isRecord(data)) return undefined;
-  const rawSkills = Array.isArray(data.skills) ? data.skills : [];
+  if (!isRecord(data) || !Array.isArray(data.skills)) return undefined;
+  const rawSkills = data.skills;
   const rawWarnings = Array.isArray(data.warnings) ? data.warnings : [];
   const skills: SkillInfo[] = [];
   for (const raw of rawSkills) {
@@ -294,13 +294,15 @@ const SKILLS_CLI_TIMEOUT_MS = 15_000;
  * when the binary predates the command, or on any exec/parse failure, letting
  * the caller fall back to the replica scan.
  */
-async function discoverSkillsViaCli(cwd: string): Promise<SkillsWithDiagnostics | undefined> {
-  const ompBin = resolveOmpBin();
+async function discoverSkillsViaCli(cwd: string, ompBin: string | null): Promise<SkillsWithDiagnostics | undefined> {
   if (!ompBin) return undefined;
+  // Windows .cmd/.bat launchers need cmd.exe, as in the version probe.
+  const target = wrapWindowsScript(ompBin, ["skill", "list", path.resolve(cwd), "--json"]);
   try {
-    const { stdout } = await execFileAsync(ompBin, ["skill", "list", cwd, "--json"], {
+    const { stdout } = await execFileAsync(target.file, target.args, {
       timeout: SKILLS_CLI_TIMEOUT_MS,
       maxBuffer: 16 * 1024 * 1024,
+      windowsHide: true,
     });
     return skillsFromCliPayload(JSON.parse(stdout));
   } catch {
@@ -312,9 +314,12 @@ async function discoverSkillsViaCli(cwd: string): Promise<SkillsWithDiagnostics 
 /** Discover skills for a cwd the way omp does: through the omp binary when it
  * supports `skill list`, else the replica scan below. In the replica, name
  * collisions resolve to the highest-priority provider (scan-root order);
- * result is sorted by name. */
-export async function discoverSkills(cwd: string): Promise<SkillsWithDiagnostics> {
-  const viaCli = await discoverSkillsViaCli(cwd);
+ * result is sorted by name. `ompBin` is a test seam. */
+export async function discoverSkills(
+  cwd: string,
+  ompBin: string | null = resolveOmpBin(),
+): Promise<SkillsWithDiagnostics> {
+  const viaCli = await discoverSkillsViaCli(cwd, ompBin);
   if (viaCli) return viaCli;
   const diagnostics: SkillDiagnostic[] = [];
   const byName = new Map<string, SkillInfo>();

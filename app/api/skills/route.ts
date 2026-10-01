@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "fs";
 import { basename } from "path";
 import {
+  discoverSkills,
   getSkillScanRootDirs,
   loadSkillsWithInstallInfo,
   parseSkillFrontmatter,
@@ -50,6 +51,9 @@ export async function PATCH(req: Request) {
     // project walk-up roots discovery visits above the session directory.
     const scanCwd = cwd && isExistingFilePathAllowed(cwd, allowedRoots) ? cwd : undefined;
     for (const dir of getSkillScanRootDirs(scanCwd)) allowedRoots.add(dir);
+    // omp's own listing also covers plugin, custom-directory and registry
+    // skills outside the replica roots; anything it lists must be togglable.
+    if (scanCwd) for (const skill of (await discoverSkills(scanCwd)).skills) allowedRoots.add(skill.baseDir);
     // Resolve symlinks once up front and authorize the resolved path: the
     // read/write below then operate on the same resolved path, so a symlink
     // swapped between the authorization check and the write cannot redirect
