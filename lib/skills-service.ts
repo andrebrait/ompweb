@@ -298,7 +298,7 @@ const SKILLS_CLI_MISS_TTL_MS = 5 * 60_000;
 const skillsCliMisses = new Map<string, number>();
 
 /**
- * Ask the omp binary for its skill listing (`omp skill list <cwd> --json`,
+ * Ask the omp binary for its skill listing (`omp skill list --json` run in cwd,
  * omp >= 18.3.3). The binary is the authoritative source — the same discovery
  * sessions use, including namespaced collision aliases this replica cannot
  * reproduce — and every exec re-reads disk, so installs, uninstalls and
@@ -312,10 +312,13 @@ async function discoverSkillsViaCli(cwd: string, ompBin: string | null): Promise
   const missKey = `${versionFingerprint(ompBin) ?? ompBin}\0${cwdPath}`;
   const now = Date.now();
   if ((skillsCliMisses.get(missKey) ?? 0) > now) return undefined;
-  // Windows .cmd/.bat launchers need cmd.exe, as in the version probe.
-  const target = wrapWindowsScript(ompBin, ["skill", "list", cwdPath, "--json"]);
+  // Windows .cmd/.bat launchers need cmd.exe, as in the version probe. The
+  // directory goes in as the process cwd, never as an argument: cmd.exe would
+  // interpret `&` and friends in a directory name.
+  const target = wrapWindowsScript(ompBin, ["skill", "list", "--json"]);
   try {
     const { stdout } = await execFileAsync(target.file, target.args, {
+      cwd: cwdPath,
       timeout: SKILLS_CLI_TIMEOUT_MS,
       maxBuffer: 16 * 1024 * 1024,
       windowsHide: true,
@@ -356,10 +359,12 @@ export async function discoverSkills(
 
 /**
  * Roots a SKILL.md must sit under for PATCH /api/skills to rewrite it: the
- * allowed file roots plus the replica's user-owned skill roots (with the
- * project walk-up roots when cwd is itself allowed). Skills omp lists from
- * elsewhere (plugins, registry, custom directories) are read-only: their
- * files belong to an installer and an update would discard the edit.
+ * allowed file roots (workspaces the user opened, so their files are the
+ * user's) plus the replica's user-owned skill roots (with the project walk-up
+ * roots when cwd is itself allowed). This is the allowlist main already had.
+ * Skills omp lists from anywhere else (the plugin cache, registry installs,
+ * custom directories outside a workspace) are read-only: their files belong
+ * to an installer and an update would discard the edit.
  */
 export async function getSkillToggleRoots(cwd?: string): Promise<Set<string>> {
   // Copy: getAllowedFileRoots returns its shared cache set.
