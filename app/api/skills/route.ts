@@ -53,7 +53,8 @@ export async function PATCH(req: Request) {
     for (const dir of getSkillScanRootDirs(scanCwd)) allowedRoots.add(dir);
     // omp's own listing also covers plugin, custom-directory and registry
     // skills outside the replica roots; anything it lists must be togglable.
-    if (scanCwd) for (const skill of (await discoverSkills(scanCwd)).skills) allowedRoots.add(skill.baseDir);
+    // Authorize exactly the listed SKILL.md files, not their whole dirs.
+    if (scanCwd) for (const skill of (await discoverSkills(scanCwd)).skills) allowedRoots.add(skill.filePath);
     // Resolve symlinks once up front and authorize the resolved path: the
     // read/write below then operate on the same resolved path, so a symlink
     // swapped between the authorization check and the write cannot redirect
