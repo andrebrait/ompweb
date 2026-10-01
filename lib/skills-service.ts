@@ -4,7 +4,7 @@ import { homedir } from "os";
 import * as path from "path";
 import { promisify } from "util";
 import { parse as parseYaml } from "yaml";
-import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
+import { existingPathWithinRootsChecker, getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import { resolveOmpBin, versionFingerprint, wrapWindowsScript } from "@/lib/omp/omp-cli";
 import { getAgentDir } from "@/lib/omp/paths";
 import { isRecord } from "@/lib/type-guards";
@@ -290,10 +290,12 @@ export function skillsFromCliPayload(data: unknown): SkillsWithDiagnostics | und
 
 const execFileAsync = promisify(execFile);
 const SKILLS_CLI_TIMEOUT_MS = 15_000;
-// A binary whose `skill list` failed (predates the command, hangs, bad
-// output) is not re-spawned until it changes on disk or this expires.
+// A `skill list` that failed (binary predates the command, hangs, bad output,
+// or omp rejects this project's config) is not re-spawned for the same binary
+// and cwd until the binary changes on disk or this expires. Keyed per cwd so
+// one broken project cannot hide omp's listing for every other project.
 const SKILLS_CLI_MISS_TTL_MS = 5 * 60_000;
-let skillsCliMiss: { fingerprint: string; retryAt: number } | null = null;
+const skillsCliMisses = new Map<string, number>();
 
 /**
  * Ask the omp binary for its skill listing (`omp skill list <cwd> --json`,
@@ -306,10 +308,12 @@ let skillsCliMiss: { fingerprint: string; retryAt: number } | null = null;
  */
 async function discoverSkillsViaCli(cwd: string, ompBin: string | null): Promise<SkillsWithDiagnostics | undefined> {
   if (!ompBin) return undefined;
-  const fingerprint = versionFingerprint(ompBin) ?? ompBin;
-  if (skillsCliMiss?.fingerprint === fingerprint && Date.now() < skillsCliMiss.retryAt) return undefined;
+  const cwdPath = path.resolve(cwd);
+  const missKey = `${versionFingerprint(ompBin) ?? ompBin}\0${cwdPath}`;
+  const now = Date.now();
+  if ((skillsCliMisses.get(missKey) ?? 0) > now) return undefined;
   // Windows .cmd/.bat launchers need cmd.exe, as in the version probe.
-  const target = wrapWindowsScript(ompBin, ["skill", "list", path.resolve(cwd), "--json"]);
+  const target = wrapWindowsScript(ompBin, ["skill", "list", cwdPath, "--json"]);
   try {
     const { stdout } = await execFileAsync(target.file, target.args, {
       timeout: SKILLS_CLI_TIMEOUT_MS,
@@ -321,7 +325,8 @@ async function discoverSkillsViaCli(cwd: string, ompBin: string | null): Promise
   } catch {
     // Missing/old binary, exec or parse failure — fall back to the replica.
   }
-  skillsCliMiss = { fingerprint, retryAt: Date.now() + SKILLS_CLI_MISS_TTL_MS };
+  for (const [key, retryAt] of skillsCliMisses) if (retryAt <= now) skillsCliMisses.delete(key);
+  skillsCliMisses.set(missKey, now + SKILLS_CLI_MISS_TTL_MS);
   return undefined;
 }
 
@@ -364,12 +369,13 @@ export async function getSkillToggleRoots(cwd?: string): Promise<Set<string>> {
   return roots;
 }
 
-export async function loadSkillsWithInstallInfo(cwd: string) {
-  const [{ skills, diagnostics }, toggleRoots] = await Promise.all([discoverSkills(cwd), getSkillToggleRoots(cwd)]);
+export async function loadSkillsWithInstallInfo(cwd: string, ompBin: string | null = resolveOmpBin()) {
+  const [{ skills, diagnostics }, toggleRoots] = await Promise.all([discoverSkills(cwd, ompBin), getSkillToggleRoots(cwd)]);
+  const isTogglable = existingPathWithinRootsChecker(toggleRoots);
   return {
     skills: annotateSkillsWithInstallInfo(skills, { cwd, agentDir: getAgentDir() }).map((skill) => ({
       ...skill,
-      togglable: isExistingFilePathAllowed(skill.filePath, toggleRoots),
+      togglable: isTogglable(skill.filePath),
     })),
     diagnostics,
   };

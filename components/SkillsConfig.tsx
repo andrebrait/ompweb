@@ -197,6 +197,12 @@ function SkillDetail({
           </span>
         )}
       </div>
+      {skill.togglable === false && (
+        // Visible too: a disabled button's title is unreachable by keyboard and touch.
+        <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)" }}>
+          {t("skillsConfig.toggleReadOnly")}
+        </p>
+      )}
 
       {skill.install?.skillsShUrl && (
         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
