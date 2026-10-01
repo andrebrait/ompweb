@@ -1,9 +1,11 @@
+import { execFile } from "child_process";
 import { existsSync, promises as fs } from "fs";
 import { homedir } from "os";
 import * as path from "path";
+import { promisify } from "util";
 import { parse as parseYaml } from "yaml";
+import { resolveOmpBin } from "@/lib/omp/omp-cli";
 import { getAgentDir } from "@/lib/omp/paths";
-import { getRpcSession, getRunningRpcSessions } from "@/lib/rpc-manager";
 import { isRecord } from "@/lib/type-guards";
 import type { SkillInfo } from "@/lib/api-types";
 import { annotateSkillsWithInstallInfo } from "@/lib/skill-lock";
@@ -247,23 +249,13 @@ const SOURCE_LABEL_BY_PROVIDER: Record<string, string> = {
 };
 
 /**
- * Ask a running omp session for its skill listing (RPC `skills_list`, omp
- * >= 18.2.2-patched). The session listing is authoritative — it is the same
- * resolution omp uses for `skill://` and `/skill:`, including namespaced
- * collision aliases the replica scan below cannot know about. Returns
- * undefined when no running session covers cwd, when the child predates the
- * command, or on any transport hiccup, letting the caller fall back to the
- * local replica scan. The listing reflects the session's last discovery:
- * like the CLI, changes on disk show up after the session restarts.
+ * Map an `omp skill list --json` payload onto the app's SkillInfo shape.
+ * Returns undefined for anything that is not a skills data object.
  */
-/**
- * Map a `skills_list` RPC payload onto the app's SkillInfo shape. Returns
- * undefined for anything that is not a successful skills_list data object.
- */
-export function skillsFromRpcPayload(data: unknown): SkillsWithDiagnostics | undefined {
+export function skillsFromCliPayload(data: unknown): SkillsWithDiagnostics | undefined {
   if (!isRecord(data)) return undefined;
   const rawSkills = Array.isArray(data.skills) ? data.skills : [];
-  const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+  const rawWarnings = Array.isArray(data.warnings) ? data.warnings : [];
   const skills: SkillInfo[] = [];
   for (const raw of rawSkills) {
     if (!isRecord(raw) || typeof raw.name !== "string" || typeof raw.filePath !== "string") continue;
@@ -277,30 +269,53 @@ export function skillsFromRpcPayload(data: unknown): SkillsWithDiagnostics | und
       sourceInfo: { source: SOURCE_LABEL_BY_PROVIDER[provider] ?? provider, scope },
     });
   }
-  return { skills, diagnostics: warnings as SkillDiagnostic[] };
-}
-
-async function discoverSkillsViaRpc(cwd: string): Promise<SkillsWithDiagnostics | undefined> {
-  const candidates = getRunningRpcSessions().filter((session) => session.cwd === cwd);
-  for (const running of candidates) {
-    const session = getRpcSession(running.id);
-    if (!session) continue;
-    try {
-      const response = (await session.send({ type: "skills_list" })) as unknown;
-      if (!isRecord(response) || response.success !== true) continue;
-      return skillsFromRpcPayload(response.data);
-    } catch {
-      // Restarting or stale child — try the next candidate, else fall back.
-    }
+  // omp warnings are { skillPath, message }.
+  const diagnostics: SkillDiagnostic[] = [];
+  for (const raw of rawWarnings) {
+    if (!isRecord(raw) || typeof raw.message !== "string") continue;
+    diagnostics.push({
+      type: "warning",
+      message: raw.message,
+      ...(typeof raw.skillPath === "string" && raw.skillPath ? { path: raw.skillPath } : {}),
+    });
   }
-  return undefined;
+  return { skills, diagnostics };
 }
 
-/** Discover skills for a cwd the way omp does. Name collisions resolve to the
- * highest-priority provider (scan-root order); result is sorted by name. */
+const execFileAsync = promisify(execFile);
+const SKILLS_CLI_TIMEOUT_MS = 15_000;
+
+/**
+ * Ask the omp binary for its skill listing (`omp skill list <cwd> --json`,
+ * omp >= 18.3.3). The binary is the authoritative source — the same discovery
+ * sessions use, including namespaced collision aliases this replica cannot
+ * reproduce — and every exec re-reads disk, so installs, uninstalls and
+ * toggles show immediately. Returns undefined when no binary is available,
+ * when the binary predates the command, or on any exec/parse failure, letting
+ * the caller fall back to the replica scan.
+ */
+async function discoverSkillsViaCli(cwd: string): Promise<SkillsWithDiagnostics | undefined> {
+  const ompBin = resolveOmpBin();
+  if (!ompBin) return undefined;
+  try {
+    const { stdout } = await execFileAsync(ompBin, ["skill", "list", cwd, "--json"], {
+      timeout: SKILLS_CLI_TIMEOUT_MS,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    return skillsFromCliPayload(JSON.parse(stdout));
+  } catch {
+    // Missing/old binary, exec or parse failure — fall back to the replica.
+    return undefined;
+  }
+}
+
+/** Discover skills for a cwd the way omp does: through the omp binary when it
+ * supports `skill list`, else the replica scan below. In the replica, name
+ * collisions resolve to the highest-priority provider (scan-root order);
+ * result is sorted by name. */
 export async function discoverSkills(cwd: string): Promise<SkillsWithDiagnostics> {
-  const viaRpc = await discoverSkillsViaRpc(cwd);
-  if (viaRpc) return viaRpc;
+  const viaCli = await discoverSkillsViaCli(cwd);
+  if (viaCli) return viaCli;
   const diagnostics: SkillDiagnostic[] = [];
   const byName = new Map<string, SkillInfo>();
   for (const root of buildScanRoots(cwd)) {
