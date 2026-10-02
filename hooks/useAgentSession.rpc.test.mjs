@@ -669,6 +669,40 @@ test("the agent_end snapshot clears a stale queue even when the wrapper reports 
   assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: [] });
 });
 
+test("an older state response cannot overwrite a newer snapshot that arrived first", async () => {
+  resetWorld();
+  primeSession("queue-seq", [userMsg("u0", "q")]);
+  const { w, es } = await startRun("queue-seq", "run");
+  let releaseOlder;
+  world.holds.push({
+    match: (method, url) => method === "GET" && url === "/api/agent/queue-seq",
+    produce: () => new Promise((resolve) => { releaseOlder = resolve; }),
+  });
+  world.holds.push({
+    match: (method, url) => method === "GET" && url === "/api/agent/queue-seq",
+    produce: async () => ({ value: { running: true, state: { queuedMessages: { steering: ["pending"], followUp: [] } } } }),
+  });
+  await act(() => es.open()); // older snapshot request, held
+  await act(() => es.open()); // newer reconnect snapshot, answers first
+  await settle();
+  assert.deepEqual(w.latest.queuedMessages, { steering: ["pending"], followUp: [] });
+  await act(async () => {
+    releaseOlder({ value: { running: true, state: { queuedMessages: { steering: [], followUp: [] } } } });
+    await sleep(20);
+  });
+  assert.deepEqual(w.latest.queuedMessages, { steering: ["pending"], followUp: [] }, "the older response must not clear the chip");
+});
+
+test("overlapping Stops share one withdrawal and one abort", async () => {
+  resetWorld();
+  primeSession("abort-twice", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-twice", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: ["A", "B"], followUp: [] }));
+  await act(async () => { await Promise.all([w.latest.handleAbort(), w.latest.handleAbort()]); });
+  assert.deepEqual(world.calls.filter((c) => c.body?.type === "remove_queued_message").map((c) => c.body.message), ["A", "B"]);
+  assert.equal(world.calls.filter((c) => c.body?.type === "abort").length, 1);
+});
+
 test("a state snapshot older than a queue_update is dropped, and opening the stream re-reads the queue", async () => {
   resetWorld();
   primeSession("queue-order", [userMsg("u0", "q")]);

@@ -310,9 +310,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [extensionWidgets, setExtensionWidgets] = useState<ExtensionWidgetItem[]>([]);
   const [queuedMessages, setQueuedMessagesState] = useState<QueuedMessages>(EMPTY_QUEUE);
   const queuedMessagesRef = useRef<QueuedMessages>(EMPTY_QUEUE);
-  // Bumped by every queue_update: a get_state snapshot requested before a
-  // newer frame landed must not overwrite it (HTTP and SSE can reorder).
-  const queueRevisionRef = useRef(0);
+  // One sequence for every queue source. Each get_state request takes a
+  // number when it is sent and each queue_update takes one on arrival; a
+  // snapshot applies only if nothing newer has been applied (HTTP responses
+  // and SSE frames can arrive in any order).
+  const queueSeqRef = useRef(0);
+  const queueAppliedSeqRef = useRef(0);
   const updateQueuedMessages = useCallback((next: QueuedMessages) => {
     // Unchanged snapshots keep their identity (the Delete confirmation is
     // bound to the queue object it was opened against).
@@ -320,9 +323,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     queuedMessagesRef.current = next;
     setQueuedMessagesState(next);
   }, []);
-  /** Apply a get_state queue snapshot unless a queue_update landed since it was requested. */
-  const applyQueueStateSnapshot = useCallback((revision: number, value: unknown) => {
-    if (queueRevisionRef.current !== revision) return;
+  /** Apply a get_state queue snapshot unless a newer snapshot or queue_update was applied. */
+  const applyQueueStateSnapshot = useCallback((seq: number, value: unknown) => {
+    if (seq <= queueAppliedSeqRef.current) return;
+    queueAppliedSeqRef.current = seq;
     updateQueuedMessages(readQueueSnapshot(value) ?? EMPTY_QUEUE);
   }, [updateQueuedMessages]);
   const [subagents, setSubagents] = useState<SubagentInfo[]>([]);
@@ -798,7 +802,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // earlier must not mint a fresh token on arrival and clobber a newer
         // sync that started while this request was in flight.
         const token = beginAuthoritativeModelSync();
-        const queueRevision = queueRevisionRef.current;
+        const queueRevision = ++queueSeqRef.current;
         const stateRes = await fetch(`/api/sessions/${encodeURIComponent(sid)}/state`);
         if (!stateRes.ok) throw new Error(`HTTP ${stateRes.status}`);
         const agentState = await stateRes.json() as { running: boolean; state?: AgentStateResponse; exited?: ExitedRpcSession };
@@ -1016,7 +1020,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const reconnectActionsRef = useRef<((sid: string) => void) | null>(null);
 
   const refreshQueueSnapshot = useCallback(async (sid: string) => {
-    const revision = queueRevisionRef.current;
+    const revision = ++queueSeqRef.current;
     try {
       const res = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
       if (!res.ok || sessionIdRef.current !== sid) return;
@@ -1617,7 +1621,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const token = guard.tryAcquire();
     if (token === null) return;
     try {
-      const queueRevision = queueRevisionRef.current;
+      const queueRevision = ++queueSeqRef.current;
       const res = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
       if (!res.ok) return;
       const data = await res.json() as { running?: boolean; state?: AgentStateResponse };
@@ -1828,7 +1832,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       case "queue_update": {
         const snapshot = readQueueSnapshot(event);
         if (snapshot) {
-          queueRevisionRef.current += 1;
+          queueAppliedSeqRef.current = ++queueSeqRef.current;
           updateQueuedMessages(snapshot);
         }
         break;
@@ -1920,7 +1924,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (endedSid) {
           void loadSession(endedSid, false, false, endedRunId);
           const endToken = beginAuthoritativeModelSync();
-          const queueRevision = queueRevisionRef.current;
+          const queueRevision = ++queueSeqRef.current;
           fetch(`/api/agent/${encodeURIComponent(endedSid)}`)
             .then((r) => (r.ok ? r.json() as Promise<{ state?: AgentStateResponse }> : null))
             .then((d) => {
@@ -2739,17 +2743,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [addNotice, ensureNewSession, loadSession, opts.chatInputRef, promoteNewSession, session]);
   executeBashRef.current = executeBash;
 
-  const handleAbort = useCallback(async () => {
-    const sid = sessionIdRef.current;
-    if (!sid) return;
-    if (bashRunningRef.current) {
-      try {
-        await sendAgentCommand(sid, { type: "abort_bash" });
-      } catch (e) {
-        console.error("Failed to abort bash:", e);
-      }
-      return;
-    }
+  const withdrawAndAbort = useCallback(async (sid: string) => {
     // Take pending messages back out of omp BEFORE the abort, like the TUI's
     // Esc: omp runs a queued steer as soon as an abort lands (and keeps a
     // follow-up for after the next reply, #130). Withdrawn texts return to
@@ -2820,6 +2814,26 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       addNotice({ type: "warning", message: translate("agentSession.queueDiscardFailed") });
     }
   }, [addNotice]);
+
+  // Button, Esc, and the global shortcut can all fire while a withdrawal is
+  // in flight: one Stop at a time, or two recoveries interleave their text.
+  const stopInFlightRef = useRef<Promise<void> | null>(null);
+  const handleAbort = useCallback(async () => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    if (bashRunningRef.current) {
+      try {
+        await sendAgentCommand(sid, { type: "abort_bash" });
+      } catch (e) {
+        console.error("Failed to abort bash:", e);
+      }
+      return;
+    }
+    if (stopInFlightRef.current) return stopInFlightRef.current;
+    const stop = withdrawAndAbort(sid).finally(() => { stopInFlightRef.current = null; });
+    stopInFlightRef.current = stop;
+    return stop;
+  }, [withdrawAndAbort]);
 
   // editPrompt: omp's `branch` drops the chosen user prompt from the fork and
   // returns its text — put it in the fork's composer (edit-and-resend).

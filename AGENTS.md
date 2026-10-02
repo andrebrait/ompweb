@@ -224,11 +224,12 @@ handled or safely ignored.
 The queue panel renders omp's snapshot only: `get_state.queuedMessages` on
 load/reconcile/stream open and live `queue_update` frames. Never track chips
 client-side — every client viewing the session must show the same queue.
-`queueRevisionRef` drops a get_state snapshot requested before a newer
-`queue_update` (HTTP and SSE can reorder). Edit/Delete use
+One sequence (`queueSeqRef`) orders every source: a get_state snapshot takes
+a number when requested and applies only if no newer snapshot or
+`queue_update` was applied (HTTP and SSE can reorder). Edit/Delete use
 `remove_queued_message` (act only on `removed: true`), Steer uses
 `promote_queued_message`; the chip changes when omp's next snapshot arrives.
-`handleAbort` withdraws pending messages BEFORE sending `abort` (bounded by
+`handleAbort` coalesces overlapping Stops, then withdraws pending messages BEFORE sending `abort` (bounded by
 `WITHDRAW_BEFORE_ABORT_MS`), like the TUI's Esc: omp runs a queued steer as
 soon as an abort lands. Withdrawn text goes to the session draft via
 `recoverDraftText`, saved as each removal confirms. A follow-up that answers
