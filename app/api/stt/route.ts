@@ -1,29 +1,20 @@
 import { NextResponse } from "next/server";
 import { parseFormDataWithinLimit, RequestBodyTooLargeError } from "@/lib/bounded-form-data";
 import { MAX_STT_AUDIO_BYTES, MAX_STT_REQUEST_BYTES } from "@/lib/stt";
+import { startSttJob } from "@/lib/stt-jobs";
 
 export const dynamic = "force-dynamic";
-
-function extractUpstreamErrorMessage(data: unknown, rawText: string, status: number): string {
-  if (data && typeof data === "object" && "error" in data) {
-    const error: unknown = data.error;
-    if (typeof error === "string" && error.trim()) return error;
-    if (error && typeof error === "object" && "message" in error) {
-      const message: unknown = error.message;
-      if (typeof message === "string" && message.trim()) return message;
-    }
-  }
-  if (rawText.trim()) return rawText.trim().slice(0, 500);
-  return `Transcription failed (upstream ${status})`;
-}
 
 function cleanEnvVar(val?: string): string | undefined {
   const cleaned = val?.replace(/\\n|[\r\n]/g, "").trim();
   return cleaned || undefined;
 }
 
+/**
+ * POST /api/stt — validates the audio and starts a server-side transcription
+ * job. Returns 202 { jobId }; poll GET /api/stt/[jobId] for the result.
+ */
 export async function POST(request: Request) {
-  let apiKey: string | undefined;
   try {
     const endpoint = cleanEnvVar(process.env.OMP_WEB_STT_ENDPOINT);
     if (!endpoint) {
@@ -33,7 +24,7 @@ export async function POST(request: Request) {
       );
     }
 
-    apiKey = cleanEnvVar(process.env.OMP_WEB_STT_KEY);
+    const apiKey = cleanEnvVar(process.env.OMP_WEB_STT_KEY);
     const model = cleanEnvVar(process.env.OMP_WEB_STT_MODEL);
     const formData = await parseFormDataWithinLimit(request, MAX_STT_REQUEST_BYTES);
     const file = formData.get("file");
@@ -54,32 +45,7 @@ export async function POST(request: Request) {
       formData.append("model", model);
     }
 
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
-      body: formData,
-      signal: AbortSignal.timeout(60000),
-    });
-
-    const rawText = await res.text();
-    let data: unknown = null;
-    try {
-      data = rawText ? JSON.parse(rawText) : {};
-    } catch {
-      data = null;
-    }
-
-    if (!res.ok) {
-      return NextResponse.json(
-        { error: extractUpstreamErrorMessage(data, rawText, res.status) },
-        { status: res.status }
-      );
-    }
-
-    if (data !== null) {
-      return NextResponse.json(data, { status: res.status });
-    }
-    return NextResponse.json({ text: rawText }, { status: res.status });
+    return NextResponse.json({ jobId: startSttJob(endpoint, apiKey, formData) }, { status: 202 });
   } catch (error) {
     if (error instanceof RequestBodyTooLargeError) {
       return NextResponse.json(
@@ -87,8 +53,6 @@ export async function POST(request: Request) {
         { status: 413 }
       );
     }
-    const rawMsg = error instanceof Error ? error.message : String(error);
-    const safeMsg = apiKey ? rawMsg.replaceAll(apiKey, "[REDACTED]") : rawMsg;
-    return NextResponse.json({ error: safeMsg }, { status: 500 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
 }

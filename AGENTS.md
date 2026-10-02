@@ -83,6 +83,8 @@ app/api/
   skills/route.ts                 GET/PATCH loaded skills and disable-model-invocation
   skills/install/route.ts         POST install skills through npx skills add
   skills/search/route.ts          GET/POST skills.sh search
+  stt/route.ts                    POST audio → 202 { jobId }; server-side transcription job (lib/stt-jobs.ts)
+  stt/[jobId]/route.ts            GET job state: pending | done { text } | error { error }; 404 unknown
   worktrees/route.ts              GET/POST/DELETE git worktrees
 
 lib/

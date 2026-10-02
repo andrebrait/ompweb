@@ -136,10 +136,15 @@ beforeEach(() => {
   override(URL, "revokeObjectURL", (url) => {
     world.revokedUrls.push(url);
   });
-  override(globalThis, "fetch", async () => ({
-    ok: true,
-    json: async () => ({ text: "transcribed words" }),
-  }));
+  // POST /api/stt starts a job; each GET poll answers with the next scripted
+  // response, the last one repeating.
+  world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "done", text: "transcribed words" }) }];
+  world.polls = 0;
+  override(globalThis, "fetch", async (url, init) => {
+    if (init?.method === "POST") return { ok: true, status: 202, json: async () => ({ jobId: "job-1" }) };
+    assert.equal(url, "/api/stt/job-1");
+    return world.pollResponses[Math.min(world.polls++, world.pollResponses.length - 1)];
+  });
 });
 
 afterEach(() => {
@@ -244,11 +249,60 @@ test("stopping capture enters review with a playable preview, and confirming rel
   await act(async () => {
     view.result.current.confirmTranscribe();
   });
-  await settle(60);
+  await settle(700);
 
   assert.deepEqual(world.revokedUrls, [world.createdUrls[0].url], "confirming must revoke the preview URL");
   assert.equal(view.result.current.isReviewing, false);
   assert.deepEqual(transcripts, ["transcribed words"]);
+});
+
+test("transcription keeps polling through pending and proxy error pages until the job is done", async () => {
+  const { view, transcripts, errors } = mountDictation();
+  world.pollResponses = [
+    { ok: true, status: 200, json: async () => ({ status: "pending" }) },
+    { ok: false, status: 504, json: async () => JSON.parse("<!DOCTYPE html>") },
+    { ok: true, status: 200, json: async () => ({ status: "done", text: "slow words" }) },
+  ];
+
+  await act(async () => {
+    view.result.current.toggle();
+  });
+  await settle();
+  await act(async () => {
+    view.result.current.stop();
+  });
+  await settle();
+  await act(async () => {
+    view.result.current.confirmTranscribe();
+  });
+  await settle(1800);
+
+  assert.deepEqual(errors, []);
+  assert.deepEqual(transcripts, ["slow words"]);
+  assert.equal(world.polls, 3);
+  assert.equal(view.result.current.isTranscribing, false);
+});
+
+test("a failed transcription job surfaces its error and keeps the audio for retry", async () => {
+  const { view, transcripts, errors } = mountDictation();
+  world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "error", error: "Transcription timed out" }) }];
+
+  await act(async () => {
+    view.result.current.toggle();
+  });
+  await settle();
+  await act(async () => {
+    view.result.current.stop();
+  });
+  await settle();
+  await act(async () => {
+    view.result.current.confirmTranscribe();
+  });
+  await settle(700);
+
+  assert.deepEqual(transcripts, []);
+  assert.deepEqual(errors, ["Transcription timed out"]);
+  assert.equal(view.result.current.transcribeError, "Transcription timed out");
 });
 
 test("cancelling during capture clears state and releases the microphone", async () => {

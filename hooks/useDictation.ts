@@ -8,7 +8,9 @@ export interface UseDictationOptions {
 }
 
 export const MAX_RECORDING_MS = 300_000;
-const STT_TIMEOUT_MS = 60_000;
+// Server waits up to 10 min on the STT endpoint (lib/stt-jobs.ts); poll a bit longer.
+const STT_TIMEOUT_MS = 11 * 60_000;
+const STT_POLL_INTERVAL_MS = 500;
 
 /**
  * Live capture state polled by RecordingDeck (timer + waveform) without
@@ -125,56 +127,73 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
     };
   }, [cleanup, teardownPreviewAudio]);
 
+  // POST /api/stt starts a server-side job; the server holds the slow upstream
+  // request and the browser only polls short GETs, so proxy idle timeouts
+  // between them never apply. Transient poll failures (network switch, proxy
+  // error page during a restart) keep polling until the deadline.
   const runTranscription = useCallback(async (blob: Blob, ext: string) => {
     setIsTranscribing(true);
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
-    const timeoutId = window.setTimeout(() => {
-      abortController.abort(new DOMException("Transcription timed out", "TimeoutError"));
-    }, STT_TIMEOUT_MS);
+    const { signal } = abortController;
+    const deadline = Date.now() + STT_TIMEOUT_MS;
+    const fail = (message: string) => {
+      setTranscribeError(message);
+      onError?.(message);
+    };
 
     try {
       const body = new FormData();
       body.append("file", blob, ext);
-
-      const res = await fetch("/api/stt", {
-        method: "POST",
-        body,
-        signal: abortController.signal,
-      });
+      const startRes = await fetch("/api/stt", { method: "POST", body, signal });
+      const started = await startRes.json().catch(() => null);
       if (cancelledRef.current) return;
-      const data = await res.json();
-      if (cancelledRef.current) return;
-      if (!res.ok) {
-        const message = normalizeErrorMessage(data?.error, "Transcription failed");
-        setTranscribeError(message);
-        onError?.(message);
+      if (!startRes.ok || typeof started?.jobId !== "string") {
+        fail(normalizeErrorMessage(started?.error, `Transcription failed (HTTP ${startRes.status})`));
         return;
       }
-      if (typeof data.text === "string" && data.text.trim()) {
-        if (!cancelledRef.current) {
-          pendingAudioRef.current = null;
-          onTranscript(data.text.trim());
+
+      const jobUrl = `/api/stt/${encodeURIComponent(started.jobId)}`;
+      while (true) {
+        if (Date.now() > deadline) {
+          fail("Transcription timed out");
+          return;
         }
-      } else if (!cancelledRef.current) {
-        const message = "No speech detected";
-        setTranscribeError(message);
-        onError?.(message);
+        const tick = Promise.withResolvers<void>();
+        window.setTimeout(tick.resolve, STT_POLL_INTERVAL_MS);
+        await tick.promise;
+        if (signal.aborted || cancelledRef.current) return;
+        const res = await fetch(jobUrl, { signal, cache: "no-store" }).catch((err: unknown) => {
+          if (signal.aborted) throw err;
+          return null;
+        });
+        if (cancelledRef.current) return;
+        if (!res) continue;
+        const job = await res.json().catch(() => null);
+        if (cancelledRef.current) return;
+        if (res.status === 404) {
+          fail(normalizeErrorMessage(job?.error, "Transcription job not found"));
+          return;
+        }
+        if (!res.ok || job?.status === "pending") continue;
+        if (job?.status === "error") {
+          fail(normalizeErrorMessage(job.error, "Transcription failed"));
+          return;
+        }
+        if (job?.status !== "done") continue;
+        if (typeof job.text === "string" && job.text.trim()) {
+          pendingAudioRef.current = null;
+          onTranscript(job.text.trim());
+        } else {
+          fail("No speech detected");
+        }
+        return;
       }
     } catch (err) {
       if (cancelledRef.current) return;
-      if (err instanceof DOMException && err.name === "TimeoutError") {
-        const message = "Transcription timed out";
-        setTranscribeError(message);
-        onError?.(message);
-        return;
-      }
       if (err instanceof DOMException && err.name === "AbortError") return;
-      const message = err instanceof Error ? err.message : normalizeErrorMessage(err, "Transcription failed");
-      setTranscribeError(message);
-      onError?.(message);
+      fail(err instanceof Error ? err.message : normalizeErrorMessage(err, "Transcription failed"));
     } finally {
-      window.clearTimeout(timeoutId);
       if (abortControllerRef.current === abortController) {
         abortControllerRef.current = null;
       }
