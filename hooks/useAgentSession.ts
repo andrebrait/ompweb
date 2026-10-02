@@ -2777,6 +2777,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const queues = entry.queue === "followUp" ? ["followUp", "steering"] as const : ["steering"] as const;
       try {
         for (const queue of queues) {
+          // A late refusal must not reach into a newer run's steering queue.
+          if (queue === "steering" && entry.queue === "followUp"
+            && (promptRunIdRef.current !== runId || runsEndedRef.current !== runsEnded)) return;
           const result = await sendAgentCommand<{ removed: boolean }>(sid, { type: "remove_queued_message", message: entry.text, queue });
           if (result?.removed === true) {
             removed[i] = true;

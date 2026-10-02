@@ -733,6 +733,31 @@ test("a stalled withdrawal from an earlier Stop does not swallow the next run's 
   });
 });
 
+test("a late follow-up refusal does not remove a same-text steer from a newer run", async () => {
+  resetWorld();
+  primeSession("abort-late-refusal", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-late-refusal", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: [], followUp: ["same"] }));
+  let refuse;
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message" && body.queue === "followUp",
+    produce: () => new Promise((resolve) => { refuse = resolve; }),
+  });
+  let stop;
+  await act(async () => { stop = w.latest.handleAbort(); });
+  await sleep(1700);
+  await act(async () => {
+    es.emit({ type: "message_end", message: assistantMsg("a1", "answer") });
+    es.emit({ type: "agent_end", isTerminal: true });
+    es.emit({ type: "agent_start" }); // new run that queues its own "same" steer
+  });
+  await act(async () => {
+    refuse({ value: { success: true, data: { removed: false } } });
+    await stop;
+  });
+  assert.equal(world.calls.some((c) => c.body?.type === "remove_queued_message" && c.body.queue === "steering"), false);
+});
+
 test("a state snapshot older than a queue_update is dropped, and opening the stream re-reads the queue", async () => {
   resetWorld();
   primeSession("queue-order", [userMsg("u0", "q")]);
