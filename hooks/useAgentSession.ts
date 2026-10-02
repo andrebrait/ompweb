@@ -1759,6 +1759,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   // Counts runs that ended (any client's), so a delayed Stop can tell that
   // the run it targeted is over and whatever runs now is not its to abort.
+  // Bumped on each accepted terminal agent_end (before any recovery reload)
+  // and on every idle render as the reconciliation fallback.
   const runsEndedRef = useRef(0);
   useEffect(() => {
     agentRunningRef.current = agentRunning;
@@ -1856,6 +1858,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           interruptReplyPendingRef.current = false;
           break;
         }
+        runsEndedRef.current += 1;
         clearTerminalReconcileTimer();
         catchUp.invalidate();
         eventCoalescer.reset();

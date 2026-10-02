@@ -622,6 +622,34 @@ test("a delayed Stop does not abort a run another device started after the targe
   assert.equal(world.calls.some((c) => c.body?.type === "abort"), false, "the other device's run keeps going");
 });
 
+test("a delayed Stop spares another device's run even when the targeted run ended with no visible answer", async () => {
+  resetWorld();
+  primeSession("abort-remote-empty", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-remote-empty", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: ["late steer"], followUp: [] }));
+  let release;
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
+    produce: () => new Promise((resolve) => { release = resolve; }),
+  });
+  // The empty-completion recovery reload stalls, so the hook never renders idle.
+  world.holds.push({
+    match: (method, url) => method === "GET" && url.startsWith("/api/sessions/abort-remote-empty"),
+    produce: () => new Promise(() => {}),
+  });
+  let stop;
+  await act(async () => { stop = w.latest.handleAbort(); });
+  await act(async () => {
+    es.emit({ type: "agent_end", isTerminal: true });
+    es.emit({ type: "agent_start" }); // another device's prompt
+  });
+  await act(async () => {
+    release({ value: { success: true, data: { removed: true } } });
+    await stop;
+  });
+  assert.equal(world.calls.some((c) => c.body?.type === "abort"), false, "the other device's run keeps going");
+});
+
 test("the agent_end snapshot clears a stale queue even when the wrapper reports no model", async () => {
   resetWorld();
   primeSession("end-no-model", [userMsg("u0", "q")]);
