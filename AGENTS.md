@@ -231,8 +231,13 @@ client-side — every client viewing the session must show the same queue.
 `handleAbort` withdraws pending messages BEFORE sending `abort` (bounded by
 `WITHDRAW_BEFORE_ABORT_MS`), like the TUI's Esc: omp runs a queued steer as
 soon as an abort lands. Withdrawn text goes to the session draft via
-`recoverDraftText`. A live-steered message (already taken by the model)
-answers `removed: false` and lands in the transcript.
+`recoverDraftText`, saved as each removal confirms. A follow-up that answers
+`removed: false` is retried on `steering` (a concurrent promotion moved it);
+never the reverse. The abort is fenced to the prompt run id captured at Stop,
+so it cannot kill a prompt started during the wait. Known gap: input taken by
+live steering answers `removed: false`, and RPC `abort` does not call
+`withdrawLiveSteering` (the TUI's `clearQueue({ forInterrupt: true })` does),
+so omp requeues it on abort and runs it next; omp-web cannot prevent that.
 
 ### Running state SSE + reconciliation
 - The sidebar listens to `/api/agent/running/events`, backed by `subscribeRunningSessions()` in `lib/rpc-manager.ts`, so running badges update without polling.

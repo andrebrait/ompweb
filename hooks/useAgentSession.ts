@@ -1757,8 +1757,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setTokensPerSecond(null);
   }, [data?.sessionId]);
 
+  // Counts runs that ended (any client's), so a delayed Stop can tell that
+  // the run it targeted is over and whatever runs now is not its to abort.
+  const runsEndedRef = useRef(0);
   useEffect(() => {
     agentRunningRef.current = agentRunning;
+    if (!agentRunning) runsEndedRef.current += 1;
   }, [agentRunning]);
 
 
@@ -2755,13 +2759,20 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       ...pending.followUp.map((text) => ({ text, queue: "followUp" as const })),
     ];
     const runId = promptRunIdRef.current;
+    const runsEnded = runsEndedRef.current;
     const removed: boolean[] = [];
     const restored: boolean[] = [];
+    let recoveredBlock = "";
     let failed = false;
+    // Recover confirmed withdrawals in queue order. A later batch rewrites the
+    // earlier block in order while the draft still starts with it.
     const recoverWithdrawn = () => {
-      const texts = entries.filter((_, i) => removed[i] && !restored[i]).map((entry) => entry.text);
+      const fresh = entries.filter((_, i) => removed[i] && !restored[i]).map((entry) => entry.text);
+      if (fresh.length === 0) return;
       entries.forEach((_, i) => { if (removed[i]) restored[i] = true; });
-      if (texts.length > 0) recoverDraftText(sid, texts.join("\n\n"));
+      const block = entries.filter((_, i) => restored[i]).map((entry) => entry.text).join("\n\n");
+      recoverDraftText(sid, block, recoveredBlock ? { lead: recoveredBlock, fallback: fresh.join("\n\n") } : undefined);
+      recoveredBlock = block;
     };
     const removals = Promise.all(entries.map(async (entry, i) => {
       // A promotion that landed after this snapshot moved the message into
@@ -2782,13 +2793,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }));
     // A slow removal must not hold Stop hostage; late answers still recover
     // text. (Executor form: Promise.withResolvers is missing in Safari < 17.4.)
-    await Promise.race([removals, new Promise((resolve) => setTimeout(resolve, WITHDRAW_BEFORE_ABORT_MS))]);
+    let clearDeadline = () => {};
+    await Promise.race([removals, new Promise((resolve) => {
+      const timer = setTimeout(resolve, WITHDRAW_BEFORE_ABORT_MS);
+      clearDeadline = () => clearTimeout(timer);
+    })]);
+    clearDeadline();
     // Text omp already gave back must survive a reload while a slower
     // removal is still pending.
     recoverWithdrawn();
-    // The run may have ended during the wait and the user started another:
-    // this Stop belongs to the old one.
-    if (promptRunIdRef.current === runId) {
+    // The targeted run may have ended during the wait and another prompt
+    // (this client's or another device's) started: this Stop is not for it.
+    if (promptRunIdRef.current === runId && runsEndedRef.current === runsEnded) {
       try {
         await sendAgentCommand(sid, { type: "abort" });
       } catch (e) {

@@ -489,31 +489,31 @@ test("a slow withdrawal does not hold Stop, and its late answer still recovers t
   clearDraft("abort-slow");
 });
 
-test("Stop recovers text omp already gave back while another withdrawal is still pending", async () => {
+test("Stop saves confirmed text early and still restores the queue in order", async () => {
   const { getDraft, clearDraft } = await jiti.import("@/lib/draft-store");
   resetWorld();
   clearDraft("abort-mixed");
   primeSession("abort-mixed", [userMsg("u0", "loaded question")]);
   const { w, es } = await startRun("abort-mixed", "hello agent");
-  await act(() => es.emit({ type: "queue_update", steering: ["fast steer"], followUp: ["stalled follow-up"] }));
-  world.holds.push({
-    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message" && body.message === "fast steer",
-    produce: async () => ({ value: { success: true, data: { removed: true } } }),
-  });
+  await act(() => es.emit({ type: "queue_update", steering: ["first", "second"], followUp: [] }));
   let release;
   world.holds.push({
-    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message" && body.message === "stalled follow-up",
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message" && body.message === "first",
     produce: () => new Promise((resolve) => { release = resolve; }),
+  });
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message" && body.message === "second",
+    produce: async () => ({ value: { success: true, data: { removed: true } } }),
   });
   let stop;
   await act(async () => { stop = w.latest.handleAbort(); });
   await sleep(1700);
-  assert.equal(getDraft("abort-mixed")?.value, "fast steer", "confirmed text is saved before the stalled request settles");
+  assert.equal(getDraft("abort-mixed")?.value, "second", "confirmed text is saved before the stalled request settles");
   await act(async () => {
     release({ value: { success: true, data: { removed: true } } });
     await stop;
   });
-  assert.equal(getDraft("abort-mixed")?.value, "stalled follow-up\n\nfast steer", "each withdrawn message is recovered once");
+  assert.equal(getDraft("abort-mixed")?.value, "first\n\nsecond", "a late confirmation keeps queue order");
   clearDraft("abort-mixed");
 });
 
@@ -534,7 +534,38 @@ test("Stop withdraws a follow-up that a concurrent promotion already moved to st
   const commands = world.calls.map((c) => c.body?.type).filter(Boolean);
   assert.ok(commands.lastIndexOf("remove_queued_message") < commands.indexOf("abort"));
   assert.equal(getDraft("abort-promoted")?.value, "promoted");
+  assert.deepEqual(world.calls.filter((c) => c.body?.type === "remove_queued_message").map((c) => c.body.queue), ["followUp", "steering"]);
   clearDraft("abort-promoted");
+});
+
+test("a steering message the model already took is not looked for among follow-ups", async () => {
+  resetWorld();
+  primeSession("abort-taken", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-taken", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: ["taken"], followUp: [] }));
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
+    produce: async () => ({ value: { success: true, data: { removed: false } } }),
+  });
+  await act(async () => { await w.latest.handleAbort(); });
+  assert.deepEqual(world.calls.filter((c) => c.body?.type === "remove_queued_message").map((c) => c.body.queue), ["steering"]);
+});
+
+test("a cancellation omp confirms after unmount still reports success so Edit can recover the text", async () => {
+  resetWorld();
+  primeSession("cancel-unmount", [userMsg("u0", "q")]);
+  const { w, es } = await startRun("cancel-unmount", "run");
+  await act(() => es.emit({ type: "queue_update", steering: [], followUp: ["target"] }));
+  let release;
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
+    produce: () => new Promise((resolve) => { release = resolve; }),
+  });
+  let cancellation;
+  await act(async () => { cancellation = w.latest.removeQueuedMessage("target", "followUp"); });
+  w.unmount();
+  release({ value: { success: true, data: { removed: true } } });
+  assert.equal(await cancellation, true);
 });
 
 test("a Stop whose run ended during the withdrawal does not abort the next prompt", async () => {
@@ -563,6 +594,32 @@ test("a Stop whose run ended during the withdrawal does not abort the next promp
   });
   assert.equal(world.calls.some((c) => c.body?.type === "prompt" && c.body?.message === "next prompt"), true);
   assert.equal(world.calls.some((c) => c.body?.type === "abort"), false, "the new prompt keeps running");
+});
+
+test("a delayed Stop does not abort a run another device started after the targeted run ended", async () => {
+  resetWorld();
+  primeSession("abort-remote", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-remote", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: ["late steer"], followUp: [] }));
+  let release;
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
+    produce: () => new Promise((resolve) => { release = resolve; }),
+  });
+  let stop;
+  await act(async () => { stop = w.latest.handleAbort(); });
+  await act(async () => {
+    es.emit({ type: "message_end", message: assistantMsg("a1", "answer") });
+    es.emit({ type: "agent_end", isTerminal: true });
+  });
+  await settle();
+  await act(async () => { es.emit({ type: "agent_start" }); }); // another device's prompt
+  await settle();
+  await act(async () => {
+    release({ value: { success: true, data: { removed: true } } });
+    await stop;
+  });
+  assert.equal(world.calls.some((c) => c.body?.type === "abort"), false, "the other device's run keeps going");
 });
 
 test("the agent_end snapshot clears a stale queue even when the wrapper reports no model", async () => {
