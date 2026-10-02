@@ -10,8 +10,9 @@ const notFound = () =>
   NextResponse.json({ error: "Transcription job not found", code: "stt_job_not_found" }, { status: 404 });
 
 /**
- * GET /api/stt/[jobId] — { id, status: "pending" | "done" | "error" | "gone", text?, error? },
- * or 404 for an unknown/expired job. "gone" means another browser claimed or
+ * GET /api/stt/[jobId] — { id, status: "pending" | "done" | "error" | "gone", error? },
+ * or 404 for an unknown/expired job. The transcript is never here: claim it
+ * with DELETE ?claim=<token>. "gone" means another browser claimed or
  * discarded it. Job failures are 200 payloads, not 5xx, so an intermediate
  * proxy cannot swap them for its own error page.
  */

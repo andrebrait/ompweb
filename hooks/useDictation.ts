@@ -69,6 +69,9 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
   // Server job the deck currently shows. The server keeps its audio, so it can
   // be played and retried even from a browser that never had the recording.
   const jobIdRef = useRef<string | null>(null);
+  // The upload in flight, if any. Uploads are not aborted (see runTranscription);
+  // these flags tell its completion whether to discard or just drop the job.
+  const uploadRef = useRef<{ discard: boolean; detached: boolean } | null>(null);
   // Identifies this browser when claiming a finished job, so a claim whose
   // response was lost can be repeated without losing the transcript.
   const claimTokenRef = useRef(Math.random().toString(36).slice(2) + Date.now().toString(36));
@@ -253,41 +256,44 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
   }, [failTranscription, releaseJob, teardownPreviewAudio]);
 
   // Uploads the recording; the server keeps it and transcribes in the background.
+  // The upload is never aborted: once sent, the server may already have started
+  // the job, so the 202 is always read. A discard during the upload then ends
+  // that job; leaving the scope or unmounting leaves it adoptable.
   const runTranscription = useCallback(async (blob: Blob, ext: string) => {
     abortControllerRef.current?.abort();
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-    const { signal } = abortController;
+    abortControllerRef.current = null;
+    const upload = { discard: false, detached: false };
+    uploadRef.current = upload;
     setIsTranscribing(true);
     let jobId: string | null = null;
     try {
       const body = new FormData();
       body.append("file", blob, ext);
       if (scope) body.append("scope", scope);
-      const startRes = await fetch("/api/stt", { method: "POST", body, signal });
+      const startRes = await fetch("/api/stt", { method: "POST", body });
       const started = await startRes.json().catch(() => null);
-      if (cancelledRef.current || signal.aborted) {
-        // Discarded while uploading: end the job the server already started.
+      if (upload.discard) {
         if (typeof started?.jobId === "string") {
           void fetch(`/api/stt/${encodeURIComponent(started.jobId)}`, { method: "DELETE" }).catch(() => {});
         }
         return;
       }
+      if (upload.detached || cancelledRef.current) return;
       if (!startRes.ok || typeof started?.jobId !== "string") {
         failTranscription(normalizeErrorMessage(started?.error, `Transcription failed (HTTP ${startRes.status})`));
         return;
       }
       jobId = started.jobId;
     } catch (err) {
-      if (cancelledRef.current || signal.aborted) return;
+      if (upload.discard || upload.detached || cancelledRef.current) return;
       failTranscription(err instanceof Error ? err.message : normalizeErrorMessage(err, "Transcription failed"));
     } finally {
-      if (abortControllerRef.current === abortController) {
-        abortControllerRef.current = null;
+      if (uploadRef.current === upload) {
+        uploadRef.current = null;
         if (!jobId) setIsTranscribing(false);
       }
     }
-    if (jobId && !cancelledRef.current && !signal.aborted) void followJob(jobId);
+    if (jobId) void followJob(jobId);
   }, [scope, failTranscription, followJob]);
 
   // Pick up this scope's job on mount, on focus or visibility, and every few
@@ -325,9 +331,12 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
       window.clearInterval(timer);
       window.removeEventListener("focus", onVisible);
       document.removeEventListener("visibilitychange", onVisible);
-      // Leaving the scope (session switch or unmount) stops following its job
-      // without discarding it: the job stays adoptable when the user returns.
-      if (jobIdRef.current) {
+      // Leaving the scope (session switch or unmount) stops following its job,
+      // including one still uploading, without discarding it: the job stays
+      // adoptable when the user returns.
+      if (jobIdRef.current || uploadRef.current) {
+        if (uploadRef.current) uploadRef.current.detached = true;
+        uploadRef.current = null;
         abortControllerRef.current?.abort();
         abortControllerRef.current = null;
         jobIdRef.current = null;
@@ -618,6 +627,8 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
       void fetch(`/api/stt/${encodeURIComponent(jobIdRef.current)}`, { method: "DELETE" }).catch(() => {});
       jobIdRef.current = null;
     }
+    // An upload in flight ends its job once the server answers with its id.
+    if (uploadRef.current) uploadRef.current.discard = true;
     setTranscribeError(null);
     setIsTranscribing(false);
     setIsReviewing(false);
@@ -639,7 +650,8 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
       setIsTranscribing(true);
       const res = await fetch(`/api/stt/${encodeURIComponent(jobId)}`, { method: "POST" }).catch(() => null);
       const job = await res?.json().catch(() => null);
-      if (cancelledRef.current) return;
+      // Discarded, or the user left this session, while the retry was in flight.
+      if (cancelledRef.current || jobIdRef.current !== jobId) return;
       if (res?.ok && job?.status !== "gone") {
         void followJob(jobId);
         return;

@@ -158,10 +158,12 @@ beforeEach(() => {
   world.retryResponse = { ok: true, status: 200, json: async () => ({ status: "pending" }) };
   world.scopeJobs = [];
   world.audioUrls = [];
+  world.uploadGate = null;
   override(globalThis, "fetch", async (url, init) => {
     if (url.startsWith("/api/stt?scope=")) return { ok: true, status: 200, json: async () => ({ jobs: world.scopeJobs }) };
     if (init?.method === "POST" && url === "/api/stt") {
       world.postedFiles.push(init.body.get("file"));
+      await world.uploadGate;
       return { ok: true, status: 202, json: async () => ({ jobId: "job-1" }) };
     }
     if (init?.method === "POST") {
@@ -527,3 +529,61 @@ test("switching sessions stops following the old job without discarding it", asy
   assert.deepEqual(transcripts, [], "A's transcript must not land in B's composer");
   assert.deepEqual(world.deletes, [], "the job stays adoptable from session A");
 });
+
+/** Holds the upload POST until the returned function is called. */
+function holdUpload() {
+  const gate = Promise.withResolvers();
+  world.uploadGate = gate.promise;
+  return gate.resolve;
+}
+
+test("discarding during the upload ends the job once the server answers", async () => {
+  const { view, transcripts } = mountDictation("session-1");
+  const release = holdUpload();
+  await recordAndTranscribeUntilUpload(view);
+
+  await act(async () => {
+    view.result.current.cancel();
+  });
+  release();
+  await waitUntil(() => world.deletes.length === 1);
+
+  assert.deepEqual(world.deletes, ["/api/stt/job-1"]);
+  assert.equal(world.polls, 0);
+  assert.deepEqual(transcripts, []);
+});
+
+test("switching sessions during the upload keeps the job but never delivers it here", async () => {
+  const transcripts = [];
+  const view = renderHook(({ scope }) => useDictation({ scope, onTranscript: (text) => transcripts.push(text) }), {
+    initialProps: { scope: "session-a" },
+  });
+  const release = holdUpload();
+  await recordAndTranscribeUntilUpload(view);
+
+  view.rerender({ scope: "session-b" });
+  await settle(50);
+  assert.equal(view.result.current.isTranscribing, false);
+  release();
+  await settle(1200);
+
+  assert.equal(world.polls, 0, "session B must not follow A's job");
+  assert.deepEqual(world.deletes, [], "A's job stays adoptable");
+  assert.deepEqual(transcripts, []);
+});
+
+async function recordAndTranscribeUntilUpload(view) {
+  await act(async () => {
+    view.result.current.toggle();
+  });
+  await settle();
+  await act(async () => {
+    view.result.current.stop();
+  });
+  await settle();
+  await act(async () => {
+    view.result.current.confirmTranscribe();
+  });
+  await waitUntil(() => world.postedFiles.length === 1);
+  assert.equal(view.result.current.isTranscribing, true);
+}
