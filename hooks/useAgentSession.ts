@@ -3145,7 +3145,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [isNew, newSessionCwd, session?.cwd]);
 
   /** Ask a side question, or a follow-up in `recordId`'s topic. It runs beside
-   * any main turn and never enters the transcript; false = refused (toasted). */
+   * any main turn and never enters the transcript. False = refused (toasted),
+   * or the chat was left meanwhile: its composer must not clear a draft that
+   * now belongs to wherever the user went (e.g. the shared new-chat key). */
   const askBtw = useCallback(async (question: string, recordId?: string): Promise<boolean> => {
     if (btwAskPendingRef.current) return false;
     btwAskPendingRef.current = true;
@@ -3167,10 +3169,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         await ensureEventsConnected(sid);
       }
       const accepted = await sendBtw(sid, question, recordId);
+      const ownerCurrent = hookAliveRef.current && sessionIdRef.current === sid;
       // omp wrote the session to disk to ask: leave the unsaved new-chat view
       // (URL, sidebar) like a first prompt does. No-op for existing sessions.
-      if (accepted && hookAliveRef.current && sessionIdRef.current === sid) promoteNewSession();
-      return true;
+      if (accepted && ownerCurrent) promoteNewSession();
+      return ownerCurrent;
     } catch (error) {
       toastBtwError(error);
       return false;

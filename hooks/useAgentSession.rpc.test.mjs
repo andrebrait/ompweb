@@ -2223,7 +2223,7 @@ test("a /btw that starts a fresh chat promotes it once omp accepts the question"
   w.unmount();
 });
 
-test("an abandoned new-chat /btw is still asked without promoting or attaching a stream", async () => {
+test("an abandoned new-chat /btw is still asked, but neither promotes, attaches a stream, nor reports success", async () => {
   resetWorld();
   let release;
   world.holds.push({
@@ -2235,13 +2235,14 @@ test("an abandoned new-chat /btw is still asked without promoting or attaching a
   const w = await mountSession(null, undefined, { newSessionCwd: "/workspace", onSessionCreated: (session) => promoted.push(session.id) });
   let asked;
   await act(async () => {
-    asked = w.latest.handleBuiltinSlashCommand("/btw asked before leaving");
+    asked = w.latest.askBtw("asked before leaving");
     await sleep(20);
     w.unmount();
   });
   await act(async () => {
     release();
-    await asked;
+    // The stale composer must keep (not clear) a draft key the user moved on to.
+    assert.equal(await asked, false);
   });
   assert.deepEqual(promoted, []);
   assert.deepEqual(world.esInstances, [], "an unmounted chat must not attach a stream its cleanup already ran for");
