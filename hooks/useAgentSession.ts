@@ -2743,7 +2743,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [addNotice, ensureNewSession, loadSession, opts.chatInputRef, promoteNewSession, session]);
   executeBashRef.current = executeBash;
 
-  const withdrawAndAbort = useCallback(async (sid: string) => {
+  const withdrawAndAbort = useCallback(async (sid: string, onAbortSent: () => void) => {
     // Take pending messages back out of omp BEFORE the abort, like the TUI's
     // Esc: omp runs a queued steer as soon as an abort lands (and keeps a
     // follow-up for after the next reply, #130). Withdrawn texts return to
@@ -2808,6 +2808,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         console.error("Failed to abort:", e);
       }
     }
+    // From here only late recovery remains: a new run's Stop must not wait on it.
+    onAbortSent();
     await removals;
     recoverWithdrawn();
     if (failed && hookAliveRef.current && sessionIdRef.current === sid) {
@@ -2817,6 +2819,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   // Button, Esc, and the global shortcut can all fire while a withdrawal is
   // in flight: one Stop at a time, or two recoveries interleave their text.
+  // The guard covers withdrawal and abort only; late recovery of a stalled
+  // removal must not swallow the Stop of a run that starts afterwards.
   const stopInFlightRef = useRef<Promise<void> | null>(null);
   const handleAbort = useCallback(async () => {
     const sid = sessionIdRef.current;
@@ -2830,7 +2834,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       return;
     }
     if (stopInFlightRef.current) return stopInFlightRef.current;
-    const stop = withdrawAndAbort(sid).finally(() => { stopInFlightRef.current = null; });
+    // An older Stop never clears a newer one's guard.
+    const release = () => { if (stopInFlightRef.current === stop) stopInFlightRef.current = null; };
+    const stop: Promise<void> = withdrawAndAbort(sid, release).finally(release);
     stopInFlightRef.current = stop;
     return stop;
   }, [withdrawAndAbort]);

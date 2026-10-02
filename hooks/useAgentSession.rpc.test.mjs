@@ -703,6 +703,36 @@ test("overlapping Stops share one withdrawal and one abort", async () => {
   assert.equal(world.calls.filter((c) => c.body?.type === "abort").length, 1);
 });
 
+test("a stalled withdrawal from an earlier Stop does not swallow the next run's Stop", async () => {
+  resetWorld();
+  primeSession("abort-next", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-next", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: ["stalled"], followUp: [] }));
+  let release;
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
+    produce: () => new Promise((resolve) => { release = resolve; }),
+  });
+  let first;
+  await act(async () => { first = w.latest.handleAbort(); });
+  await sleep(1700); // deadline passed, first abort sent, removal still pending
+  await act(async () => {
+    es.emit({ type: "message_end", message: assistantMsg("a1", "answer") });
+    es.emit({ type: "agent_end", isTerminal: true });
+    es.emit({ type: "queue_update", steering: [], followUp: [] });
+  });
+  await settle();
+  let sending;
+  await act(async () => { sending = w.latest.handleSend("next prompt"); await sleep(30); });
+  await act(async () => { lastEs().open(); await sending; });
+  await act(async () => { await w.latest.handleAbort(); });
+  assert.equal(world.calls.filter((c) => c.body?.type === "abort").length, 2, "the new run's Stop sends its own abort");
+  await act(async () => {
+    release({ value: { success: true, data: { removed: true } } });
+    await first;
+  });
+});
+
 test("a state snapshot older than a queue_update is dropped, and opening the stream re-reads the queue", async () => {
   resetWorld();
   primeSession("queue-order", [userMsg("u0", "q")]);
