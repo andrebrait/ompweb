@@ -1917,10 +1917,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           fetch(`/api/agent/${encodeURIComponent(endedSid)}`)
             .then((r) => (r.ok ? r.json() as Promise<{ state?: AgentStateResponse }> : null))
             .then((d) => {
-              if (!d?.state?.model) return;
               // Stale terminal snapshot: the user switched sessions or started
               // the next run while this request was in flight — drop it.
-              if (sessionIdRef.current !== endedSid || promptRunIdRef.current !== endedRunId) return;
+              if (!d || sessionIdRef.current !== endedSid || promptRunIdRef.current !== endedRunId) return;
+              // The queue does not depend on a model: an exited wrapper still
+              // means nothing is queued.
+              applyQueueStateSnapshot(queueRevision, d.state?.queuedMessages);
+              if (!d.state?.model) return;
               const applied = applyAuthoritativeModel(toThinkingModelMeta(d.state.model), endToken);
               if (!applied) return; // stale snapshot — drop everything derived from it
               if (d.state?.contextUsage !== undefined) setContextUsage(d.state.contextUsage ?? null);
@@ -1933,7 +1936,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
               if (d.state?.extensionStatuses !== undefined) setExtensionStatuses(d.state.extensionStatuses ?? []);
               if (d.state?.extensionWidgets !== undefined) setExtensionWidgets(d.state.extensionWidgets ?? []);
               if (d.state?.todoPhases !== undefined) setTodoPhases(d.state.todoPhases ?? []);
-              applyQueueStateSnapshot(queueRevision, d.state?.queuedMessages);
             })
             .catch(() => {});
         }
@@ -2752,28 +2754,49 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       ...pending.steering.map((text) => ({ text, queue: "steering" as const })),
       ...pending.followUp.map((text) => ({ text, queue: "followUp" as const })),
     ];
+    const runId = promptRunIdRef.current;
+    const removed: boolean[] = [];
+    const restored: boolean[] = [];
     let failed = false;
-    const removals = Promise.all(entries.map(async (entry) => {
+    const recoverWithdrawn = () => {
+      const texts = entries.filter((_, i) => removed[i] && !restored[i]).map((entry) => entry.text);
+      entries.forEach((_, i) => { if (removed[i]) restored[i] = true; });
+      if (texts.length > 0) recoverDraftText(sid, texts.join("\n\n"));
+    };
+    const removals = Promise.all(entries.map(async (entry, i) => {
+      // A promotion that landed after this snapshot moved the message into
+      // steering (removal from steering never moves it back): try both.
+      const queues = entry.queue === "followUp" ? ["followUp", "steering"] as const : ["steering"] as const;
       try {
-        const result = await sendAgentCommand<{ removed: boolean }>(sid, { type: "remove_queued_message", message: entry.text, queue: entry.queue });
-        return result?.removed === true;
+        for (const queue of queues) {
+          const result = await sendAgentCommand<{ removed: boolean }>(sid, { type: "remove_queued_message", message: entry.text, queue });
+          if (result?.removed === true) {
+            removed[i] = true;
+            return;
+          }
+        }
       } catch (error) {
         console.error("Failed to withdraw queued message:", error);
         failed = true;
-        return false;
       }
     }));
     // A slow removal must not hold Stop hostage; late answers still recover
     // text. (Executor form: Promise.withResolvers is missing in Safari < 17.4.)
     await Promise.race([removals, new Promise((resolve) => setTimeout(resolve, WITHDRAW_BEFORE_ABORT_MS))]);
-    try {
-      await sendAgentCommand(sid, { type: "abort" });
-    } catch (e) {
-      console.error("Failed to abort:", e);
+    // Text omp already gave back must survive a reload while a slower
+    // removal is still pending.
+    recoverWithdrawn();
+    // The run may have ended during the wait and the user started another:
+    // this Stop belongs to the old one.
+    if (promptRunIdRef.current === runId) {
+      try {
+        await sendAgentCommand(sid, { type: "abort" });
+      } catch (e) {
+        console.error("Failed to abort:", e);
+      }
     }
-    const removed = await removals;
-    const withdrawn = entries.filter((_, i) => removed[i]).map((entry) => entry.text);
-    if (withdrawn.length > 0) recoverDraftText(sid, withdrawn.join("\n\n"));
+    await removals;
+    recoverWithdrawn();
     if (failed && hookAliveRef.current && sessionIdRef.current === sid) {
       addNotice({ type: "warning", message: translate("agentSession.queueDiscardFailed") });
     }

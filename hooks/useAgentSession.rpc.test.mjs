@@ -489,6 +489,101 @@ test("a slow withdrawal does not hold Stop, and its late answer still recovers t
   clearDraft("abort-slow");
 });
 
+test("Stop recovers text omp already gave back while another withdrawal is still pending", async () => {
+  const { getDraft, clearDraft } = await jiti.import("@/lib/draft-store");
+  resetWorld();
+  clearDraft("abort-mixed");
+  primeSession("abort-mixed", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-mixed", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: ["fast steer"], followUp: ["stalled follow-up"] }));
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message" && body.message === "fast steer",
+    produce: async () => ({ value: { success: true, data: { removed: true } } }),
+  });
+  let release;
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message" && body.message === "stalled follow-up",
+    produce: () => new Promise((resolve) => { release = resolve; }),
+  });
+  let stop;
+  await act(async () => { stop = w.latest.handleAbort(); });
+  await sleep(1700);
+  assert.equal(getDraft("abort-mixed")?.value, "fast steer", "confirmed text is saved before the stalled request settles");
+  await act(async () => {
+    release({ value: { success: true, data: { removed: true } } });
+    await stop;
+  });
+  assert.equal(getDraft("abort-mixed")?.value, "stalled follow-up\n\nfast steer", "each withdrawn message is recovered once");
+  clearDraft("abort-mixed");
+});
+
+test("Stop withdraws a follow-up that a concurrent promotion already moved to steering", async () => {
+  const { getDraft, clearDraft } = await jiti.import("@/lib/draft-store");
+  resetWorld();
+  clearDraft("abort-promoted");
+  primeSession("abort-promoted", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-promoted", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: [], followUp: ["promoted"] }));
+  for (const [queue, removed] of [["followUp", false], ["steering", true]]) {
+    world.holds.push({
+      match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message" && body.queue === queue,
+      produce: async () => ({ value: { success: true, data: { removed } } }),
+    });
+  }
+  await act(async () => { await w.latest.handleAbort(); });
+  const commands = world.calls.map((c) => c.body?.type).filter(Boolean);
+  assert.ok(commands.lastIndexOf("remove_queued_message") < commands.indexOf("abort"));
+  assert.equal(getDraft("abort-promoted")?.value, "promoted");
+  clearDraft("abort-promoted");
+});
+
+test("a Stop whose run ended during the withdrawal does not abort the next prompt", async () => {
+  resetWorld();
+  primeSession("abort-fenced", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("abort-fenced", "hello agent");
+  await act(() => es.emit({ type: "queue_update", steering: ["late steer"], followUp: [] }));
+  let release;
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "remove_queued_message",
+    produce: () => new Promise((resolve) => { release = resolve; }),
+  });
+  let stop;
+  await act(async () => { stop = w.latest.handleAbort(); });
+  await act(async () => {
+    es.emit({ type: "message_end", message: assistantMsg("a1", "answer") });
+    es.emit({ type: "agent_end", isTerminal: true });
+  });
+  await settle();
+  let sending;
+  await act(async () => { sending = w.latest.handleSend("next prompt"); await sleep(30); });
+  await act(async () => { lastEs().open(); await sending; });
+  await act(async () => {
+    release({ value: { success: true, data: { removed: true } } });
+    await stop;
+  });
+  assert.equal(world.calls.some((c) => c.body?.type === "prompt" && c.body?.message === "next prompt"), true);
+  assert.equal(world.calls.some((c) => c.body?.type === "abort"), false, "the new prompt keeps running");
+});
+
+test("the agent_end snapshot clears a stale queue even when the wrapper reports no model", async () => {
+  resetWorld();
+  primeSession("end-no-model", [userMsg("u0", "q")]);
+  const { w, es } = await startRun("end-no-model", "run");
+  await act(() => es.emit({ type: "queue_update", steering: ["missed delivery"], followUp: [] }));
+  // Keep the transcript reload's own state read out of the picture.
+  world.holds.push({
+    match: (method, url) => method === "GET" && url === "/api/sessions/end-no-model/state",
+    produce: () => new Promise(() => {}),
+  });
+  world.agents.set("end-no-model", { running: false, state: { queuedMessages: { steering: [], followUp: [] } } });
+  await act(async () => {
+    es.emit({ type: "message_end", message: assistantMsg("a1", "answer") });
+    es.emit({ type: "agent_end", isTerminal: true });
+  });
+  await settle();
+  assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: [] });
+});
+
 test("a state snapshot older than a queue_update is dropped, and opening the stream re-reads the queue", async () => {
   resetWorld();
   primeSession("queue-order", [userMsg("u0", "q")]);
