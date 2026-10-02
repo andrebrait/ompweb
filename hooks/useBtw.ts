@@ -106,22 +106,23 @@ export function useBtw(sessionIdRef: RefObject<string | null>) {
     await refreshHistory(sid, true);
   }, [refreshHistory]);
 
-  /** Resolves once omp accepted the question, or it was cancelled before it
-   * started (the user's own Cancel, which its `btw_record` already shows).
-   * The answer streams via frames. Throws on refusal. */
-  const ask = useCallback(async (sid: string, question: string, recordId?: string) => {
+  /** Resolves once omp accepted the question (true), or it was cancelled
+   * before it started (false: the user's own Cancel, which its `btw_record`
+   * already shows). The answer streams via frames. Throws on refusal. */
+  const ask = useCallback(async (sid: string, question: string, recordId?: string): Promise<boolean> => {
     let data: { record?: unknown } | null;
     try {
       data = await sendAgentCommand<{ record?: unknown } | null>(sid, { type: "btw", question, ...(recordId ? { recordId } : {}) });
     } catch (error) {
-      if (error instanceof Error && error.message.includes(CANCELLED_BEFORE_START)) return;
+      if (error instanceof Error && error.message.includes(CANCELLED_BEFORE_START)) return false;
       throw error;
     }
     const record = data?.record;
-    if (sessionIdRef.current !== sid || !isBtwRecord(record)) return;
+    if (sessionIdRef.current !== sid || !isBtwRecord(record)) return true;
     // The start state: never newer than frames, so upsert keeps streamed text.
     commit((prev) => upsertBtwRecord(prev, record));
     setActiveId(record.id);
+    return true;
   }, [commit, sessionIdRef]);
 
   const cancel = useCallback(async (recordId: string) => {

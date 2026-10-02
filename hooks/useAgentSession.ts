@@ -3155,13 +3155,21 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         toast.error(translate("agentSession.noActiveSession"));
         return false;
       }
+      // Spawning a fresh chat takes seconds: the user may have left it. The
+      // question is still asked (omp keeps the answer in the session's BTW
+      // history), but an unmounted chat must not attach a stream (its cleanup
+      // already ran, so it would leak) nor promote itself — as in handleSend.
+      const ownerGone = !hookAliveRef.current;
       // The event route is observer-only: start the wrapper and attach before
       // asking, so the first deltas are not missed.
-      if (eventSourceRef.current?.readyState !== EventSource.OPEN) {
+      if (!ownerGone && eventSourceRef.current?.readyState !== EventSource.OPEN) {
         await sendAgentCommand(sid, { type: "get_state" });
         await ensureEventsConnected(sid);
       }
-      await sendBtw(sid, question, recordId);
+      const accepted = await sendBtw(sid, question, recordId);
+      // omp wrote the session to disk to ask: leave the unsaved new-chat view
+      // (URL, sidebar) like a first prompt does. No-op for existing sessions.
+      if (accepted && hookAliveRef.current && sessionIdRef.current === sid) promoteNewSession();
       return true;
     } catch (error) {
       toastBtwError(error);
@@ -3169,7 +3177,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       btwAskPendingRef.current = false;
     }
-  }, [ensureEventsConnected, ensureNewSession, sendBtw]);
+  }, [ensureEventsConnected, ensureNewSession, promoteNewSession, sendBtw]);
 
   const handleBuiltinSlashCommand = useCallback(async (text: string): Promise<BuiltinSlashCommandResult> => {
     if (!text.startsWith("/")) return { handled: false };

@@ -3,7 +3,7 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { Ban, Check, ChevronDown, CircleAlert, Copy, Loader2, MessageCircleQuestion, Reply, Square, X } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
-import { btwTurns, latestBtwTurn, type BtwRecord, type BtwStatus, type BtwTurn } from "@/lib/btw";
+import { btwTurns, latestBtwAnswer, latestBtwTurn, type BtwRecord, type BtwStatus, type BtwTurn } from "@/lib/btw";
 import { copyText } from "@/lib/clipboard";
 import { SafeMarkdownBody } from "./MessageView";
 import { toast } from "./ui/toast";
@@ -226,7 +226,7 @@ export function BtwPanel({ record, onCancel, onFollowUp, onClose, cwd, onOpenFil
                 </button>
               </form>
             )}
-            <CopyAnswerButton answer={latest.answer} />
+            <CopyAnswerButton answer={latestBtwAnswer(record)} />
           </div>
         </div>
       )}
@@ -304,7 +304,7 @@ export function BtwHistoryDialog({ open, onOpenChange, records, onFollowUp, cwd,
                             {t("btw.followUp")}
                           </button>
                         )}
-                        <CopyAnswerButton answer={latest.answer} />
+                        <CopyAnswerButton answer={latestBtwAnswer(record)} />
                       </div>
                     </div>
                   )}

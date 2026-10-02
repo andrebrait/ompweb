@@ -32,13 +32,27 @@ export function latestBtwTurn(record: BtwRecord): BtwTurn {
   return record.followUps?.at(-1) ?? record;
 }
 
+/** What Copy copies: the newest answer with text. A follow-up that was
+ * cancelled or failed before writing anything leaves the earlier answer
+ * visible, so it stays copyable. */
+export function latestBtwAnswer(record: BtwRecord): string {
+  return btwTurns(record).findLast((turn) => turn.answer.trim())?.answer ?? "";
+}
+
+/** Epoch ms a `Date` can hold (omp's schema range); outside it `toISOString` throws. */
+const MAX_DATE_MS = 8.64e15;
+
+function isEpochMs(value: unknown): boolean {
+  return typeof value === "number" && value >= 0 && value <= MAX_DATE_MS;
+}
+
 function isBtwTurn(value: unknown): value is BtwTurn {
   return isRecord(value)
     && typeof value.question === "string"
     && typeof value.answer === "string"
     && typeof value.status === "string" && Object.hasOwn(BTW_STATUSES, value.status)
-    && Number.isFinite(value.createdAt)
-    && Number.isFinite(value.updatedAt)
+    && isEpochMs(value.createdAt)
+    && isEpochMs(value.updatedAt)
     && (value.error === undefined || typeof value.error === "string");
 }
 

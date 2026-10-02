@@ -2200,6 +2200,54 @@ test("an abandoned new-chat send delivers its prompt without promoting or attach
   assert.ok(world.calls.some((call) => call.url.startsWith("/api/agent/created") && call.body?.message === "deliver after navigation"));
 });
 
+test("a /btw that starts a fresh chat promotes it once omp accepts the question", async () => {
+  resetWorld();
+  world.holds.push({
+    match: (method, url) => method === "POST" && url === "/api/agent/new",
+    produce: async () => ({ value: { sessionId: "created" } }),
+  });
+  holdBtwCommand("btw", async () => ({ value: { success: true, data: { record: btwRecord() } } }));
+  const promoted = [];
+  const w = await mountSession(null, undefined, { newSessionCwd: "/workspace", onSessionCreated: (session) => promoted.push(session.id) });
+  let asked;
+  await act(async () => {
+    asked = w.latest.handleBuiltinSlashCommand("/btw what is 2+2");
+    await sleep(30); // spawn + pre-connect get_state
+  });
+  await act(async () => {
+    lastEs().open();
+    assert.deepEqual(await asked, { handled: true });
+  });
+  assert.ok(world.calls.some((call) => call.url.startsWith("/api/agent/created") && call.body?.type === "btw"));
+  assert.deepEqual(promoted, ["created"], "the new-chat view becomes the session");
+  w.unmount();
+});
+
+test("an abandoned new-chat /btw is still asked without promoting or attaching a stream", async () => {
+  resetWorld();
+  let release;
+  world.holds.push({
+    match: (method, url) => method === "POST" && url === "/api/agent/new",
+    produce: () => new Promise((resolve) => { release = () => resolve({ value: { sessionId: "created" } }); }),
+  });
+  holdBtwCommand("btw", async () => ({ value: { success: true, data: { record: btwRecord() } } }));
+  const promoted = [];
+  const w = await mountSession(null, undefined, { newSessionCwd: "/workspace", onSessionCreated: (session) => promoted.push(session.id) });
+  let asked;
+  await act(async () => {
+    asked = w.latest.handleBuiltinSlashCommand("/btw asked before leaving");
+    await sleep(20);
+    w.unmount();
+  });
+  await act(async () => {
+    release();
+    await asked;
+  });
+  assert.deepEqual(promoted, []);
+  assert.deepEqual(world.esInstances, [], "an unmounted chat must not attach a stream its cleanup already ran for");
+  assert.ok(world.calls.some((call) => call.url.startsWith("/api/agent/created") && call.body?.question === "asked before leaving"));
+});
+
 test("forking carries the advisor choice to the child's next native command", async () => {
   resetWorld();
   primeSession("advisor-parent", [userMsg("u0", "q")]);
