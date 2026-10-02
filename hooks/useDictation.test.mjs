@@ -2,22 +2,6 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("useDictation aborts in-flight transcription and silences transcript on cancellation", async () => {
-  const source = await readFile(new URL("./useDictation.ts", import.meta.url), "utf8");
-
-  // An AbortController must be held for in-flight requests
-  assert.match(source, /abortControllerRef = useRef<AbortController \| null>\(null\)/);
-
-  // Cancel must abort any pending fetch immediately
-  assert.match(source, /abortControllerRef\.current\.abort\(\)/);
-
-  // Unmount must also abort in-flight fetch
-  assert.match(source, /return \(\) => \{\s*\n\s*cancelledRef\.current = true;/);
-
-  // Late arrival after cancel must not invoke onTranscript or onError
-  assert.match(source, /if \(!cancelledRef\.current\) \{\s*\n\s*pendingAudioRef\.current = null;\s*\n\s*onTranscript\(data\.text\.trim\(\)\);/);
-});
-
 test("useDictation supports pause and resume with active-time accounting", async () => {
   const source = await readFile(new URL("./useDictation.ts", import.meta.url), "utf8");
 
@@ -54,17 +38,6 @@ test("useDictation retains audio after failure and supports retry", async () => 
   // Retry re-runs transcription with the retained audio
   assert.match(source, /const retry = useCallback\(\(\) => \{\s*\n\s*const pending = pendingAudioRef\.current;/);
   assert.match(source, /void runTranscription\(pending\.blob, pending\.ext\)/);
-});
-
-test("useDictation surfaces timeout as an error instead of swallowing it", async () => {
-  const source = await readFile(new URL("./useDictation.ts", import.meta.url), "utf8");
-
-  // The fetch timeout aborts with a TimeoutError reason
-  assert.match(source, /abort\(new DOMException\("Transcription timed out", "TimeoutError"\)\)/);
-
-  // TimeoutError is handled distinctly from the user-cancel AbortError
-  assert.match(source, /err\.name === "TimeoutError"/);
-  assert.match(source, /err\.name === "AbortError"\) return;/);
 });
 
 test("ChatInput replaces the composer with the deck and routes dictation keys at window level", async () => {

@@ -335,6 +335,28 @@ test("a permanent 4xx poll fails at once instead of polling until the deadline",
   assert.equal(view.result.current.isTranscribing, false);
 });
 
+test("cancelling mid-transcription stops polling and drops a late result", async () => {
+  const { view, transcripts, errors } = mountDictation();
+  world.pollResponses = [
+    { ok: true, status: 200, json: async () => ({ status: "pending" }) },
+    { ok: true, status: 200, json: async () => ({ status: "done", text: "too late" }) },
+  ];
+
+  await recordAndTranscribe(view);
+  assert.equal(world.polls, 1);
+  assert.equal(view.result.current.isTranscribing, true);
+
+  await act(async () => {
+    view.result.current.cancel();
+  });
+  await settle(1200);
+
+  assert.equal(world.polls, 1, "no poll may run after cancel");
+  assert.deepEqual(transcripts, []);
+  assert.deepEqual(errors, []);
+  assert.equal(view.result.current.isTranscribing, false);
+});
+
 test("cancelling during capture clears state and releases the microphone", async () => {
   const { view, transcripts } = mountDictation();
 
