@@ -1709,6 +1709,42 @@ test("subagent roster is restored from the get_subagents snapshot after reconnec
   );
 });
 
+test("/btw mid-run asks a side question, never a prompt, and streams its answer beside the run", async () => {
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "q")]);
+  const { w, es } = await startStreamingRun("s1");
+  const record = { id: "b1", leafId: null, question: "what is 2+2", answer: "", status: "running", createdAt: 1, updatedAt: 1 };
+  world.holds.push({
+    match: (method, _url, body) => method === "POST" && body?.type === "btw",
+    produce: async () => ({ value: { success: true, data: { record } } }),
+  });
+  const before = world.calls.length;
+  let result;
+  await act(async () => {
+    result = await w.latest.handleBuiltinSlashCommand("/btw what is 2+2");
+  });
+  assert.deepEqual(result, { handled: true });
+  const posted = world.calls.slice(before).filter((c) => c.method === "POST").map((c) => c.body);
+  assert.deepEqual(posted.filter((b) => ["prompt", "steer", "follow_up", "abort_and_prompt"].includes(b?.type)), []);
+  assert.deepEqual(posted.filter((b) => b?.type === "btw"), [{ type: "btw", question: "what is 2+2" }]);
+
+  await act(async () => {
+    es.emit({ type: "btw_delta", recordId: "b1", delta: "It is " });
+    es.emit({ type: "btw_delta", recordId: "b1", delta: "4." });
+    await sleep(50);
+  });
+  assert.equal(w.latest.btw.activeId, "b1", "the side question opens in the composer panel");
+  assert.equal(w.latest.btw.records[0].answer, "It is 4.");
+
+  await act(async () => {
+    es.emit({ type: "btw_record", record: { ...record, answer: "It is 4.", status: "complete", updatedAt: 2 } });
+    await sleep(50);
+  });
+  assert.equal(w.latest.btw.records[0].status, "complete");
+  assert.equal(w.latest.agentRunning, true, "the main run is untouched");
+  assert.equal(w.latest.messages.some((m) => JSON.stringify(m.content).includes("2+2")), false, "never enters the transcript");
+});
+
 function liveSnapshot(sid, sequence, streamingMessage, toolEvents = []) {
   return {
     cursor: { streamId: `stream-${sid}`, sequence },

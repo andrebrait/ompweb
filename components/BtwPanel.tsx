@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { Ban, Check, ChevronDown, CircleAlert, Copy, Loader2, MessageCircleQuestion, Reply, Square, X } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { btwTurns, latestBtwTurn, type BtwRecord, type BtwStatus, type BtwTurn } from "@/lib/btw";
@@ -89,12 +89,20 @@ export function BtwPanel({ record, onCancel, onFollowUp, onClose }: BtwPanelProp
   const turns = btwTurns(record);
   const latest = latestBtwTurn(record);
   const running = latest.status === "running";
+  // Follow the streaming tail like the chat does, until the user scrolls up.
+  const turnsRef = useRef<HTMLDivElement>(null);
+  const followTailRef = useRef(true);
+  useLayoutEffect(() => {
+    const el = turnsRef.current;
+    if (el && followTailRef.current) el.scrollTop = el.scrollHeight;
+  }, [latest.answer, turns.length, collapsed]);
 
   const submitFollowUp = async (event: FormEvent) => {
     event.preventDefault();
     const question = draft.trim();
     if (!question || running || sending) return;
     setSending(true);
+    followTailRef.current = true;
     if (await onFollowUp(question)) setDraft("");
     setSending(false);
   };
@@ -142,10 +150,20 @@ export function BtwPanel({ record, onCancel, onFollowUp, onClose }: BtwPanelProp
         </button>
       </div>
       {!collapsed && (
-        <div className="grid gap-2.5 px-3 py-2.5 animate-slide-down" style={{ maxHeight: "min(40vh, 360px)", overflowY: "auto" }}>
-          {turns.map((turn, index) => (
-            <BtwTurnView key={`${turn.createdAt}:${index}`} turn={turn} live={index === turns.length - 1} />
-          ))}
+        <div className="grid gap-2 px-3 py-2.5 animate-slide-down">
+          <div
+            ref={turnsRef}
+            onScroll={(event) => {
+              const el = event.currentTarget;
+              followTailRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+            }}
+            className="grid gap-2.5"
+            style={{ maxHeight: "min(36vh, 320px)", overflowY: "auto" }}
+          >
+            {turns.map((turn, index) => (
+              <BtwTurnView key={`${turn.createdAt}:${index}`} turn={turn} live={index === turns.length - 1} />
+            ))}
+          </div>
           <div className="flex flex-wrap items-center gap-1.5">
             {running ? (
               <button type="button" className="ui-focus-ring" style={actionStyle} onClick={onCancel}>

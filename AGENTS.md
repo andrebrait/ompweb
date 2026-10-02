@@ -88,6 +88,7 @@ app/api/
 lib/
   omp/                 shared omp foundations (paths, CLI probe, RpcProcess)
   agent-client.ts      typed fetch helper for /api/agent commands
+  btw.ts               /btw side-question records + pure frame/snapshot merge (order-safe)
   draft-store.ts       local draft persistence helpers
   file-access.ts       allowed file roots for /api/files and worktrees
   file-paths.ts        client/server path encoding helpers
@@ -115,7 +116,8 @@ components/
   SessionSidebar.tsx  session tree + FileExplorer
   ChatWindow.tsx      chat composition + completion sound wrapper
   ChatInput.tsx       input bar + model/thinking/tools/compact controls
-  ComposerPanels.tsx  composer-attached todo + subagent panels (collapsible, live states)
+  ComposerPanels.tsx  composer-attached /btw + todo + subagent panels (collapsible, live states)
+  BtwPanel.tsx        /btw side-question panel (stream, cancel, copy, follow-up) + history dialog
   TodoList.tsx        todo phase grid with preview/show-all (used by ComposerPanels)
   SubagentTranscriptDialog.tsx  task + final output summary dialog (wide, screen-adaptive)
   MessageView.tsx     renders one message (user/assistant/toolCall/toolResult)
@@ -142,6 +144,7 @@ hooks/
   usePrefersReducedMotion.ts OS reduce-motion preference (SMIL-safe)
   useTheme.ts              theme state (localStorage key "omp-theme")
   useWordPrediction.ts     debounced omp predict_word ghost text + feedback
+  useBtw.ts                /btw records/active panel/history dialog fed by btw_* SSE frames
 ```
 
 ---
@@ -237,6 +240,28 @@ handled or safely ignored.
   for terminal states) fed by the same `subagent_lifecycle`/`subagent_progress`
   SSE frames; clicking a chip opens the transcript dialog. `TodoList` keeps a
   non-collapsible default (`collapsible` prop) for SSR tests.
+
+### Side questions (`/btw`, `lib/btw.ts`, `hooks/useBtw.ts`, `components/BtwPanel.tsx`)
+- `btw` / `btw_cancel` / `get_btw_history` are plain passthrough RPC commands;
+  answers stream as `btw_delta` (text appended to the latest turn) and
+  `btw_record` (full snapshot per lifecycle change) frames. omp persists the
+  history per session, so the TUI and omp-web share topics.
+- `/btw <question>` and `/btw` are client builtins (`handleBuiltinSlashCommand`
+  case `"btw"`; `ChatInput.sendQueued` routes them there while a run streams):
+  never sent as a prompt, never queued. Asking starts the wrapper (`get_state`)
+  and attaches SSE first when it is not open, so no early delta is lost.
+- The `btw` response, history snapshots and frames race (HTTP vs SSE): merge
+  only through `lib/btw.ts`, which never lets a stale snapshot drop streamed
+  text, a turn, or a finished status. Frames are applied once per animation
+  frame (token-rate deltas must not re-render the chat per token).
+- History is refetched on every SSE open (observer-only, so it never spawns
+  omp); `/btw` alone refetches explicitly and may start the process. An omp
+  without the commands answers `Unknown command: btw` → localized
+  "requires a newer omp" toast (`toastBtwError`); background refreshes stay silent.
+- The panel sits first in `ComposerPanels` (also rendered in the empty
+  new-chat layout) and is keyed by record id: each new topic starts expanded,
+  unlike todo/subagents. A `btw_record` that is running opens it, so a question
+  asked from another tab or on reconnect shows up; Close only hides it.
 
 ### Subagent integration (`lib/subagent-types.ts`, `lib/subagent-history.ts`)
 - **Live detail**: `subagent_progress` frames carry the full `AgentProgress`
