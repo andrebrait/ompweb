@@ -93,6 +93,7 @@ class FakeAudioContext {
 class FakePreviewAudio {
   constructor(src) {
     this.src = src;
+    world.audioUrls.push(src);
     this.currentTime = 0;
     this.duration = 1;
     this.ended = false;
@@ -136,18 +137,36 @@ beforeEach(() => {
   override(URL, "revokeObjectURL", (url) => {
     world.revokedUrls.push(url);
   });
-  // POST /api/stt starts a job; each GET poll answers with the next scripted
-  // response, the last one repeating.
+  // Fake job API. POST /api/stt starts job-1; each GET poll answers with the
+  // next scripted response (the last one repeating); a claiming DELETE takes
+  // the last polled body; POST /api/stt/job-1 is a server-side retry.
   world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "done", text: "transcribed words" }) }];
   world.polls = 0;
+  world.lastPoll = null;
   world.postedFiles = [];
+  world.deletes = [];
+  world.retries = 0;
+  world.retryResponse = { ok: true, status: 200, json: async () => ({ status: "pending" }) };
+  world.scopeJobs = [];
+  world.audioUrls = [];
   override(globalThis, "fetch", async (url, init) => {
-    if (init?.method === "POST") {
+    if (url.startsWith("/api/stt?scope=")) return { ok: true, status: 200, json: async () => ({ jobs: world.scopeJobs }) };
+    if (init?.method === "POST" && url === "/api/stt") {
       world.postedFiles.push(init.body.get("file"));
       return { ok: true, status: 202, json: async () => ({ jobId: "job-1" }) };
     }
+    if (init?.method === "POST") {
+      world.retries++;
+      return world.retryResponse;
+    }
+    if (init?.method === "DELETE") {
+      world.deletes.push(url);
+      const claimed = url.includes("?claim=") ? await world.lastPoll?.json() : null;
+      return { ok: true, status: 200, json: async () => claimed ?? { status: "gone" } };
+    }
     assert.equal(url, "/api/stt/job-1");
-    return world.pollResponses[Math.min(world.polls++, world.pollResponses.length - 1)];
+    world.lastPoll = world.pollResponses[Math.min(world.polls++, world.pollResponses.length - 1)];
+    return world.lastPoll;
   });
 });
 
@@ -163,11 +182,12 @@ afterEach(() => {
   }
 });
 
-function mountDictation() {
+function mountDictation(scope) {
   const transcripts = [];
   const errors = [];
   const view = renderHook(() =>
     useDictation({
+      scope,
       onTranscript: (text) => transcripts.push(text),
       onError: (message) => errors.push(message),
     }),
@@ -302,7 +322,7 @@ async function recordAndTranscribe(view) {
   await settle(700);
 }
 
-test("a failed transcription job surfaces its error and retry resends the same audio", async () => {
+test("retry reruns a failed job on the server with the audio it kept", async () => {
   const { view, transcripts, errors } = mountDictation();
   world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "error", error: "Transcription timed out" }) }];
 
@@ -318,9 +338,63 @@ test("a failed transcription job surfaces its error and retry resends the same a
   });
   await settle(700);
 
+  assert.equal(world.retries, 1);
+  assert.equal(world.postedFiles.length, 1, "the server's copy is retried, not a re-upload");
+  assert.deepEqual(transcripts, ["second try"]);
+});
+
+test("retry re-uploads the local recording when the server lost the job", async () => {
+  const { view, transcripts } = mountDictation();
+  world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "error", error: "boom" }) }];
+  await recordAndTranscribe(view);
+
+  world.retryResponse = { ok: false, status: 404, json: async () => ({ error: "Transcription job not found" }) };
+  world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "done", text: "re-uploaded" }) }];
+  await act(async () => {
+    view.result.current.retry();
+  });
+  await settle(700);
+
   assert.equal(world.postedFiles.length, 2);
   assert.equal(await world.postedFiles[1].text(), await world.postedFiles[0].text());
-  assert.deepEqual(transcripts, ["second try"]);
+  assert.deepEqual(transcripts, ["re-uploaded"]);
+});
+
+test("another browser's job for the same scope shows up with server audio, and a claim lost to it stands down", async () => {
+  world.scopeJobs = [{ id: "job-1", status: "error", error: "model loading" }];
+  const { view, transcripts, errors } = mountDictation("session-1");
+  await settle(50);
+
+  assert.equal(view.result.current.transcribeError, "model loading");
+  await act(async () => {
+    view.result.current.playPreview();
+  });
+  assert.deepEqual(world.audioUrls, ["/api/stt/job-1/audio"]);
+
+  // Retry here; meanwhile the recording browser claims the transcript first.
+  world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "gone" }) }];
+  await act(async () => {
+    view.result.current.retry();
+  });
+  await settle(700);
+
+  assert.equal(world.retries, 1);
+  assert.deepEqual(transcripts, []);
+  assert.deepEqual(errors, [], "losing the claim to another browser is not an error");
+  assert.equal(view.result.current.transcribeError, null);
+  assert.equal(view.result.current.isTranscribing, false);
+});
+
+test("a finished job is claimed, and only the claimed text is inserted", async () => {
+  world.scopeJobs = [{ id: "job-1", status: "pending" }];
+  world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "done", text: "from the phone" }) }];
+  const { view, transcripts } = mountDictation("session-1");
+  await settle(700);
+
+  assert.deepEqual(transcripts, ["from the phone"]);
+  assert.equal(world.deletes.length, 1);
+  assert.match(world.deletes[0], /^\/api\/stt\/job-1\?claim=/);
+  assert.equal(view.result.current.isTranscribing, false);
 });
 
 test("a permanent 4xx poll fails at once instead of polling until the deadline", async () => {
@@ -352,6 +426,7 @@ test("cancelling mid-transcription stops polling and drops a late result", async
   await settle(1200);
 
   assert.equal(world.polls, 1, "no poll may run after cancel");
+  assert.deepEqual(world.deletes, ["/api/stt/job-1"], "discard must end the job for other browsers too");
   assert.deepEqual(transcripts, []);
   assert.deepEqual(errors, []);
   assert.equal(view.result.current.isTranscribing, false);

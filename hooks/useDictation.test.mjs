@@ -28,18 +28,6 @@ test("useDictation exposes a live analyser for the waveform", async () => {
   assert.match(source, /audioContextRef\.current\.close\(\)/);
 });
 
-test("useDictation retains audio after failure and supports retry", async () => {
-  const source = await readFile(new URL("./useDictation.ts", import.meta.url), "utf8");
-
-  // The recorded blob is kept for retry and only dropped on success or discard
-  assert.match(source, /pendingAudioRef\.current = \{ blob, ext \}/);
-  assert.match(source, /pendingAudioRef\.current = null;\s*\n\s*onTranscript/);
-
-  // Retry re-runs transcription with the retained audio
-  assert.match(source, /const retry = useCallback\(\(\) => \{\s*\n\s*const pending = pendingAudioRef\.current;/);
-  assert.match(source, /void runTranscription\(pending\.blob, pending\.ext\)/);
-});
-
 test("ChatInput replaces the composer with the deck and routes dictation keys at window level", async () => {
   const source = await readFile(new URL("../components/ChatInput.tsx", import.meta.url), "utf8");
 

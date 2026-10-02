@@ -5,6 +5,12 @@ import { useState, useRef, useCallback, useEffect } from "react";
 export interface UseDictationOptions {
   onTranscript: (text: string) => void;
   onError?: (error: string) => void;
+  /**
+   * Composer scope (session id or `new:<cwd>` draft key). Jobs started under
+   * it are picked up by every browser showing the same scope, so a recording
+   * survives the recording browser disconnecting.
+   */
+  scope?: string;
 }
 
 export const MAX_RECORDING_MS = 300_000;
@@ -34,7 +40,7 @@ function normalizeErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-export function useDictation({ onTranscript, onError }: UseDictationOptions) {
+export function useDictation({ onTranscript, onError, scope }: UseDictationOptions) {
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [isReviewing, setIsReviewing] = useState(false);
@@ -59,6 +65,16 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
   // Audio kept after a failed/timed-out transcription so the user can retry
   // instead of losing the recording.
   const pendingAudioRef = useRef<{ blob: Blob; ext: string } | null>(null);
+  // Server job the deck currently shows. The server keeps its audio, so it can
+  // be played and retried even from a browser that never had the recording.
+  const jobIdRef = useRef<string | null>(null);
+  // Identifies this browser when claiming a finished job, so a claim whose
+  // response was lost can be repeated without losing the transcript.
+  const claimTokenRef = useRef(Math.random().toString(36).slice(2) + Date.now().toString(36));
+  const callbacksRef = useRef({ onTranscript, onError });
+  useEffect(() => {
+    callbacksRef.current = { onTranscript, onError };
+  });
 
   const teardownPreviewAudio = useCallback(() => {
     if (pausePreviewTimeoutRef.current !== null) {
@@ -128,84 +144,181 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
     };
   }, [cleanup, teardownPreviewAudio]);
 
-  // POST /api/stt starts a server-side job; the server holds the slow upstream
-  // request and the browser only polls short GETs, so proxy idle timeouts
-  // between them never apply. Transient poll failures (network switch, proxy
-  // error page during a restart) keep polling until the deadline.
-  const runTranscription = useCallback(async (blob: Blob, ext: string) => {
-    setIsTranscribing(true);
+  const failTranscription = useCallback((message: string) => {
+    setTranscribeError(message);
+    callbacksRef.current.onError?.(message);
+  }, []);
+
+  // Another browser claimed or discarded the job: stand down without an error.
+  const releaseJob = useCallback(() => {
+    jobIdRef.current = null;
+    pendingAudioRef.current = null;
+    setTranscribeError(null);
+    teardownPreviewAudio();
+  }, [teardownPreviewAudio]);
+
+  // Polls a server job until it settles. The server holds the slow upstream
+  // request, and the browser only sends short GETs, so proxy idle timeouts
+  // never apply. Transient poll failures (network switch, proxy error page
+  // during a restart) keep polling until the deadline.
+  const followJob = useCallback(async (jobId: string) => {
+    abortControllerRef.current?.abort();
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
     const { signal } = abortController;
+    const stale = () => cancelledRef.current || signal.aborted;
     const deadline = Date.now() + STT_TIMEOUT_MS;
-    const fail = (message: string) => {
-      setTranscribeError(message);
-      onError?.(message);
-    };
+    const jobUrl = `/api/stt/${encodeURIComponent(jobId)}`;
+    jobIdRef.current = jobId;
+    setTranscribeError(null);
+    setIsTranscribing(true);
 
+    // Once the job is done the loop claims it instead of polling. A claim
+    // whose response is lost is repeated with the same token, which returns
+    // the text again, so a dropped response never loses the transcript.
+    let claiming = false;
+    let delay = STT_POLL_INTERVAL_MS;
     try {
-      const body = new FormData();
-      body.append("file", blob, ext);
-      const startRes = await fetch("/api/stt", { method: "POST", body, signal });
-      const started = await startRes.json().catch(() => null);
-      if (cancelledRef.current || signal.aborted) return;
-      if (!startRes.ok || typeof started?.jobId !== "string") {
-        fail(normalizeErrorMessage(started?.error, `Transcription failed (HTTP ${startRes.status})`));
-        return;
-      }
-
-      const jobUrl = `/api/stt/${encodeURIComponent(started.jobId)}`;
       while (true) {
         if (Date.now() > deadline) {
-          fail("Transcription timed out");
+          failTranscription("Transcription timed out");
           return;
         }
         const tick = Promise.withResolvers<void>();
-        window.setTimeout(tick.resolve, STT_POLL_INTERVAL_MS);
+        window.setTimeout(tick.resolve, delay);
         await tick.promise;
-        if (signal.aborted || cancelledRef.current) return;
-        // Per-poll timeout: a stalled GET must not freeze the loop past its deadline.
-        const res = await fetch(jobUrl, {
+        delay = STT_POLL_INTERVAL_MS;
+        if (stale()) return;
+        // Per-request timeout: a stalled request must not freeze the loop past its deadline.
+        const res = await fetch(claiming ? `${jobUrl}?claim=${encodeURIComponent(claimTokenRef.current)}` : jobUrl, {
+          method: claiming ? "DELETE" : "GET",
           signal: AbortSignal.any([signal, AbortSignal.timeout(STT_POLL_REQUEST_TIMEOUT_MS)]),
           cache: "no-store",
         }).catch((err: unknown) => {
           if (signal.aborted) throw err;
           return null;
         });
-        if (cancelledRef.current || signal.aborted) return;
+        if (stale()) return;
         if (!res) continue;
         const job = await res.json().catch(() => null);
-        if (cancelledRef.current || signal.aborted) return;
-        // 4xx (unknown job, expired login) is final; 5xx/408/429 and proxy pages are transient.
+        if (stale()) return;
+        if (res.status === 404) {
+          // Server restarted or the job expired: only local audio can be retried.
+          jobIdRef.current = null;
+          failTranscription(normalizeErrorMessage(job?.error, "Transcription job not found"));
+          return;
+        }
+        // 4xx (expired login, bad request) is final; 5xx/408/429 and proxy pages are transient.
         if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
-          fail(normalizeErrorMessage(job?.error, `Transcription failed (HTTP ${res.status})`));
+          failTranscription(normalizeErrorMessage(job?.error, `Transcription failed (HTTP ${res.status})`));
           return;
         }
         if (!res.ok || job?.status === "pending") continue;
         if (job?.status === "error") {
-          fail(normalizeErrorMessage(job.error, "Transcription failed"));
+          failTranscription(normalizeErrorMessage(job.error, "Transcription failed"));
+          return;
+        }
+        if (job?.status === "gone") {
+          releaseJob();
           return;
         }
         if (job?.status !== "done") continue;
-        if (typeof job.text === "string" && job.text.trim()) {
+        if (!claiming) {
+          claiming = true;
+          delay = 0;
+          continue;
+        }
+        const claimed = job;
+        jobIdRef.current = null;
+        teardownPreviewAudio();
+        if (typeof claimed.text === "string" && claimed.text.trim()) {
           pendingAudioRef.current = null;
-          onTranscript(job.text.trim());
+          callbacksRef.current.onTranscript(claimed.text.trim());
         } else {
-          fail("No speech detected");
+          failTranscription("No speech detected");
         }
         return;
       }
     } catch (err) {
-      if (cancelledRef.current) return;
+      if (stale()) return;
       if (err instanceof DOMException && err.name === "AbortError") return;
-      fail(err instanceof Error ? err.message : normalizeErrorMessage(err, "Transcription failed"));
+      failTranscription(err instanceof Error ? err.message : normalizeErrorMessage(err, "Transcription failed"));
     } finally {
       if (abortControllerRef.current === abortController) {
         abortControllerRef.current = null;
+        setIsTranscribing(false);
       }
-      setIsTranscribing(false);
     }
-  }, [onTranscript, onError]);
+  }, [failTranscription, releaseJob, teardownPreviewAudio]);
+
+  // Uploads the recording; the server keeps it and transcribes in the background.
+  const runTranscription = useCallback(async (blob: Blob, ext: string) => {
+    abortControllerRef.current?.abort();
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    const { signal } = abortController;
+    setIsTranscribing(true);
+    let jobId: string | null = null;
+    try {
+      const body = new FormData();
+      body.append("file", blob, ext);
+      if (scope) body.append("scope", scope);
+      const startRes = await fetch("/api/stt", { method: "POST", body, signal });
+      const started = await startRes.json().catch(() => null);
+      if (cancelledRef.current || signal.aborted) return;
+      if (!startRes.ok || typeof started?.jobId !== "string") {
+        failTranscription(normalizeErrorMessage(started?.error, `Transcription failed (HTTP ${startRes.status})`));
+        return;
+      }
+      jobId = started.jobId;
+    } catch (err) {
+      if (cancelledRef.current || signal.aborted) return;
+      failTranscription(err instanceof Error ? err.message : normalizeErrorMessage(err, "Transcription failed"));
+    } finally {
+      if (abortControllerRef.current === abortController) {
+        abortControllerRef.current = null;
+        if (!jobId) setIsTranscribing(false);
+      }
+    }
+    if (jobId && !cancelledRef.current && !signal.aborted) void followJob(jobId);
+  }, [scope, failTranscription, followJob]);
+
+  // Pick up this scope's job when the composer mounts, the tab regains focus,
+  // or the page becomes visible: a recording another browser sent (or this
+  // one sent before a reload) shows here with playback and retry.
+  const idleRef = useRef(true);
+  useEffect(() => {
+    idleRef.current = !isRecording && !isPaused && !isReviewing && !isTranscribing && !transcribeError;
+  });
+  useEffect(() => {
+    if (!scope) return;
+    let disposed = false;
+    const adopt = async () => {
+      if (!idleRef.current || jobIdRef.current) return;
+      const res = await fetch(`/api/stt?scope=${encodeURIComponent(scope)}`, { cache: "no-store" }).catch(() => null);
+      const data = res?.ok ? await res.json().catch(() => null) : null;
+      const job = Array.isArray(data?.jobs) ? data.jobs[0] : null;
+      if (disposed || typeof job?.id !== "string" || !idleRef.current || jobIdRef.current) return;
+      cancelledRef.current = false;
+      if (job.status === "error") {
+        jobIdRef.current = job.id;
+        setTranscribeError(normalizeErrorMessage(job.error, "Transcription failed"));
+      } else {
+        void followJob(job.id);
+      }
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void adopt();
+    };
+    void adopt();
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      disposed = true;
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [scope, followJob]);
 
   // Ends capture and moves the session into transcription. Gates on the live
   // MediaRecorder state (not the isRecording closure) because the 5-minute
@@ -222,13 +335,16 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
     return { blob, ext };
   }, []);
 
-  const setupPreviewAudio = useCallback((blob: Blob) => {
+  // Previews local audio (a Blob) or, for a job this browser did not record,
+  // the copy the server kept (a URL).
+  const setupPreviewAudio = useCallback((source: Blob | string) => {
     // Pause/detach any previous preview element before replacing it so a
     // still-playing preview cannot outlive the controls that reference it.
     teardownPreviewAudio();
     try {
-      const url = URL.createObjectURL(blob);
-      previewUrlRef.current = url;
+      const url = typeof source === "string" ? source : URL.createObjectURL(source);
+      // Only object URLs are ours to revoke.
+      previewUrlRef.current = typeof source === "string" ? null : url;
       const audio = new Audio(url);
       audio.preload = "auto";
       previewAudioRef.current = audio;
@@ -263,8 +379,10 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
     let audio = previewAudioRef.current;
     if (!audio) {
       const captured = getCapturedBlob();
-      if (!captured) return;
-      audio = setupPreviewAudio(captured.blob);
+      const jobId = jobIdRef.current;
+      if (captured) audio = setupPreviewAudio(captured.blob);
+      else if (jobId) audio = setupPreviewAudio(`/api/stt/${encodeURIComponent(jobId)}/audio`);
+      else return;
     }
     if (audio) {
       if (audio.ended || (Number.isFinite(audio.duration) && audio.currentTime >= audio.duration)) {
@@ -334,6 +452,11 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
     chunksRef.current = [];
     immediateSendRef.current = false;
     pendingAudioRef.current = null;
+    // A new recording replaces the job the deck was showing.
+    if (jobIdRef.current) {
+      void fetch(`/api/stt/${encodeURIComponent(jobIdRef.current)}`, { method: "DELETE" }).catch(() => {});
+      jobIdRef.current = null;
+    }
     teardownPreviewAudio();
     setTranscribeError(null);
     setIsTranscribing(false);
@@ -469,6 +592,11 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
       abortControllerRef.current = null;
     }
     pendingAudioRef.current = null;
+    // Discard means discard everywhere: other browsers polling the job stand down.
+    if (jobIdRef.current) {
+      void fetch(`/api/stt/${encodeURIComponent(jobIdRef.current)}`, { method: "DELETE" }).catch(() => {});
+      jobIdRef.current = null;
+    }
     setTranscribeError(null);
     setIsTranscribing(false);
     setIsReviewing(false);
@@ -477,14 +605,38 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
     cleanup();
   }, [cleanup, teardownPreviewAudio, resetCaptureState]);
 
-  const retry = useCallback(() => {
-    const pending = pendingAudioRef.current;
-    if (!pending || isTranscribing) return;
+  // Retries on the server with the audio it kept; falls back to re-uploading
+  // the local recording when the server no longer has the job.
+  const retry = useCallback(async () => {
+    if (isTranscribing) return;
     pausePreview();
     teardownPreviewAudio();
     setTranscribeError(null);
-    void runTranscription(pending.blob, pending.ext);
-  }, [isTranscribing, pausePreview, teardownPreviewAudio, runTranscription]);
+    cancelledRef.current = false;
+    const jobId = jobIdRef.current;
+    if (jobId) {
+      setIsTranscribing(true);
+      const res = await fetch(`/api/stt/${encodeURIComponent(jobId)}`, { method: "POST" }).catch(() => null);
+      const job = await res?.json().catch(() => null);
+      if (cancelledRef.current) return;
+      if (res?.ok && job?.status !== "gone") {
+        void followJob(jobId);
+        return;
+      }
+      setIsTranscribing(false);
+      if (res?.ok) {
+        releaseJob();
+        return;
+      }
+      if (res?.status !== 404) {
+        failTranscription(normalizeErrorMessage(job?.error, `Transcription failed (HTTP ${res?.status ?? "network"})`));
+        return;
+      }
+      jobIdRef.current = null;
+    }
+    const pending = pendingAudioRef.current;
+    if (pending) void runTranscription(pending.blob, pending.ext);
+  }, [isTranscribing, pausePreview, teardownPreviewAudio, followJob, releaseJob, failTranscription, runTranscription]);
   const toggle = useCallback(() => {
     if (isRecording) finishCapture();
     else void start();

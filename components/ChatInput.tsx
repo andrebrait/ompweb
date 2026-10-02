@@ -881,6 +881,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     seekPreview: seekPreviewDictation,
     confirmTranscribe: confirmTranscribeDictation,
   } = useDictation({
+    scope: draftKey,
     onTranscript: (text) => {
       const after = dictationAfterRef.current;
       dictationAfterRef.current = null;

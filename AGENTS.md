@@ -83,8 +83,9 @@ app/api/
   skills/route.ts                 GET/PATCH loaded skills and disable-model-invocation
   skills/install/route.ts         POST install skills through npx skills add
   skills/search/route.ts          GET/POST skills.sh search
-  stt/route.ts                    POST audio → 202 { jobId }; server-side transcription job (lib/stt-jobs.ts)
-  stt/[jobId]/route.ts            GET job state: pending | done { text } | error { error }; 404 unknown
+  stt/route.ts                    POST audio (+scope) → 202 { jobId } | GET ?scope= live jobs (lib/stt-jobs.ts)
+  stt/[jobId]/route.ts            GET job state | POST retry with kept audio | DELETE ?claim= claim/discard
+  stt/[jobId]/audio/route.ts      GET the kept recording (audio/* only) for playback
   worktrees/route.ts              GET/POST/DELETE git worktrees
 
 lib/
@@ -481,6 +482,21 @@ so omp requeues it on abort and runs it next; omp-web cannot prevent that.
 - Ghost state lives in a small external store (`useSyncExternalStore` in
   `GhostMirror`), not ChatInput state: re-rendering the composer per ghost
   change was the dominant per-keystroke cost.
+
+### Voice transcription jobs (`lib/stt-jobs.ts`, `/api/stt`, `hooks/useDictation.ts`)
+- The browser never waits on the STT endpoint: `POST /api/stt` keeps the
+  recording in memory and starts a job; the hook polls `GET /api/stt/[jobId]`
+  (proxies with ~30s timeouts would otherwise return HTML 504s). Job failures
+  are 200 payloads for the same reason.
+- Jobs carry the composer scope (`draftKey`: session id or `new:<cwd>`). The
+  hook adopts the newest job for its scope on mount, focus and visibility, so
+  another browser can play (`/audio`), retry (`POST`) or discard it.
+- A finished job is delivered by claim: `DELETE ?claim=<token>` returns the
+  text to the first claimer only (repeatable with the same token); others see
+  `gone` and stand down silently. Never deliver text from a plain poll.
+- Store is per process (`globalThis` map) with caps (4 pending, 20 live) and
+  TTLs; a server restart loses jobs, and the hook then re-uploads its local
+  copy if it has one.
 
 ### Completion sound
 - `hooks/useAudio.ts` stores the toggle in `localStorage` and reuses one `AudioContext`.

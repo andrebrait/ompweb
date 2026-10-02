@@ -1,31 +1,36 @@
 import { NextResponse } from "next/server";
 import { parseFormDataWithinLimit, RequestBodyTooLargeError } from "@/lib/bounded-form-data";
-import { MAX_STT_AUDIO_BYTES, MAX_STT_REQUEST_BYTES } from "@/lib/stt";
-import { startSttJob } from "@/lib/stt-jobs";
+import { MAX_STT_AUDIO_BYTES, MAX_STT_REQUEST_BYTES, readSttConfig } from "@/lib/stt";
+import { listSttJobs, startSttJob } from "@/lib/stt-jobs";
 
 export const dynamic = "force-dynamic";
 
-function cleanEnvVar(val?: string): string | undefined {
-  const cleaned = val?.replace(/\\n|[\r\n]/g, "").trim();
-  return cleaned || undefined;
+const MAX_SCOPE_LENGTH = 1024;
+
+/** GET /api/stt?scope=<draft key> — live jobs for that composer, newest first. */
+export async function GET(request: Request) {
+  const scope = new URL(request.url).searchParams.get("scope");
+  if (!scope || scope.length > MAX_SCOPE_LENGTH) {
+    return NextResponse.json({ error: "scope is required", code: "missing_scope" }, { status: 400 });
+  }
+  return NextResponse.json({ jobs: listSttJobs(scope) });
 }
 
 /**
- * POST /api/stt — validates the audio and starts a server-side transcription
- * job. Returns 202 { jobId }; poll GET /api/stt/[jobId] for the result.
+ * POST /api/stt (multipart: file, optional scope) — keeps the audio and starts
+ * a server-side transcription job. Returns 202 { jobId }; poll
+ * GET /api/stt/[jobId] for the result.
  */
 export async function POST(request: Request) {
   try {
-    const endpoint = cleanEnvVar(process.env.OMP_WEB_STT_ENDPOINT);
-    if (!endpoint) {
+    const config = readSttConfig();
+    if (!config) {
       return NextResponse.json(
         { error: "STT not configured. Set OMP_WEB_STT_ENDPOINT." },
         { status: 501 }
       );
     }
 
-    const apiKey = cleanEnvVar(process.env.OMP_WEB_STT_KEY);
-    const model = cleanEnvVar(process.env.OMP_WEB_STT_MODEL);
     const formData = await parseFormDataWithinLimit(request, MAX_STT_REQUEST_BYTES);
     const file = formData.get("file");
     if (!file || typeof file === "string" || file.size === 0) {
@@ -40,12 +45,12 @@ export async function POST(request: Request) {
         { status: 413 }
       );
     }
-
-    if (model && !formData.has("model")) {
-      formData.append("model", model);
+    const scope = formData.get("scope");
+    if (scope !== null && (typeof scope !== "string" || scope.length > MAX_SCOPE_LENGTH)) {
+      return NextResponse.json({ error: "Invalid scope", code: "invalid_scope" }, { status: 400 });
     }
 
-    const jobId = startSttJob(endpoint, apiKey, formData);
+    const jobId = startSttJob(config, { audio: file, scope: scope || null });
     if (!jobId) {
       return NextResponse.json(
         { error: "Too many transcriptions in progress", code: "stt_busy" },
