@@ -23,6 +23,9 @@ interface SttJob {
   attempt?: AbortController;
   /** Claim token of the browser that took the transcript; lets it repeat a lost claim. */
   claimedBy?: string;
+  /** Claim token of the recording browser: it alone may claim during OWNER_GRACE_MS. */
+  owner?: string;
+  doneAt?: number;
   expiry?: NodeJS.Timeout;
 }
 
@@ -47,6 +50,12 @@ const STT_UPSTREAM_TIMEOUT_MS = 290_000;
 const SETTLED_JOB_TTL_MS = 60 * 60_000;
 /** Claimed/discarded jobs answer "gone" this long so other browsers stand down. */
 const GONE_JOB_TTL_MS = 10 * 60_000;
+/**
+ * After a job finishes, only the recording browser may claim it for this
+ * long, so it keeps the transcript and its send/queue intent; other browsers
+ * take over only if it has gone away.
+ */
+const OWNER_GRACE_MS = 15_000;
 /** Each pending job runs an upstream request; refuse new ones past this. */
 const MAX_PENDING_JOBS = 4;
 /** Each live job holds up to 25MB of audio; refuse new ones past this. */
@@ -129,6 +138,7 @@ function launch(config: SttConfig, job: SttJob, audio: File): void {
     if (attempt.signal.aborted) return;
     job.attempt = undefined;
     Object.assign(job, result);
+    if (result.status === "done") job.doneAt = Date.now();
     expireIn(job, SETTLED_JOB_TTL_MS);
   });
 }
@@ -144,7 +154,10 @@ function countLive(): { pending: number; live: number } {
 }
 
 /** Starts a job; null when the pending or live job caps are reached. */
-export function startSttJob(config: SttConfig, input: { audio: File; scope: string | null }): string | null {
+export function startSttJob(
+  config: SttConfig,
+  input: { audio: File; scope: string | null; owner: string | undefined },
+): string | null {
   const { pending, live } = countLive();
   if (pending >= MAX_PENDING_JOBS || live >= MAX_LIVE_JOBS) return null;
   const job: SttJob = { id: randomUUID(), ...input, status: "pending" };
@@ -153,12 +166,13 @@ export function startSttJob(config: SttConfig, input: { audio: File; scope: stri
   return job.id;
 }
 
-/** Re-runs a failed job with its stored audio. */
-export function retrySttJob(config: SttConfig, id: string): SttJobView | "busy" | null {
+/** Re-runs a failed job with its stored audio; the retrying browser becomes its owner. */
+export function retrySttJob(config: SttConfig, id: string, owner: string | undefined): SttJobView | "busy" | null {
   const job = store.get(id);
   if (!job) return null;
   if (job.status !== "error" || !job.audio) return view(job);
   if (countLive().pending >= MAX_PENDING_JOBS) return "busy";
+  job.owner = owner;
   launch(config, job, job.audio);
   return view(job);
 }
@@ -193,6 +207,10 @@ export function closeSttJob(id: string, claimToken?: string): SttClaim | null {
       : view(job);
   }
   if (claimToken && job.status !== "done") return view(job);
+  // Not yet claimable by this browser: "done" without text means "ask again".
+  if (claimToken && job.owner && claimToken !== job.owner && Date.now() - (job.doneAt ?? 0) < OWNER_GRACE_MS) {
+    return view(job);
+  }
   const before: SttClaim = { ...view(job), text: claimToken ? job.text : undefined };
   if (claimToken) job.claimedBy = claimToken;
   else job.text = undefined;

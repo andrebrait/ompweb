@@ -72,9 +72,14 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
   // The upload in flight, if any. Uploads are not aborted (see runTranscription);
   // these flags tell its completion whether to discard or just drop the job.
   const uploadRef = useRef<{ discard: boolean; detached: boolean } | null>(null);
-  // Identifies this browser when claiming a finished job, so a claim whose
-  // response was lost can be repeated without losing the transcript.
-  const claimTokenRef = useRef(Math.random().toString(36).slice(2) + Date.now().toString(36));
+  // Identifies this browser to the job API: it owns the jobs it uploads or
+  // retries (first claim on their transcript), and a claim whose response was
+  // lost can be repeated with it. Created on first use, never during render.
+  const claimTokenRef = useRef<string | null>(null);
+  const claimToken = useCallback(() => {
+    claimTokenRef.current ??= Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
+    return claimTokenRef.current;
+  }, []);
   const callbacksRef = useRef({ onTranscript, onError });
   useEffect(() => {
     callbacksRef.current = { onTranscript, onError };
@@ -194,7 +199,7 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
         delay = STT_POLL_INTERVAL_MS;
         if (stale()) return;
         // Per-request timeout: a stalled request must not freeze the loop past its deadline.
-        const res = await fetch(claiming ? `${jobUrl}?claim=${encodeURIComponent(claimTokenRef.current)}` : jobUrl, {
+        const res = await fetch(claiming ? `${jobUrl}?claim=${encodeURIComponent(claimToken())}` : jobUrl, {
           method: claiming ? "DELETE" : "GET",
           signal: AbortSignal.any([signal, AbortSignal.timeout(STT_POLL_REQUEST_TIMEOUT_MS)]),
           cache: "no-store",
@@ -232,15 +237,12 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
           delay = 0;
           continue;
         }
-        const claimed = job;
+        // "done" without text: the recording browser still has first claim; ask again.
+        if (typeof job.text !== "string") continue;
         jobIdRef.current = null;
         teardownPreviewAudio();
-        if (typeof claimed.text === "string" && claimed.text.trim()) {
-          pendingAudioRef.current = null;
-          callbacksRef.current.onTranscript(claimed.text.trim());
-        } else {
-          failTranscription("No speech detected");
-        }
+        pendingAudioRef.current = null;
+        callbacksRef.current.onTranscript(job.text.trim());
         return;
       }
     } catch (err) {
@@ -253,7 +255,7 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
         setIsTranscribing(false);
       }
     }
-  }, [failTranscription, releaseJob, teardownPreviewAudio]);
+  }, [claimToken, failTranscription, releaseJob, teardownPreviewAudio]);
 
   // Uploads the recording; the server keeps it and transcribes in the background.
   // The upload is never aborted: once sent, the server may already have started
@@ -270,6 +272,7 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
       const body = new FormData();
       body.append("file", blob, ext);
       if (scope) body.append("scope", scope);
+      body.append("owner", claimToken());
       const startRes = await fetch("/api/stt", { method: "POST", body });
       const started = await startRes.json().catch(() => null);
       if (upload.discard) {
@@ -294,7 +297,7 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
       }
     }
     if (jobId) void followJob(jobId);
-  }, [scope, failTranscription, followJob]);
+  }, [scope, claimToken, failTranscription, followJob]);
 
   // Pick up this scope's job on mount, on focus or visibility, and every few
   // seconds while visible: a recording another browser sent (or this one
@@ -648,7 +651,7 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
     const jobId = jobIdRef.current;
     if (jobId) {
       setIsTranscribing(true);
-      const res = await fetch(`/api/stt/${encodeURIComponent(jobId)}`, { method: "POST" }).catch(() => null);
+      const res = await fetch(`/api/stt/${encodeURIComponent(jobId)}?owner=${encodeURIComponent(claimToken())}`, { method: "POST" }).catch(() => null);
       const job = await res?.json().catch(() => null);
       // Discarded, or the user left this session, while the retry was in flight.
       if (cancelledRef.current || jobIdRef.current !== jobId) return;
@@ -670,7 +673,7 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
     const pending = pendingAudioRef.current;
     if (pending) void runTranscription(pending.blob, pending.ext);
     else failTranscription("Transcription job not found");
-  }, [isTranscribing, pausePreview, teardownPreviewAudio, followJob, releaseJob, failTranscription, runTranscription]);
+  }, [isTranscribing, pausePreview, teardownPreviewAudio, claimToken, followJob, releaseJob, failTranscription, runTranscription]);
   const toggle = useCallback(() => {
     if (isRecording) finishCapture();
     else void start();

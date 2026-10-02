@@ -21,13 +21,14 @@ export async function GET(_req: Request, { params }: Params) {
   return job ? NextResponse.json(job) : notFound();
 }
 
-/** POST /api/stt/[jobId] — retry a failed job with the audio the server kept. */
-export async function POST(_req: Request, { params }: Params) {
+/** POST /api/stt/[jobId]?owner=<token> — retry a failed job with the audio the server kept. */
+export async function POST(req: Request, { params }: Params) {
   const config = readSttConfig();
   if (!config) {
     return NextResponse.json({ error: "STT not configured. Set OMP_WEB_STT_ENDPOINT." }, { status: 501 });
   }
-  const job = retrySttJob(config, (await params).jobId);
+  const owner = new URL(req.url).searchParams.get("owner")?.slice(0, 128) || undefined;
+  const job = retrySttJob(config, (await params).jobId, owner);
   if (job === "busy") {
     return NextResponse.json({ error: "Too many transcriptions in progress", code: "stt_busy" }, { status: 429 });
   }

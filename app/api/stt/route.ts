@@ -49,8 +49,14 @@ export async function POST(request: Request) {
     if (scope !== null && (typeof scope !== "string" || scope.length > MAX_SCOPE_LENGTH)) {
       return NextResponse.json({ error: "Invalid scope", code: "invalid_scope" }, { status: 400 });
     }
+    // The uploader's claim token: it gets first claim on the transcript.
+    const owner = formData.get("owner");
 
-    const jobId = startSttJob(config, { audio: file, scope: scope || null });
+    const jobId = startSttJob(config, {
+      audio: file,
+      scope: scope || null,
+      owner: typeof owner === "string" && owner ? owner.slice(0, 128) : undefined,
+    });
     if (!jobId) {
       return NextResponse.json(
         { error: "Too many transcriptions in progress", code: "stt_busy" },

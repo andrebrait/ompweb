@@ -497,7 +497,10 @@ so omp requeues it on abort and runs it next; omp-web cannot prevent that.
   the text to the first claimer (repeatable with the same token); polls never
   carry text, and other browsers see `gone` and stand down silently. A token
   on an unfinished job is a no-op; a token-less `DELETE` discards and aborts
-  the upstream request.
+  the upstream request. The uploading (or retrying) browser's token is the
+  job owner: other tokens get `done` without text for 15s after the job
+  finishes, so the owner keeps its send/queue intent; after that anyone may
+  claim.
 - Store is per process (`globalThis` map) with caps (4 pending, 20 live) and
   TTLs; a server restart loses jobs, and the hook then re-uploads its local
   copy if it has one.
