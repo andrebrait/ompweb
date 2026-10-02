@@ -214,12 +214,25 @@ wait for that commit:
   send/settlement failure — a tool must never leak into the next run.
 
 ### Event protocol differences vs pi
-omp emits no `prompt_done` / `prompt_error` / `queue_update` /
-`compaction_start` / `compaction_end` events. Completion is `agent_end`
-(`isTerminal !== false`), errors surface as failed RPC responses plus `notice`
-events, and the queue length comes from `get_state.queuedMessageCount`.
+omp emits no `prompt_done` / `prompt_error` / `compaction_start` /
+`compaction_end` events. Completion is `agent_end` (`isTerminal !== false`),
+errors surface as failed RPC responses plus `notice` events.
 New frame types (`turn_start/end`, `notice`, `todo_reminder`, ...) must be
 handled or safely ignored.
+
+### Queued messages are omp-owned
+The queue panel renders omp's snapshot only: `get_state.queuedMessages` on
+load/reconcile/stream open and live `queue_update` frames. Never track chips
+client-side — every client viewing the session must show the same queue.
+`queueRevisionRef` drops a get_state snapshot requested before a newer
+`queue_update` (HTTP and SSE can reorder). Edit/Delete use
+`remove_queued_message` (act only on `removed: true`), Steer uses
+`promote_queued_message`; the chip changes when omp's next snapshot arrives.
+`handleAbort` withdraws pending messages BEFORE sending `abort` (bounded by
+`WITHDRAW_BEFORE_ABORT_MS`), like the TUI's Esc: omp runs a queued steer as
+soon as an abort lands. Withdrawn text goes to the session draft via
+`recoverDraftText`. A live-steered message (already taken by the model)
+answers `removed: false` and lands in the transcript.
 
 ### Running state SSE + reconciliation
 - The sidebar listens to `/api/agent/running/events`, backed by `subscribeRunningSessions()` in `lib/rpc-manager.ts`, so running badges update without polling.
