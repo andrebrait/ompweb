@@ -27,9 +27,11 @@ export interface ForkTarget {
 }
 
 export function resolveForkTargets(
-  roles: readonly string[],
+  messages: readonly { role: string; branchSummary?: boolean }[],
   entryIds: readonly (string | undefined)[],
 ): (ForkTarget | undefined)[] {
+  // Branch summaries render as user rows but are not entries omp can branch at.
+  const roles = messages.map((message) => (message.branchSummary ? "branchSummary" : message.role));
   const targets: (ForkTarget | undefined)[] = roles.map(() => undefined);
   let nextUserEntryId: string | undefined;
   for (let index = roles.length - 1; index >= 0; index--) {

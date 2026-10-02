@@ -320,10 +320,7 @@ const CommittedTranscript = memo(function CommittedTranscript({
   const { t } = useI18n();
   const { toolResultsMap, lastAnchorIdx, visibleRefIndexByMessage } = conversationMeta;
   // omp's `branch` command accepts a user entry only; see lib/chat-fork.ts.
-  const forkTargets = useMemo(
-    () => resolveForkTargets(messages.map((message) => message.role), entryIds),
-    [messages, entryIds],
-  );
+  const forkTargets = useMemo(() => resolveForkTargets(messages, entryIds), [messages, entryIds]);
 
   const attachVisibleRef = (idx: number, refIndex: number) => (el: HTMLDivElement | null) => {
     messageRefs.current[refIndex] = el;
