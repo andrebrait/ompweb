@@ -19,6 +19,7 @@ import { sendAgentCommand, setSessionAdvisorSpawn } from "@/lib/agent-client";
 import { setDraft } from "@/lib/draft-store";
 import { formatExitedSessionNotice, translate } from "@/lib/i18n";
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
+import { toastBtwError, useBtw } from "@/hooks/useBtw";
 import { createMessageUpdateCoalescer, type MessageUpdateCoalescer } from "@/lib/message-update-coalescer";
 import { looksLikeRunningTurn } from "@/lib/chat-transcript-plan";
 import { createReconcileGuard, type ReconcileGuard } from "@/lib/reconcile-guard";
@@ -342,6 +343,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const reconnectTimerRef = useRef<NodeJS.Timeout | undefined>(undefined);
   const eventStreamRetryMsRef = useRef<number>(EVENT_STREAM_RETRY_MIN_MS);
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
+  const btw = useBtw(sessionIdRef);
+  const { applyEvent: applyBtwFrame, refreshHistory: refreshBtwHistory, ask: sendBtw, setHistoryOpen: setBtwHistoryOpen } = btw;
   // Guards stale branch/leaf context responses: two rapid navigate clicks must
   // not let the older response overwrite the newer branch's messages.
   const contextRequestSeqRef = useRef(0);
@@ -1080,6 +1083,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         settle("connected");
         restore();
         void catchUp.request();
+        void refreshBtwHistory(sid);
       };
 
       es.onmessage = (e) => {
@@ -1146,7 +1150,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // connection must be ready before they continue.
       };
     });
-  }, [catchUp, clearLiveToolResults, consumeQueuedMessage, eventCoalescer]);
+  }, [catchUp, clearLiveToolResults, consumeQueuedMessage, eventCoalescer, refreshBtwHistory]);
 
   // ---------------------------------------------------------------------
   // Host-tool bridge: omp-web registers tools the AGENT can call. The server
@@ -2439,8 +2443,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       case "extension_ui_request":
         handleExtensionUiRequest(event as unknown as IncomingExtensionUiRequest);
         break;
+      case "btw_delta":
+      case "btw_record":
+        applyBtwFrame(event);
+        break;
     }
-  }, [addNotice, catchUp, eventCoalescer, clearLiveToolResults, clearTerminalReconcileTimer, consumeQueuedMessage, finishPromptWithoutStream, handleExtensionUiRequest, handleHostToolCall, handleHostUriRequest, loadSession, mergeSubagents, onAgentEnd, reconcileAgentState, resetSubagentActivityState, applyAuthoritativeModel, beginAuthoritativeModelSync, setLiveToolResult, surfaceQuotaOnStream, updateQueuedMessages]);
+  }, [addNotice, applyBtwFrame, catchUp, eventCoalescer, clearLiveToolResults, clearTerminalReconcileTimer, consumeQueuedMessage, finishPromptWithoutStream, handleExtensionUiRequest, handleHostToolCall, handleHostUriRequest, loadSession, mergeSubagents, onAgentEnd, reconcileAgentState, resetSubagentActivityState, applyAuthoritativeModel, beginAuthoritativeModelSync, setLiveToolResult, surfaceQuotaOnStream, updateQueuedMessages]);
   handleAgentEventRef.current = handleAgentEvent;
   syncActionsRef.current = {
     metadata: (context, version, hasLive = liveModelMeta !== null || currentModelOverride !== null) => {
@@ -3129,6 +3137,26 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [isNew, newSessionCwd, session?.cwd]);
 
+  /** Ask a side question, or a follow-up in `recordId`'s topic. It runs beside
+   * any main turn and never enters the transcript; false = refused (toasted). */
+  const askBtw = useCallback(async (question: string, recordId?: string): Promise<boolean> => {
+    try {
+      const sid = sessionIdRef.current ?? await ensureNewSession();
+      if (!sid) return false;
+      // The event route is observer-only: start the wrapper and attach before
+      // asking, so the first deltas are not missed.
+      if (eventSourceRef.current?.readyState !== EventSource.OPEN) {
+        await sendAgentCommand(sid, { type: "get_state" });
+        await ensureEventsConnected(sid);
+      }
+      await sendBtw(sid, question, recordId);
+      return true;
+    } catch (error) {
+      toastBtwError(error);
+      return false;
+    }
+  }, [ensureEventsConnected, ensureNewSession, sendBtw]);
+
   const handleBuiltinSlashCommand = useCallback(async (text: string): Promise<BuiltinSlashCommandResult> => {
     if (!text.startsWith("/")) return { handled: false };
     const match = text.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/);
@@ -3200,6 +3228,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           return complete({ handled: true, action: "openSessionStats" });
         }
 
+        case "btw": {
+          // `/btw` alone opens the history; with a question it asks one.
+          if (!args) {
+            setBtwHistoryOpen(true);
+            if (sid) void refreshBtwHistory(sid, true);
+            return { handled: true };
+          }
+          return await askBtw(args) ? { handled: true } : { handled: true, retainInput: true };
+        }
+
         case "copy": {
           if (!sid) return complete({ handled: true, error: translate("agentSession.noActiveSession") });
           const data = await sendAgentCommand<LastAssistantTextResponse>(sid, { type: "get_last_assistant_text" });
@@ -3255,7 +3293,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setIsCompacting(false);
       }
     }
-  }, [addNotice, advisorEnabled, ensureNewSession, handleSend, isCompacting, loadModels, loadSession, loadSlashCommands, promoteNewSession, onSessionStatsPanelOpen]);
+  }, [addNotice, advisorEnabled, askBtw, ensureNewSession, handleSend, isCompacting, loadModels, loadSession, loadSlashCommands, promoteNewSession, onSessionStatsPanelOpen, refreshBtwHistory, setBtwHistoryOpen]);
 
   // Queued (undelivered) messages live in the queue panel only; the chat gets
   // the real user message when pi delivers it (user message_end event). An
@@ -3685,6 +3723,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     handleBuiltinSlashCommand, togglePreCompactionHistory,
     handleToolPresetChange, handleThinkingLevelChange, loadSlashCommands, removeQueuedMessage, promoteQueuedToSteer, setActiveLeafId, setData, setMessages,
     dispatch, setAgentRunning, setForkingEntryId,
+    btw, askBtw,
     bashRunning, pendingBash,
     // True while a run this UI does not own looks active from the transcript
     // tail; drives the live-tail rendering and the bounded sync poll.

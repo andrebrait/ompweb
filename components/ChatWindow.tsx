@@ -13,6 +13,7 @@ import { ExtensionDialog } from "./ExtensionDialog";
 import { SubagentTranscriptDialog } from "./SubagentTranscriptDialog";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
 import { ComposerPanels } from "./ComposerPanels";
+import { BtwHistoryDialog, type BtwPanelProps } from "./BtwPanel";
 import OmpWebLogo from "./OmpWebLogo";
 import { CHAT_COLUMN_MAX_WIDTH, MINIMAP_WIDTH } from "@/lib/chat-layout";
 import { WorkspaceState } from "./AppShell-layout";
@@ -543,6 +544,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
     handleBuiltinSlashCommand, togglePreCompactionHistory,
     handleThinkingLevelChange, handleFastModeChange, handleCycleModel, handleCycleThinkingLevel, handleAbortRetry, loadSlashCommands,
     handleToolPresetChange,
+    btw, askBtw,
   } = useAgentSession({
     session, newSessionCwd, onAgentEnd: wrappedOnAgentEnd, onSessionCreated, onSessionForked,
     modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsPanelOpen,
@@ -682,6 +684,13 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
     }
   }, [sessionKeyForPaging]);
   const [selectedSubagent, setSelectedSubagent] = useState<SubagentInfo | null>(null);
+  const activeBtwRecord = btw.records.find((record) => record.id === btw.activeId);
+  const btwPanel: BtwPanelProps | null = activeBtwRecord ? {
+    record: activeBtwRecord,
+    onCancel: () => void btw.cancel(activeBtwRecord.id),
+    onFollowUp: (question) => askBtw(question, activeBtwRecord.id),
+    onClose: () => btw.setActiveId(null),
+  } : null;
   // Ref keeps the link handler stable so roster updates do not re-render every
   // MarkdownBody through the context.
   const subagentsRef = useRef(subagents);
@@ -1167,6 +1176,13 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
         onClose={() => setSelectedSubagent(null)}
       />
 
+      <BtwHistoryDialog
+        open={btw.historyOpen}
+        onOpenChange={btw.setHistoryOpen}
+        records={btw.records}
+        onFollowUp={(recordId) => { btw.setActiveId(recordId); btw.setHistoryOpen(false); }}
+      />
+
       {extensionCustomUi && (
         <ExtensionCustomPanel
           request={extensionCustomUi}
@@ -1207,6 +1223,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
             </div>
             {newSessionWorkspace}
             <NoticeShelf notices={notices} onDismiss={dismissNotice} align="right" />
+            <ComposerPanels todoPhases={[]} subagents={[]} onSelectSubagent={setSelectedSubagent} btw={btwPanel} />
             {/* ChatInput insets itself by CHAT_COLUMN_PADDING; cancel this column's
                 padding so the composer matches its in-session width. */}
             <div style={{ margin: `0 -${CHAT_COLUMN_PADDING}px` }}>{chatInputElement}</div>
@@ -1425,6 +1442,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
               todoPhases={todoPhases}
               subagents={subagents}
               onSelectSubagent={setSelectedSubagent}
+              btw={btwPanel}
             />
             <ExtensionWidgets widgets={belowEditorWidgets} />
           </div>

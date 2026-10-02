@@ -1180,6 +1180,14 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     if (attachedImagesRef.current.length || attachedTextFilesRef.current.length) return;
     onAudioUnlock?.();
     const streamingBehavior = mode === "steer" ? "steer" : "followUp";
+    // Side questions run beside the current turn: never queue them as prompts.
+    if (/^\/btw(\s|$)/.test(msg) && onBuiltinCommand) {
+      const sentValue = overrideText ?? value;
+      void onBuiltinCommand(msg).then((result) => {
+        if (result.handled && !result.error && !result.retainInput && (overrideText !== undefined || valueRef.current === sentValue)) clearInput();
+      });
+      return;
+    }
     if (msg.startsWith("/") && onPromptWithStreamingBehavior) {
       const commandName = msg.slice(1).split(/\s+/)[0];
       // Same gate as the direct path (useAgentSession refuses /advisor while
@@ -1218,7 +1226,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       onFollowUp(msg, attachedImagesRef.current.length ? attachedImagesRef.current : undefined);
     }
     clearInput();
-  }, [value, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, t, advisorEnabled, rejectsOversizedPrompt]);
+  }, [value, onBuiltinCommand, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, t, advisorEnabled, rejectsOversizedPrompt]);
   // A typed, text-only message during a run is a queued follow-up — and so is
   // a dictation in progress: the primary button must take the same state it
   // would have if the composer already held text. Keep Stop as the action
