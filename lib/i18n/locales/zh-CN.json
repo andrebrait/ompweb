@@ -1551,5 +1551,7 @@
   "btw.historyTitle": "旁支问题",
   "btw.historyEmpty": "还没有旁支问题。使用 /btw <问题> 提问。",
   "btw.unsupported": "/btw 需要更新版本的 omp。请更新 omp 后重启会话。",
-  "btw.failed": "旁支问题失败"
+  "btw.failed": "旁支问题失败",
+  "btw.attachmentsUnsupported": "旁支问题不能包含附件。请移除附件，或作为普通消息发送。",
+  "btw.copyFailed": "无法复制回答"
 }

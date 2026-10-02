@@ -684,13 +684,6 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
     }
   }, [sessionKeyForPaging]);
   const [selectedSubagent, setSelectedSubagent] = useState<SubagentInfo | null>(null);
-  const activeBtwRecord = btw.records.find((record) => record.id === btw.activeId);
-  const btwPanel: BtwPanelProps | null = activeBtwRecord ? {
-    record: activeBtwRecord,
-    onCancel: () => void btw.cancel(activeBtwRecord.id),
-    onFollowUp: (question) => askBtw(question, activeBtwRecord.id),
-    onClose: () => btw.setActiveId(null),
-  } : null;
   // Ref keeps the link handler stable so roster updates do not re-render every
   // MarkdownBody through the context.
   const subagentsRef = useRef(subagents);
@@ -929,6 +922,15 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
   // never let a pending approval prompt sit hidden behind the minimized pill.
   useEffect(() => { if (extensionDialog) setComposerMinimized(false); }, [extensionDialog]);
   const messageCwd = session?.cwd ?? newSessionCwd ?? undefined;
+  const activeBtwRecord = btw.records.find((record) => record.id === btw.activeId);
+  const btwPanel: BtwPanelProps | null = activeBtwRecord ? {
+    record: activeBtwRecord,
+    onCancel: () => void btw.cancel(activeBtwRecord.id),
+    onFollowUp: (question) => askBtw(question, activeBtwRecord.id),
+    onClose: () => btw.setActiveId(null),
+    cwd: messageCwd,
+    onOpenFile,
+  } : null;
 
   const displayModelKey = displayModelValue ? `${displayModelValue.provider}:${displayModelValue.modelId}` : "";
   const availableThinkingLevels = useMemo(
@@ -1181,6 +1183,8 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
         onOpenChange={btw.setHistoryOpen}
         records={btw.records}
         onFollowUp={(recordId) => { btw.setActiveId(recordId); btw.setHistoryOpen(false); }}
+        cwd={messageCwd}
+        onOpenFile={onOpenFile}
       />
 
       {extensionCustomUi && (

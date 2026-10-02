@@ -1588,5 +1588,7 @@
   "btw.historyTitle": "Side questions",
   "btw.historyEmpty": "No side questions yet. Ask one with /btw <question>.",
   "btw.unsupported": "/btw requires a newer omp. Update omp, then restart the session.",
-  "btw.failed": "Side question failed"
+  "btw.failed": "Side question failed",
+  "btw.attachmentsUnsupported": "Side questions can't include attachments. Remove them, or send the message as a normal prompt.",
+  "btw.copyFailed": "Could not copy the answer"
 }

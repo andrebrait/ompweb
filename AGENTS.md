@@ -242,26 +242,40 @@ handled or safely ignored.
   non-collapsible default (`collapsible` prop) for SSR tests.
 
 ### Side questions (`/btw`, `lib/btw.ts`, `hooks/useBtw.ts`, `components/BtwPanel.tsx`)
-- `btw` / `btw_cancel` / `get_btw_history` are plain passthrough RPC commands;
+- `btw` / `btw_cancel` / `get_btw_history` are passthrough RPC commands;
   answers stream as `btw_delta` (text appended to the latest turn) and
   `btw_record` (full snapshot per lifecycle change) frames. omp persists the
-  history per session, so the TUI and omp-web share topics.
+  history per session (and re-reads it from disk when idle), so the TUI and
+  omp-web share topics. omp answers `btw` before that turn's frames; the
+  running `btw_record` comes first.
 - `/btw <question>` and `/btw` are client builtins (`handleBuiltinSlashCommand`
-  case `"btw"`; `ChatInput.sendQueued` routes them there while a run streams):
-  never sent as a prompt, never queued. Asking starts the wrapper (`get_state`)
-  and attaches SSE first when it is not open, so no early delta is lost.
+  case `"btw"`). `ChatInput.sendSideQuestion` routes them there from both the
+  idle and the streaming submit path, *before* the attachment gate: never sent
+  as a prompt, never queued, and refused with a toast (draft and attachments
+  kept) while attachments are attached. Asking starts the wrapper
+  (`get_state`) and attaches SSE first when it is not open, so no early delta
+  is lost; a second ask while one is starting is ignored.
 - The `btw` response, history snapshots and frames race (HTTP vs SSE): merge
   only through `lib/btw.ts`, which never lets a stale snapshot drop streamed
-  text, a turn, or a finished status. Frames are applied once per animation
-  frame (token-rate deltas must not re-render the chat per token).
-- History is refetched on every SSE open (observer-only, so it never spawns
-  omp); `/btw` alone refetches explicitly and may start the process. An omp
-  without the commands answers `Unknown command: btw` → localized
-  "requires a newer omp" toast (`toastBtwError`); background refreshes stay silent.
+  text, a turn, or a finished status. A record that was running before a
+  history read and is missing from it becomes `interrupted` (omp lost it).
+- `btw_*` frames skip the message-update coalescer (each would flush the main
+  stream's pending update) and are batched in `useBtw` with the coalescer's
+  `scheduleAtDisplayRate` (rAF, 50ms timer in hidden tabs). Pending frames are
+  flushed before a history snapshot is merged, never after it.
+- `get_btw_history` and `btw_cancel` never spawn or replace omp: the agent
+  route answers them like `predict_word` (`NO_SPAWN_REPLIES`: empty history,
+  `cancelled:false`) when no child is alive. History is re-read on every SSE
+  open, from the visibility/online reconcile while a record runs, and after a
+  cancel that found nothing running. `/btw` alone sends `get_state` first, so
+  it may start omp. An omp without the commands answers `Unknown command:
+  btw` → localized "requires a newer omp" toast (`toastBtwError`); background
+  reads stay silent and pause for `UNSUPPORTED_RETRY_MS`. omp's "cancelled
+  before it started" failure is the user's own Cancel: no toast.
 - The panel sits first in `ComposerPanels` (also rendered in the empty
   new-chat layout) and is keyed by record id: each new topic starts expanded,
-  unlike todo/subagents. A `btw_record` that is running opens it, so a question
-  asked from another tab or on reconnect shows up; Close only hides it.
+  unlike todo/subagents. A running record this tab did not know yet opens it
+  (another tab, reconnect); a known topic never reopens a closed panel.
 
 ### Subagent integration (`lib/subagent-types.ts`, `lib/subagent-history.ts`)
 - **Live detail**: `subagent_progress` frames carry the full `AgentProgress`

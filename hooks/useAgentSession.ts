@@ -344,7 +344,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const eventStreamRetryMsRef = useRef<number>(EVENT_STREAM_RETRY_MIN_MS);
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
   const btw = useBtw(sessionIdRef);
-  const { applyEvent: applyBtwFrame, refreshHistory: refreshBtwHistory, ask: sendBtw, setHistoryOpen: setBtwHistoryOpen } = btw;
+  const { applyEvent: applyBtwFrame, refreshHistory: refreshBtwHistory, reconcile: reconcileBtw, openHistory: openBtwHistory, ask: sendBtw } = btw;
+  // A btw ask can wait seconds on spawn + SSE attach: a second Enter must not send it twice.
+  const btwAskPendingRef = useRef(false);
   // Guards stale branch/leaf context responses: two rapid navigate clicks must
   // not let the older response overwrite the newer branch's messages.
   const contextRequestSeqRef = useRef(0);
@@ -1112,6 +1114,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             restore();
             void catchUp.request();
           }
+          // Side-question frames never touch the transcript and useBtw batches
+          // them itself; through the coalescer each would flush the pending
+          // message_update and defeat display-rate coalescing of the main run.
+          if (event.type === "btw_delta" || event.type === "btw_record") {
+            applyBtwFrame(event);
+            return;
+          }
           // message_update frames arrive at network rate (often 30-100+/s);
           // the coalescer buffers the latest one and dispatches at display
           // rate, flushing synchronously before any other event type.
@@ -1150,7 +1159,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // connection must be ready before they continue.
       };
     });
-  }, [catchUp, clearLiveToolResults, consumeQueuedMessage, eventCoalescer, refreshBtwHistory]);
+  }, [applyBtwFrame, catchUp, clearLiveToolResults, consumeQueuedMessage, eventCoalescer, refreshBtwHistory]);
 
   // ---------------------------------------------------------------------
   // Host-tool bridge: omp-web registers tools the AGENT can call. The server
@@ -1690,6 +1699,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (sid) {
         void catchUp.request();
         void reconcileAgentState(sid);
+        // A running side question has the same half-open-SSE exposure.
+        reconcileBtw(sid);
       }
     };
     const onVisible = () => {
@@ -1703,7 +1714,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("online", reconcile);
     };
-  }, [agentRunning, catchUp, reconcileAgentState]);
+  }, [agentRunning, catchUp, reconcileAgentState, reconcileBtw]);
 
   // A session can be mid-run without omp-web owning the process (someone is
   // driving it from a terminal, or from another omp-web window). Nothing
@@ -2443,12 +2454,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       case "extension_ui_request":
         handleExtensionUiRequest(event as unknown as IncomingExtensionUiRequest);
         break;
-      case "btw_delta":
-      case "btw_record":
-        applyBtwFrame(event);
-        break;
     }
-  }, [addNotice, applyBtwFrame, catchUp, eventCoalescer, clearLiveToolResults, clearTerminalReconcileTimer, consumeQueuedMessage, finishPromptWithoutStream, handleExtensionUiRequest, handleHostToolCall, handleHostUriRequest, loadSession, mergeSubagents, onAgentEnd, reconcileAgentState, resetSubagentActivityState, applyAuthoritativeModel, beginAuthoritativeModelSync, setLiveToolResult, surfaceQuotaOnStream, updateQueuedMessages]);
+  }, [addNotice, catchUp, eventCoalescer, clearLiveToolResults, clearTerminalReconcileTimer, consumeQueuedMessage, finishPromptWithoutStream, handleExtensionUiRequest, handleHostToolCall, handleHostUriRequest, loadSession, mergeSubagents, onAgentEnd, reconcileAgentState, resetSubagentActivityState, applyAuthoritativeModel, beginAuthoritativeModelSync, setLiveToolResult, surfaceQuotaOnStream, updateQueuedMessages]);
   handleAgentEventRef.current = handleAgentEvent;
   syncActionsRef.current = {
     metadata: (context, version, hasLive = liveModelMeta !== null || currentModelOverride !== null) => {
@@ -3140,9 +3147,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   /** Ask a side question, or a follow-up in `recordId`'s topic. It runs beside
    * any main turn and never enters the transcript; false = refused (toasted). */
   const askBtw = useCallback(async (question: string, recordId?: string): Promise<boolean> => {
+    if (btwAskPendingRef.current) return false;
+    btwAskPendingRef.current = true;
     try {
       const sid = sessionIdRef.current ?? await ensureNewSession();
-      if (!sid) return false;
+      if (!sid) {
+        toast.error(translate("agentSession.noActiveSession"));
+        return false;
+      }
       // The event route is observer-only: start the wrapper and attach before
       // asking, so the first deltas are not missed.
       if (eventSourceRef.current?.readyState !== EventSource.OPEN) {
@@ -3154,6 +3166,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } catch (error) {
       toastBtwError(error);
       return false;
+    } finally {
+      btwAskPendingRef.current = false;
     }
   }, [ensureEventsConnected, ensureNewSession, sendBtw]);
 
@@ -3164,7 +3178,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
     const [, commandName, rawArgs = ""] = match;
     const args = rawArgs.trim();
-    const sid = sessionIdRef.current ?? await ensureNewSession();
     const complete = (result: BuiltinSlashCommandResult): BuiltinSlashCommandResult => {
       if (!result.handled) return result;
       if (result.error) {
@@ -3176,6 +3189,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     };
 
     try {
+      const sid = sessionIdRef.current ?? await ensureNewSession();
       switch (commandName) {
         case "compact": {
           if (!sid || isCompactingRef.current || isCompacting) return complete({ handled: true, error: translate("agentSession.noSessionToCompact") });
@@ -3231,8 +3245,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         case "btw": {
           // `/btw` alone opens the history; with a question it asks one.
           if (!args) {
-            setBtwHistoryOpen(true);
-            if (sid) void refreshBtwHistory(sid, true);
+            if (!sid) return complete({ handled: true, error: translate("agentSession.noActiveSession") });
+            void openBtwHistory(sid);
             return { handled: true };
           }
           return await askBtw(args) ? { handled: true } : { handled: true, retainInput: true };
@@ -3293,7 +3307,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setIsCompacting(false);
       }
     }
-  }, [addNotice, advisorEnabled, askBtw, ensureNewSession, handleSend, isCompacting, loadModels, loadSession, loadSlashCommands, promoteNewSession, onSessionStatsPanelOpen, refreshBtwHistory, setBtwHistoryOpen]);
+  }, [addNotice, advisorEnabled, askBtw, ensureNewSession, handleSend, isCompacting, loadModels, loadSession, loadSlashCommands, openBtwHistory, promoteNewSession, onSessionStatsPanelOpen]);
 
   // Queued (undelivered) messages live in the queue panel only; the chat gets
   // the real user message when pi delivers it (user message_end event). An

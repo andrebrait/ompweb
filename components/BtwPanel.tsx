@@ -1,11 +1,11 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { Ban, Check, ChevronDown, CircleAlert, Copy, Loader2, MessageCircleQuestion, Reply, Square, X } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { btwTurns, latestBtwTurn, type BtwRecord, type BtwStatus, type BtwTurn } from "@/lib/btw";
 import { copyText } from "@/lib/clipboard";
-import { MarkdownBody } from "./MarkdownBody";
+import { SafeMarkdownBody } from "./MessageView";
 import { toast } from "./ui/toast";
 import { Dialog, DialogClose, DialogContent, DialogTitle } from "./ui/primitives";
 
@@ -40,10 +40,17 @@ function BtwStatusLabel({ status }: { status: BtwStatus }) {
   );
 }
 
+/** Markdown links to workspace files open in the file viewer, as in chat. */
+interface FileLinkProps {
+  cwd?: string;
+  onOpenFile?: (filePath: string) => void;
+}
+
 /** One question/answer exchange. `live` marks the turn whose answer streams:
  * it is a polite live region, busy until the answer settles so screen readers
- * read it once instead of per token. */
-function BtwTurnView({ turn, live = false }: { turn: BtwTurn; live?: boolean }) {
+ * read it once instead of per token, then hear how it ended. Memoized: only
+ * the streaming turn changes per delta, so earlier answers are not re-parsed. */
+const BtwTurnView = memo(function BtwTurnView({ turn, live = false, cwd, onOpenFile }: FileLinkProps & { turn: BtwTurn; live?: boolean }) {
   const { t } = useI18n();
   const running = turn.status === "running";
   return (
@@ -51,26 +58,32 @@ function BtwTurnView({ turn, live = false }: { turn: BtwTurn; live?: boolean }) 
       <p className="m-0 text-xs font-medium text-text-muted" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{turn.question}</p>
       <div aria-live={live ? "polite" : undefined} aria-busy={live && running ? true : undefined} className="min-w-0 text-sm text-text">
         {turn.answer
-          ? <MarkdownBody isStreaming={running}>{turn.answer}</MarkdownBody>
+          ? <SafeMarkdownBody isStreaming={running} cwd={cwd} onOpenFile={onOpenFile}>{turn.answer}</SafeMarkdownBody>
           : running ? <span className="text-xs text-text-dim">{t("btw.waiting")}</span> : null}
         {turn.error && <p className="m-0 text-xs" style={{ color: "var(--status-error)", overflowWrap: "anywhere" }}>{turn.error}</p>}
+        {live && !running && turn.status !== "complete" && <span className="sr-only">{t(STATUS_KEYS[turn.status])}</span>}
       </div>
     </div>
   );
-}
+});
 
 function CopyAnswerButton({ answer }: { answer: string }) {
   const { t } = useI18n();
   if (!answer) return null;
   return (
-    <button type="button" className="ui-focus-ring" style={actionStyle} onClick={() => void copyText(answer).then(() => toast.success(t("btw.copied")))}>
+    <button
+      type="button"
+      className="ui-focus-ring"
+      style={actionStyle}
+      onClick={() => void copyText(answer).then(() => toast.success(t("btw.copied"))).catch(() => toast.error(t("btw.copyFailed")))}
+    >
       <Copy size={12} strokeWidth={2} aria-hidden />
       {t("btw.copy")}
     </button>
   );
 }
 
-export interface BtwPanelProps {
+export interface BtwPanelProps extends FileLinkProps {
   record: BtwRecord;
   onCancel: () => void;
   /** Resolves false when omp refused the follow-up (already toasted). */
@@ -81,7 +94,7 @@ export interface BtwPanelProps {
 /** Composer-attached side-question panel: the active topic's turns with the
  * latest answer streaming, plus cancel / copy / follow-up actions. Callers key
  * it by record id so each new topic starts expanded with an empty follow-up. */
-export function BtwPanel({ record, onCancel, onFollowUp, onClose }: BtwPanelProps) {
+export function BtwPanel({ record, onCancel, onFollowUp, onClose, cwd, onOpenFile }: BtwPanelProps) {
   const { t } = useI18n();
   const [collapsed, setCollapsed] = useState(false);
   const [draft, setDraft] = useState("");
@@ -96,6 +109,17 @@ export function BtwPanel({ record, onCancel, onFollowUp, onClose }: BtwPanelProp
     const el = turnsRef.current;
     if (el && followTailRef.current) el.scrollTop = el.scrollHeight;
   }, [latest.answer, turns.length, collapsed]);
+
+  // Cancel and the follow-up form swap places when a turn starts or settles.
+  // Keyboard focus in that row would drop to <body> with the unmounted
+  // control; hand it to the one that replaced it instead.
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const focusInActionsRef = useRef(false);
+  useEffect(() => {
+    if (!focusInActionsRef.current || document.activeElement !== document.body) return;
+    (running ? cancelRef.current : inputRef.current)?.focus();
+  }, [running]);
 
   const submitFollowUp = async (event: FormEvent) => {
     event.preventDefault();
@@ -161,20 +185,29 @@ export function BtwPanel({ record, onCancel, onFollowUp, onClose }: BtwPanelProp
             style={{ maxHeight: "min(36vh, 320px)", overflowY: "auto" }}
           >
             {turns.map((turn, index) => (
-              <BtwTurnView key={`${turn.createdAt}:${index}`} turn={turn} live={index === turns.length - 1} />
+              <BtwTurnView key={`${turn.createdAt}:${index}`} turn={turn} live={index === turns.length - 1} cwd={cwd} onOpenFile={onOpenFile} />
             ))}
           </div>
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div
+            className="flex flex-wrap items-center gap-1.5"
+            onFocus={() => { focusInActionsRef.current = true; }}
+            // Focus that left for another element is the user's choice; a null
+            // target (unmounted or disabled control) is not.
+            onBlur={(event) => { if (event.relatedTarget) focusInActionsRef.current = event.currentTarget.contains(event.relatedTarget); }}
+          >
             {running ? (
-              <button type="button" className="ui-focus-ring" style={actionStyle} onClick={onCancel}>
+              <button ref={cancelRef} type="button" className="ui-focus-ring" style={actionStyle} onClick={onCancel}>
                 <Square size={11} strokeWidth={2} aria-hidden />
                 {t("btw.cancel")}
               </button>
             ) : (
               <form onSubmit={submitFollowUp} className="flex min-w-0 flex-1 items-center gap-1.5" style={{ minWidth: "min(100%, 220px)" }}>
                 <input
+                  ref={inputRef}
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
+                  // The Enter that commits an IME composition must not submit.
+                  onKeyDown={(event) => { if (event.key === "Enter" && event.nativeEvent.isComposing) event.preventDefault(); }}
                   aria-label={t("btw.followUpLabel")}
                   placeholder={t("btw.followUpPlaceholder")}
                   disabled={sending}
@@ -203,7 +236,7 @@ export function BtwPanel({ record, onCancel, onFollowUp, onClose }: BtwPanelProp
 
 /** `/btw` with no question: the session's side questions, newest first, each
  * expandable to all its turns with Copy and Follow-up. */
-export function BtwHistoryDialog({ open, onOpenChange, records, onFollowUp }: {
+export function BtwHistoryDialog({ open, onOpenChange, records, onFollowUp, cwd, onOpenFile }: FileLinkProps & {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   records: BtwRecord[];
@@ -262,7 +295,7 @@ export function BtwHistoryDialog({ open, onOpenChange, records, onFollowUp }: {
                   {expanded && (
                     <div className="grid gap-2.5 border-t border-border px-3 py-2.5">
                       {btwTurns(record).map((turn, index) => (
-                        <BtwTurnView key={`${turn.createdAt}:${index}`} turn={turn} />
+                        <BtwTurnView key={`${turn.createdAt}:${index}`} turn={turn} cwd={cwd} onOpenFile={onOpenFile} />
                       ))}
                       <div className="flex flex-wrap items-center gap-1.5">
                         {latest.status !== "running" && (

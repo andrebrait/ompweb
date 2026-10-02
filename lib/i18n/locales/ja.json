@@ -1551,5 +1551,7 @@
   "btw.historyTitle": "サイド質問",
   "btw.historyEmpty": "サイド質問はまだありません。/btw <質問> で質問できます。",
   "btw.unsupported": "/btw には新しい omp が必要です。omp を更新してからセッションを再起動してください。",
-  "btw.failed": "サイド質問に失敗しました"
+  "btw.failed": "サイド質問に失敗しました",
+  "btw.attachmentsUnsupported": "サイド質問には添付ファイルを含められません。添付を外すか、通常のメッセージとして送信してください。",
+  "btw.copyFailed": "回答をコピーできませんでした"
 }

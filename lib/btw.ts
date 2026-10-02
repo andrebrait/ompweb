@@ -22,6 +22,8 @@ export interface BtwRecord extends BtwTurn {
   followUps?: BtwTurn[];
 }
 
+const BTW_STATUSES: Record<BtwStatus, true> = { running: true, complete: true, cancelled: true, error: true, interrupted: true };
+
 export function btwTurns(record: BtwRecord): BtwTurn[] {
   return [record, ...(record.followUps ?? [])];
 }
@@ -30,13 +32,21 @@ export function latestBtwTurn(record: BtwRecord): BtwTurn {
   return record.followUps?.at(-1) ?? record;
 }
 
+function isBtwTurn(value: unknown): value is BtwTurn {
+  return isRecord(value)
+    && typeof value.question === "string"
+    && typeof value.answer === "string"
+    && typeof value.status === "string" && Object.hasOwn(BTW_STATUSES, value.status)
+    && Number.isFinite(value.createdAt)
+    && Number.isFinite(value.updatedAt)
+    && (value.error === undefined || typeof value.error === "string");
+}
+
 export function isBtwRecord(value: unknown): value is BtwRecord {
   return isRecord(value)
     && typeof value.id === "string"
-    && typeof value.question === "string"
-    && typeof value.answer === "string"
-    && typeof value.status === "string"
-    && (value.followUps === undefined || Array.isArray(value.followUps));
+    && (value.followUps === undefined || (Array.isArray(value.followUps) && value.followUps.every(isBtwTurn)))
+    && isBtwTurn(value);
 }
 
 /** `incoming` is older than `current`: it misses a turn, reports a finished
@@ -52,6 +62,18 @@ function isStaleSnapshot(current: BtwRecord, incoming: BtwRecord): boolean {
   return mine.answer.length > theirs.answer.length && mine.answer.startsWith(theirs.answer);
 }
 
+function withLatestTurn(record: BtwRecord, patch: Partial<BtwTurn>): BtwRecord {
+  const followUps = record.followUps;
+  return followUps?.length
+    ? { ...record, followUps: [...followUps.slice(0, -1), { ...followUps[followUps.length - 1], ...patch }] }
+    : { ...record, ...patch };
+}
+
+/** omp's history order: newest topic first. */
+function newestFirst(a: BtwRecord, b: BtwRecord): number {
+  return b.createdAt - a.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+}
+
 /** Insert (newest first) or replace a record unless the snapshot is stale. */
 export function upsertBtwRecord(records: BtwRecord[], incoming: BtwRecord): BtwRecord[] {
   const index = records.findIndex((record) => record.id === incoming.id);
@@ -62,40 +84,40 @@ export function upsertBtwRecord(records: BtwRecord[], incoming: BtwRecord): BtwR
   return next;
 }
 
-/** Append streamed text to the latest turn of a running record. */
-export function appendBtwDelta(records: BtwRecord[], recordId: string, delta: string): BtwRecord[] {
-  const index = records.findIndex((record) => record.id === recordId);
-  if (index === -1 || !delta) return records;
-  const record = records[index];
-  const latest = latestBtwTurn(record);
-  if (latest.status !== "running") return records;
-  const answer = latest.answer + delta;
-  const next = records.slice();
-  next[index] = record.followUps?.length
-    ? { ...record, followUps: [...record.followUps.slice(0, -1), { ...latest, answer }] }
-    : { ...record, answer };
-  return next;
-}
-
 /** Apply one SSE frame; unrelated or malformed frames leave `records` as is. */
 export function applyBtwEvent(records: BtwRecord[], event: { type: string; [key: string]: unknown }): BtwRecord[] {
   if (event.type === "btw_record") {
     return isBtwRecord(event.record) ? upsertBtwRecord(records, event.record) : records;
   }
-  if (event.type === "btw_delta" && typeof event.recordId === "string" && typeof event.delta === "string") {
-    return appendBtwDelta(records, event.recordId, event.delta);
+  if (event.type !== "btw_delta" || typeof event.recordId !== "string" || typeof event.delta !== "string" || !event.delta) {
+    return records;
   }
-  return records;
+  // Streamed text extends the latest turn of a running record only.
+  const index = records.findIndex((record) => record.id === event.recordId);
+  if (index === -1) return records;
+  const latest = latestBtwTurn(records[index]);
+  if (latest.status !== "running") return records;
+  const next = records.slice();
+  next[index] = withLatestTurn(records[index], { answer: latest.answer + event.delta });
+  return next;
 }
 
 /** Replace local state with a history snapshot, keeping records the snapshot
- * predates (started after it was taken, or with newer streamed text). */
-export function mergeBtwHistory(local: BtwRecord[], snapshot: BtwRecord[]): BtwRecord[] {
+ * predates (started after it was taken, or with newer streamed text). A record
+ * that was running before the request (`knownBefore`) but is missing from the
+ * snapshot cannot still be running: omp lost it (failed checkpoint, replaced
+ * child), so it becomes `interrupted` instead of spinning forever. */
+export function mergeBtwHistory(local: BtwRecord[], snapshot: BtwRecord[], knownBefore: ReadonlySet<string>): BtwRecord[] {
   const localById = new Map(local.map((record) => [record.id, record]));
   const snapshotIds = new Set(snapshot.map((record) => record.id));
   const merged = snapshot.map((record) => {
     const mine = localById.get(record.id);
     return mine && isStaleSnapshot(mine, record) ? mine : record;
   });
-  return [...local.filter((record) => !snapshotIds.has(record.id)), ...merged];
+  for (const record of local) {
+    if (snapshotIds.has(record.id)) continue;
+    const lost = knownBefore.has(record.id) && latestBtwTurn(record).status === "running";
+    merged.push(lost ? withLatestTurn(record, { status: "interrupted" }) : record);
+  }
+  return merged.sort(newestFirst);
 }
