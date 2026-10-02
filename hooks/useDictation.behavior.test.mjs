@@ -140,8 +140,12 @@ beforeEach(() => {
   // response, the last one repeating.
   world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "done", text: "transcribed words" }) }];
   world.polls = 0;
+  world.postedFiles = [];
   override(globalThis, "fetch", async (url, init) => {
-    if (init?.method === "POST") return { ok: true, status: 202, json: async () => ({ jobId: "job-1" }) };
+    if (init?.method === "POST") {
+      world.postedFiles.push(init.body.get("file"));
+      return { ok: true, status: 202, json: async () => ({ jobId: "job-1" }) };
+    }
     assert.equal(url, "/api/stt/job-1");
     return world.pollResponses[Math.min(world.polls++, world.pollResponses.length - 1)];
   });
@@ -283,10 +287,7 @@ test("transcription keeps polling through pending and proxy error pages until th
   assert.equal(view.result.current.isTranscribing, false);
 });
 
-test("a failed transcription job surfaces its error and keeps the audio for retry", async () => {
-  const { view, transcripts, errors } = mountDictation();
-  world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "error", error: "Transcription timed out" }) }];
-
+async function recordAndTranscribe(view) {
   await act(async () => {
     view.result.current.toggle();
   });
@@ -299,10 +300,39 @@ test("a failed transcription job surfaces its error and keeps the audio for retr
     view.result.current.confirmTranscribe();
   });
   await settle(700);
+}
+
+test("a failed transcription job surfaces its error and retry resends the same audio", async () => {
+  const { view, transcripts, errors } = mountDictation();
+  world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "error", error: "Transcription timed out" }) }];
+
+  await recordAndTranscribe(view);
 
   assert.deepEqual(transcripts, []);
   assert.deepEqual(errors, ["Transcription timed out"]);
   assert.equal(view.result.current.transcribeError, "Transcription timed out");
+
+  world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "done", text: "second try" }) }];
+  await act(async () => {
+    view.result.current.retry();
+  });
+  await settle(700);
+
+  assert.equal(world.postedFiles.length, 2);
+  assert.equal(await world.postedFiles[1].text(), await world.postedFiles[0].text());
+  assert.deepEqual(transcripts, ["second try"]);
+});
+
+test("a permanent 4xx poll fails at once instead of polling until the deadline", async () => {
+  const { view, transcripts, errors } = mountDictation();
+  world.pollResponses = [{ ok: false, status: 401, json: async () => ({ error: "Password required" }) }];
+
+  await recordAndTranscribe(view);
+
+  assert.deepEqual(transcripts, []);
+  assert.deepEqual(errors, ["Password required"]);
+  assert.equal(world.polls, 1);
+  assert.equal(view.result.current.isTranscribing, false);
 });
 
 test("cancelling during capture clears state and releases the microphone", async () => {

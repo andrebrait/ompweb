@@ -8,9 +8,10 @@ export interface UseDictationOptions {
 }
 
 export const MAX_RECORDING_MS = 300_000;
-// Server waits up to 10 min on the STT endpoint (lib/stt-jobs.ts); poll a bit longer.
-const STT_TIMEOUT_MS = 11 * 60_000;
+// Server gives up on the STT endpoint after ~5 min (lib/stt-jobs.ts); poll a bit longer.
+const STT_TIMEOUT_MS = 6 * 60_000;
 const STT_POLL_INTERVAL_MS = 500;
+const STT_POLL_REQUEST_TIMEOUT_MS = 10_000;
 
 /**
  * Live capture state polled by RecordingDeck (timer + waveform) without
@@ -147,7 +148,7 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
       body.append("file", blob, ext);
       const startRes = await fetch("/api/stt", { method: "POST", body, signal });
       const started = await startRes.json().catch(() => null);
-      if (cancelledRef.current) return;
+      if (cancelledRef.current || signal.aborted) return;
       if (!startRes.ok || typeof started?.jobId !== "string") {
         fail(normalizeErrorMessage(started?.error, `Transcription failed (HTTP ${startRes.status})`));
         return;
@@ -163,16 +164,21 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
         window.setTimeout(tick.resolve, STT_POLL_INTERVAL_MS);
         await tick.promise;
         if (signal.aborted || cancelledRef.current) return;
-        const res = await fetch(jobUrl, { signal, cache: "no-store" }).catch((err: unknown) => {
+        // Per-poll timeout: a stalled GET must not freeze the loop past its deadline.
+        const res = await fetch(jobUrl, {
+          signal: AbortSignal.any([signal, AbortSignal.timeout(STT_POLL_REQUEST_TIMEOUT_MS)]),
+          cache: "no-store",
+        }).catch((err: unknown) => {
           if (signal.aborted) throw err;
           return null;
         });
-        if (cancelledRef.current) return;
+        if (cancelledRef.current || signal.aborted) return;
         if (!res) continue;
         const job = await res.json().catch(() => null);
-        if (cancelledRef.current) return;
-        if (res.status === 404) {
-          fail(normalizeErrorMessage(job?.error, "Transcription job not found"));
+        if (cancelledRef.current || signal.aborted) return;
+        // 4xx (unknown job, expired login) is final; 5xx/408/429 and proxy pages are transient.
+        if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
+          fail(normalizeErrorMessage(job?.error, `Transcription failed (HTTP ${res.status})`));
           return;
         }
         if (!res.ok || job?.status === "pending") continue;

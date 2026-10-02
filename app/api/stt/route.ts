@@ -45,7 +45,14 @@ export async function POST(request: Request) {
       formData.append("model", model);
     }
 
-    return NextResponse.json({ jobId: startSttJob(endpoint, apiKey, formData) }, { status: 202 });
+    const jobId = startSttJob(endpoint, apiKey, formData);
+    if (!jobId) {
+      return NextResponse.json(
+        { error: "Too many transcriptions in progress", code: "stt_busy" },
+        { status: 429 }
+      );
+    }
+    return NextResponse.json({ jobId }, { status: 202 });
   } catch (error) {
     if (error instanceof RequestBodyTooLargeError) {
       return NextResponse.json(

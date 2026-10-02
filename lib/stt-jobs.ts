@@ -11,10 +11,16 @@ export type SttJob =
   | { status: "done"; text: string }
   | { status: "error"; error: string };
 
-/** Cap on how long the server waits on the STT endpoint. */
-export const STT_UPSTREAM_TIMEOUT_MS = 10 * 60_000;
+/**
+ * Cap on how long the server waits on the STT endpoint. Kept under undici's
+ * default 300s headersTimeout so a slow upstream ends as "timed out", not
+ * an opaque "fetch failed".
+ */
+const STT_UPSTREAM_TIMEOUT_MS = 290_000;
 /** Finished jobs stay readable this long so a poll lost in transit can be repeated. */
 const FINISHED_JOB_TTL_MS = 10 * 60_000;
+/** Each pending job buffers up to 25MB of audio; refuse new ones past this. */
+const MAX_PENDING_JOBS = 4;
 
 declare global {
   // globalThis survives Next.js hot reload; a module-level Map does not.
@@ -70,8 +76,11 @@ async function transcribe(endpoint: string, apiKey: string | undefined, formData
   }
 }
 
-/** Starts the upstream request in the background and returns the job id. */
-export function startSttJob(endpoint: string, apiKey: string | undefined, formData: FormData): string {
+/** Starts the upstream request in the background; null when MAX_PENDING_JOBS are already running. */
+export function startSttJob(endpoint: string, apiKey: string | undefined, formData: FormData): string | null {
+  let pending = 0;
+  for (const job of store.values()) if (job.status === "pending") pending++;
+  if (pending >= MAX_PENDING_JOBS) return null;
   const id = randomUUID();
   store.set(id, { status: "pending" });
   void transcribe(endpoint, apiKey, formData).then((job) => {
