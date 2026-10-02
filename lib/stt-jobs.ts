@@ -14,22 +14,27 @@ export type SttJobStatus = "pending" | "done" | "error" | "gone";
 interface SttJob {
   id: string;
   scope: string | null;
-  audio: File;
+  /** Null once the job is closed: the tombstone holds no audio. */
+  audio: File | null;
   status: SttJobStatus;
   text?: string;
   error?: string;
-  /** Bumped per attempt so a superseded upstream answer cannot land. */
-  run: number;
+  /** Aborts the running upstream attempt when the job is closed. */
+  attempt?: AbortController;
   /** Claim token of the browser that took the transcript; lets it repeat a lost claim. */
   claimedBy?: string;
   expiry?: NodeJS.Timeout;
 }
 
+/** What pollers see. The transcript is never here: only a claim returns it. */
 export interface SttJobView {
   id: string;
   status: SttJobStatus;
-  text?: string;
   error?: string;
+}
+
+export interface SttClaim extends SttJobView {
+  text?: string;
 }
 
 /**
@@ -56,8 +61,7 @@ declare global {
 const store = (globalThis.__ompSttJobs ??= new Map<string, SttJob>());
 
 function view(job: SttJob): SttJobView {
-  // A claimed tombstone keeps its text only for repeat claims, never for pollers.
-  return { id: job.id, status: job.status, text: job.status === "done" ? job.text : undefined, error: job.error };
+  return { id: job.id, status: job.status, error: job.error };
 }
 
 function expireIn(job: SttJob, ms: number): void {
@@ -79,7 +83,7 @@ function extractUpstreamErrorMessage(data: unknown, rawText: string, status: num
   return `Transcription failed (upstream ${status})`;
 }
 
-async function transcribe({ endpoint, apiKey, model }: SttConfig, audio: File): Promise<Pick<SttJob, "status" | "text" | "error">> {
+async function transcribe({ endpoint, apiKey, model }: SttConfig, audio: File, signal: AbortSignal): Promise<Pick<SttJob, "status" | "text" | "error">> {
   const formData = new FormData();
   formData.append("file", audio, audio.name);
   if (model) formData.append("model", model);
@@ -88,7 +92,7 @@ async function transcribe({ endpoint, apiKey, model }: SttConfig, audio: File): 
       method: "POST",
       headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
       body: formData,
-      signal: AbortSignal.timeout(STT_UPSTREAM_TIMEOUT_MS),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(STT_UPSTREAM_TIMEOUT_MS)]),
     });
     const rawText = await res.text();
     let data: unknown = null;
@@ -101,9 +105,11 @@ async function transcribe({ endpoint, apiKey, model }: SttConfig, audio: File): 
       return { status: "error", error: extractUpstreamErrorMessage(data, rawText, res.status) };
     }
     // Plain-text upstreams (response_format=text) return the transcript as the body.
-    if (data === null) return { status: "done", text: rawText };
-    const text = typeof data === "object" && "text" in data && typeof data.text === "string" ? data.text : "";
-    return { status: "done", text };
+    const text = data === null
+      ? rawText
+      : typeof data === "object" && "text" in data && typeof data.text === "string" ? data.text : "";
+    // Empty text stays an error so the audio is kept for playback and retry.
+    return text.trim() ? { status: "done", text } : { status: "error", error: "No speech detected" };
   } catch (error) {
     const message = error instanceof DOMException && error.name === "TimeoutError"
       ? "Transcription timed out"
@@ -112,14 +118,16 @@ async function transcribe({ endpoint, apiKey, model }: SttConfig, audio: File): 
   }
 }
 
-function launch(config: SttConfig, job: SttJob): void {
-  const run = ++job.run;
+function launch(config: SttConfig, job: SttJob, audio: File): void {
+  const attempt = new AbortController();
+  job.attempt = attempt;
   job.status = "pending";
   job.error = undefined;
   clearTimeout(job.expiry);
-  void transcribe(config, job.audio).then((result) => {
-    // Discarded or retried meanwhile: this answer is stale.
-    if (job.run !== run || job.status !== "pending" || store.get(job.id) !== job) return;
+  void transcribe(config, audio, attempt.signal).then((result) => {
+    // Closed meanwhile: the attempt was aborted and its answer is stale.
+    if (attempt.signal.aborted) return;
+    job.attempt = undefined;
     Object.assign(job, result);
     expireIn(job, SETTLED_JOB_TTL_MS);
   });
@@ -139,9 +147,9 @@ function countLive(): { pending: number; live: number } {
 export function startSttJob(config: SttConfig, input: { audio: File; scope: string | null }): string | null {
   const { pending, live } = countLive();
   if (pending >= MAX_PENDING_JOBS || live >= MAX_LIVE_JOBS) return null;
-  const job: SttJob = { id: randomUUID(), ...input, status: "pending", run: 0 };
+  const job: SttJob = { id: randomUUID(), ...input, status: "pending" };
   store.set(job.id, job);
-  launch(config, job);
+  launch(config, job, input.audio);
   return job.id;
 }
 
@@ -149,9 +157,9 @@ export function startSttJob(config: SttConfig, input: { audio: File; scope: stri
 export function retrySttJob(config: SttConfig, id: string): SttJobView | "busy" | null {
   const job = store.get(id);
   if (!job) return null;
-  if (job.status !== "error") return view(job);
+  if (job.status !== "error" || !job.audio) return view(job);
   if (countLive().pending >= MAX_PENDING_JOBS) return "busy";
-  launch(config, job);
+  launch(config, job, job.audio);
   return view(job);
 }
 
@@ -161,8 +169,7 @@ export function getSttJob(id: string): SttJobView | null {
 }
 
 export function getSttJobAudio(id: string): File | null {
-  const job = store.get(id);
-  return job && job.status !== "gone" ? job.audio : null;
+  return store.get(id)?.audio ?? null;
 }
 
 /** Jobs a browser showing this scope should pick up, newest first. */
@@ -171,27 +178,29 @@ export function listSttJobs(scope: string): SttJobView[] {
 }
 
 /**
- * Ends a job and frees its audio. On a finished job with a claim token this is
- * the claim: only the first claimer gets the text back, so exactly one
- * browser inserts it; the same token may repeat the claim if its response
- * was lost. Without a token (discard) or on an unfinished job, later callers
- * see "gone".
+ * With a claim token, claims a finished job: only the first claimer gets the
+ * text, so exactly one browser inserts it, and the same token may repeat the
+ * claim if its response was lost. A token on an unfinished job changes
+ * nothing. Without a token, discards the job. Either way a closed job frees
+ * its audio, aborts its upstream attempt, and answers "gone" afterwards.
  */
-export function closeSttJob(id: string, claimToken?: string): SttJobView | null {
+export function closeSttJob(id: string, claimToken?: string): SttClaim | null {
   const job = store.get(id);
   if (!job) return null;
   if (job.status === "gone") {
     return claimToken && job.claimedBy === claimToken
       ? { id, status: "done", text: job.text }
-      : { id, status: "gone" };
+      : view(job);
   }
-  const before = view(job);
-  if (job.status === "done" && claimToken) job.claimedBy = claimToken;
+  if (claimToken && job.status !== "done") return view(job);
+  const before: SttClaim = { ...view(job), text: claimToken ? job.text : undefined };
+  if (claimToken) job.claimedBy = claimToken;
   else job.text = undefined;
+  job.attempt?.abort();
+  job.attempt = undefined;
   job.status = "gone";
   job.error = undefined;
-  // Drop the audio; the tombstone only answers "gone" (or repeats a claim).
-  job.audio = new File([], job.audio.name);
+  job.audio = null;
   expireIn(job, GONE_JOB_TTL_MS);
   return before;
 }

@@ -18,6 +18,15 @@ const jiti = createJiti(import.meta.url, {
 const { useDictation } = await jiti.import("../hooks/useDictation.ts");
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Settles until `condition` holds; fails after `timeoutMs` instead of racing a fixed sleep. */
+async function waitUntil(condition, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error("condition not met in time");
+    await settle(20);
+  }
+}
+
 async function settle(ms = 20) {
   await act(async () => {
     await sleep(ms);
@@ -273,7 +282,7 @@ test("stopping capture enters review with a playable preview, and confirming rel
   await act(async () => {
     view.result.current.confirmTranscribe();
   });
-  await settle(700);
+  await waitUntil(() => transcripts.length === 1);
 
   assert.deepEqual(world.revokedUrls, [world.createdUrls[0].url], "confirming must revoke the preview URL");
   assert.equal(view.result.current.isReviewing, false);
@@ -299,7 +308,7 @@ test("transcription keeps polling through pending and proxy error pages until th
   await act(async () => {
     view.result.current.confirmTranscribe();
   });
-  await settle(1800);
+  await waitUntil(() => transcripts.length === 1);
 
   assert.deepEqual(errors, []);
   assert.deepEqual(transcripts, ["slow words"]);
@@ -319,7 +328,8 @@ async function recordAndTranscribe(view) {
   await act(async () => {
     view.result.current.confirmTranscribe();
   });
-  await settle(700);
+  await waitUntil(() => world.polls >= 1);
+  await settle(50);
 }
 
 test("retry reruns a failed job on the server with the audio it kept", async () => {
@@ -336,7 +346,7 @@ test("retry reruns a failed job on the server with the audio it kept", async () 
   await act(async () => {
     view.result.current.retry();
   });
-  await settle(700);
+  await waitUntil(() => transcripts.length === 1);
 
   assert.equal(world.retries, 1);
   assert.equal(world.postedFiles.length, 1, "the server's copy is retried, not a re-upload");
@@ -353,7 +363,7 @@ test("retry re-uploads the local recording when the server lost the job", async 
   await act(async () => {
     view.result.current.retry();
   });
-  await settle(700);
+  await waitUntil(() => transcripts.length === 1);
 
   assert.equal(world.postedFiles.length, 2);
   assert.equal(await world.postedFiles[1].text(), await world.postedFiles[0].text());
@@ -376,7 +386,7 @@ test("another browser's job for the same scope shows up with server audio, and a
   await act(async () => {
     view.result.current.retry();
   });
-  await settle(700);
+  await waitUntil(() => world.polls >= 1 && !view.result.current.isTranscribing);
 
   assert.equal(world.retries, 1);
   assert.deepEqual(transcripts, []);
@@ -389,7 +399,7 @@ test("a finished job is claimed, and only the claimed text is inserted", async (
   world.scopeJobs = [{ id: "job-1", status: "pending" }];
   world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "done", text: "from the phone" }) }];
   const { view, transcripts } = mountDictation("session-1");
-  await settle(700);
+  await waitUntil(() => transcripts.length === 1);
 
   assert.deepEqual(transcripts, ["from the phone"]);
   assert.equal(world.deletes.length, 1);
@@ -452,4 +462,68 @@ test("cancelling during capture clears state and releases the microphone", async
   assert.equal(view.result.current.captureRef.current.analyser, null);
   assert.ok(world.tracks[0].stopped);
   assert.deepEqual(transcripts, []);
+});
+
+test("unmounting while a job runs leaves the job for other browsers", async () => {
+  const { view } = mountDictation("session-1");
+  world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "pending" }) }];
+  await recordAndTranscribe(view);
+  assert.equal(view.result.current.isTranscribing, true);
+
+  view.unmount();
+  await settle(600);
+
+  assert.deepEqual(world.deletes, [], "navigating away must not discard the job");
+});
+
+test("a job from another browser is not adopted over an active recording", async () => {
+  const { view } = mountDictation("session-1");
+  await settle(50);
+  await act(async () => {
+    view.result.current.toggle();
+  });
+  await settle();
+
+  world.scopeJobs = [{ id: "job-1", status: "error", error: "model loading" }];
+  await act(async () => {
+    window.dispatchEvent(new Event("focus"));
+  });
+  await settle(50);
+
+  assert.equal(view.result.current.isRecording, true);
+  assert.equal(view.result.current.transcribeError, null);
+});
+
+test("a browser left open picks up a job started elsewhere without a focus change", async () => {
+  world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "done", text: "started elsewhere" }) }];
+  const { transcripts } = mountDictation("session-1");
+  await settle(50);
+  assert.deepEqual(transcripts, []);
+
+  world.scopeJobs = [{ id: "job-1", status: "pending" }];
+  await waitUntil(() => transcripts.length === 1, 6000);
+  assert.deepEqual(transcripts, ["started elsewhere"]);
+});
+
+test("switching sessions stops following the old job without discarding it", async () => {
+  world.scopeJobs = [{ id: "job-1", status: "pending" }];
+  world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "pending" }) }];
+  const transcripts = [];
+  const view = renderHook(({ scope }) => useDictation({ scope, onTranscript: (text) => transcripts.push(text) }), {
+    initialProps: { scope: "session-a" },
+  });
+  await waitUntil(() => world.polls >= 1);
+  assert.equal(view.result.current.isTranscribing, true);
+
+  world.scopeJobs = [];
+  view.rerender({ scope: "session-b" });
+  await settle(50);
+  const pollsAtSwitch = world.polls;
+  world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "done", text: "for A" }) }];
+  await settle(1200);
+
+  assert.equal(view.result.current.isTranscribing, false);
+  assert.equal(world.polls, pollsAtSwitch, "session B must not keep polling A's job");
+  assert.deepEqual(transcripts, [], "A's transcript must not land in B's composer");
+  assert.deepEqual(world.deletes, [], "the job stays adoptable from session A");
 });

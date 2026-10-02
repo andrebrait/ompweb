@@ -198,6 +198,13 @@ export function RecordingDeck({
     return () => cancelAnimationFrame(raf);
   }, [captureRef, captureActive, isPaused, isReviewing, isPlayingPreview, previewCurrentTime, previewDuration]);
 
+  // Playback of a recording that is being, or failed to be, transcribed.
+  const jobPlayButton = onPlayPreview ? (
+    <DeckIconButton onClick={onPlayPreview} title={isPlayingPreview ? t("chatInput.pausePreview") : t("chatInput.playPreview")}>
+      {isPlayingPreview ? <Pause size={12} strokeWidth={2} aria-hidden="true" /> : <Play size={12} strokeWidth={2} aria-hidden="true" style={{ marginLeft: 1 }} />}
+    </DeckIconButton>
+  ) : null;
+
   return (
     <div
       role="status"
@@ -223,11 +230,7 @@ export function RecordingDeck({
     >
       {isTranscribing ? (
         <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-muted)", fontSize: 12 }}>
-          {onPlayPreview ? (
-            <DeckIconButton onClick={onPlayPreview} title={isPlayingPreview ? t("chatInput.pausePreview") : t("chatInput.playPreview")}>
-              {isPlayingPreview ? <Pause size={12} strokeWidth={2} aria-hidden="true" /> : <Play size={12} strokeWidth={2} aria-hidden="true" style={{ marginLeft: 1 }} />}
-            </DeckIconButton>
-          ) : null}
+          {jobPlayButton}
           <Loader2 size={14} strokeWidth={1.8} className="animate-spin" aria-hidden="true" />
           <span style={{ flexShrink: 0 }}>{t("chatInput.transcribing")}</span>
           <div style={{ flex: 1, height: 3, borderRadius: 2, background: "var(--border)", overflow: "hidden", position: "relative" }}>
@@ -236,11 +239,7 @@ export function RecordingDeck({
         </div>
       ) : transcribeError ? (
         <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text)", minWidth: 0 }}>
-          {onPlayPreview ? (
-            <DeckIconButton onClick={onPlayPreview} title={isPlayingPreview ? t("chatInput.pausePreview") : t("chatInput.playPreview")}>
-              {isPlayingPreview ? <Pause size={12} strokeWidth={2} aria-hidden="true" /> : <Play size={12} strokeWidth={2} aria-hidden="true" style={{ marginLeft: 1 }} />}
-            </DeckIconButton>
-          ) : null}
+          {jobPlayButton}
           <AlertCircle size={14} strokeWidth={1.8} aria-hidden="true" style={{ color: "var(--status-error)", flexShrink: 0 }} />
           <span title={transcribeError} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
             {transcribeError}

@@ -489,11 +489,15 @@ so omp requeues it on abort and runs it next; omp-web cannot prevent that.
   (proxies with ~30s timeouts would otherwise return HTML 504s). Job failures
   are 200 payloads for the same reason.
 - Jobs carry the composer scope (`draftKey`: session id or `new:<cwd>`). The
-  hook adopts the newest job for its scope on mount, focus and visibility, so
-  another browser can play (`/audio`), retry (`POST`) or discard it.
-- A finished job is delivered by claim: `DELETE ?claim=<token>` returns the
-  text to the first claimer only (repeatable with the same token); others see
-  `gone` and stand down silently. Never deliver text from a plain poll.
+  hook adopts the newest job for its scope on mount, focus, visibility and
+  every 4s while visible and idle, so another browser can play (`/audio`),
+  retry (`POST`) or discard it. Leaving the scope stops following without
+  discarding.
+- A finished job is delivered only by claim: `DELETE ?claim=<token>` returns
+  the text to the first claimer (repeatable with the same token); polls never
+  carry text, and other browsers see `gone` and stand down silently. A token
+  on an unfinished job is a no-op; a token-less `DELETE` discards and aborts
+  the upstream request.
 - Store is per process (`globalThis` map) with caps (4 pending, 20 live) and
   TTLs; a server restart loses jobs, and the hook then re-uploads its local
   copy if it has one.

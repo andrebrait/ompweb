@@ -18,6 +18,7 @@ export const MAX_RECORDING_MS = 300_000;
 const STT_TIMEOUT_MS = 6 * 60_000;
 const STT_POLL_INTERVAL_MS = 500;
 const STT_POLL_REQUEST_TIMEOUT_MS = 10_000;
+const STT_ADOPT_INTERVAL_MS = 4_000;
 
 /**
  * Live capture state polled by RecordingDeck (timer + waveform) without
@@ -265,7 +266,13 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
       if (scope) body.append("scope", scope);
       const startRes = await fetch("/api/stt", { method: "POST", body, signal });
       const started = await startRes.json().catch(() => null);
-      if (cancelledRef.current || signal.aborted) return;
+      if (cancelledRef.current || signal.aborted) {
+        // Discarded while uploading: end the job the server already started.
+        if (typeof started?.jobId === "string") {
+          void fetch(`/api/stt/${encodeURIComponent(started.jobId)}`, { method: "DELETE" }).catch(() => {});
+        }
+        return;
+      }
       if (!startRes.ok || typeof started?.jobId !== "string") {
         failTranscription(normalizeErrorMessage(started?.error, `Transcription failed (HTTP ${startRes.status})`));
         return;
@@ -283,9 +290,9 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
     if (jobId && !cancelledRef.current && !signal.aborted) void followJob(jobId);
   }, [scope, failTranscription, followJob]);
 
-  // Pick up this scope's job when the composer mounts, the tab regains focus,
-  // or the page becomes visible: a recording another browser sent (or this
-  // one sent before a reload) shows here with playback and retry.
+  // Pick up this scope's job on mount, on focus or visibility, and every few
+  // seconds while visible: a recording another browser sent (or this one
+  // sent before a reload) shows here with playback and retry.
   const idleRef = useRef(true);
   useEffect(() => {
     idleRef.current = !isRecording && !isPaused && !isReviewing && !isTranscribing && !transcribeError;
@@ -293,12 +300,13 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
   useEffect(() => {
     if (!scope) return;
     let disposed = false;
+    const canAdopt = () => !disposed && idleRef.current && !isStartingRef.current && !jobIdRef.current;
     const adopt = async () => {
-      if (!idleRef.current || jobIdRef.current) return;
+      if (!canAdopt() || document.visibilityState !== "visible") return;
       const res = await fetch(`/api/stt?scope=${encodeURIComponent(scope)}`, { cache: "no-store" }).catch(() => null);
       const data = res?.ok ? await res.json().catch(() => null) : null;
       const job = Array.isArray(data?.jobs) ? data.jobs[0] : null;
-      if (disposed || typeof job?.id !== "string" || !idleRef.current || jobIdRef.current) return;
+      if (typeof job?.id !== "string" || !canAdopt()) return;
       cancelledRef.current = false;
       if (job.status === "error") {
         jobIdRef.current = job.id;
@@ -307,18 +315,29 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
         void followJob(job.id);
       }
     };
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void adopt();
-    };
+    const onVisible = () => void adopt();
     void adopt();
+    const timer = window.setInterval(onVisible, STT_ADOPT_INTERVAL_MS);
     window.addEventListener("focus", onVisible);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       disposed = true;
+      window.clearInterval(timer);
       window.removeEventListener("focus", onVisible);
       document.removeEventListener("visibilitychange", onVisible);
+      // Leaving the scope (session switch or unmount) stops following its job
+      // without discarding it: the job stays adoptable when the user returns.
+      if (jobIdRef.current) {
+        abortControllerRef.current?.abort();
+        abortControllerRef.current = null;
+        jobIdRef.current = null;
+        pendingAudioRef.current = null;
+        teardownPreviewAudio();
+        setTranscribeError(null);
+        setIsTranscribing(false);
+      }
     };
-  }, [scope, followJob]);
+  }, [scope, followJob, teardownPreviewAudio]);
 
   // Ends capture and moves the session into transcription. Gates on the live
   // MediaRecorder state (not the isRecording closure) because the 5-minute
@@ -378,8 +397,10 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
   const playPreview = useCallback(() => {
     let audio = previewAudioRef.current;
     if (!audio) {
-      const captured = getCapturedBlob();
+      // A job this browser holds no recording for plays the server's copy;
+      // leftover chunks from an earlier recording must not stand in for it.
       const jobId = jobIdRef.current;
+      const captured = jobId && !pendingAudioRef.current ? null : getCapturedBlob();
       if (captured) audio = setupPreviewAudio(captured.blob);
       else if (jobId) audio = setupPreviewAudio(`/api/stt/${encodeURIComponent(jobId)}/audio`);
       else return;
@@ -636,6 +657,7 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
     }
     const pending = pendingAudioRef.current;
     if (pending) void runTranscription(pending.blob, pending.ext);
+    else failTranscription("Transcription job not found");
   }, [isTranscribing, pausePreview, teardownPreviewAudio, followJob, releaseJob, failTranscription, runTranscription]);
   const toggle = useCallback(() => {
     if (isRecording) finishCapture();
