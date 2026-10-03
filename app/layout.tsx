@@ -1,9 +1,11 @@
 import type { Metadata, Viewport } from "next";
+import { headers } from "next/headers";
 import Script from "next/script";
 import { Geist, JetBrains_Mono, Noto_Sans_Mono, Noto_Serif_SC, Source_Serif_4 } from "next/font/google";
 import { ThemeColor } from "@/hooks/useTheme";
 import { IosFocusZoomGuard } from "@/components/IosFocusZoomGuard";
 import { SIDEBAR_HISTORY_BRIDGE_SCRIPT } from "@/lib/sidebar-history-bridge";
+import { getInstallName } from "@/lib/install-name";
 import "./globals.css";
 
 const geist = Geist({
@@ -43,19 +45,22 @@ const notoSerifSC = Noto_Serif_SC({
   display: "swap",
 });
 
-export const metadata: Metadata = {
-  title: "omp web",
-  description: "Web UI for the oh-my-pi (omp) coding agent",
-  // PWA-like behavior on iOS: standalone chrome, no telephone autodetect.
-  appleWebApp: {
-    capable: true,
-    title: "omp web",
-    statusBarStyle: "default",
-  },
-  formatDetection: {
-    telephone: false,
-  },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const title = getInstallName(await headers());
+  return {
+    title,
+    description: "Web UI for the oh-my-pi (omp) coding agent",
+    // PWA-like behavior on iOS: standalone chrome, no telephone autodetect.
+    appleWebApp: {
+      capable: true,
+      title,
+      statusBarStyle: "default",
+    },
+    formatDetection: {
+      telephone: false,
+    },
+  };
+}
 
 // `viewportFit: cover` honors safe-area-inset on notched devices.
 // `interactiveWidget: resizes-content` makes the soft keyboard shrink the
@@ -75,6 +80,7 @@ export default function RootLayout({
   return (
     <html lang="en" translate="no" className={`${geist.variable} ${jetbrainsMono.variable} ${notoSansMono.variable} ${sourceSerif.variable} ${notoSerifSC.variable} notranslate`} suppressHydrationWarning>
       <head>
+        <link rel="manifest" href="/api/manifest" crossOrigin="use-credentials" />
         <ThemeColor />
         <meta name="google" content="notranslate" />
         {/* Register before Next's router. Owned sidebar traversals must be handled

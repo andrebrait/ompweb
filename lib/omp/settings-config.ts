@@ -7,12 +7,14 @@ import { effectiveCompactionMethodOrder, isCompactionMethodOrder, type Compactio
 
 export type NativeSettings = {
   defaultThinkingLevel?: "auto" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  providers?: { autoThinkingSource?: "classifier" | "vendor" };
   hideThinkingBlock?: boolean;
   externalThinking?: boolean;
   textVerbosity?: "low" | "medium" | "high";
   personality?: "default" | "friendly" | "pragmatic" | "none";
   advisor?: { enabled?: boolean; subagents?: boolean; syncBacklog?: "off" | "1" | "3" | "5"; immuneTurns?: number };
   tools?: { approvalMode?: "always-ask" | "write" | "yolo"; approval?: { bash?: "allow" | "prompt" | "deny"; extension?: "allow" | "prompt" } };
+  skills?: { showStartupDiagnostics?: boolean };
   enabledModels?: string[];
   disabledProviders?: string[];
   modelProviderOrder?: string[];
@@ -64,14 +66,32 @@ function readDocument() {
   return { path, doc };
 }
 
+/** omp's `/slow` for Claude: `providers.anthropic.slowMode: auto` (default off).
+ *  An unreadable config counts as off, like omp's default. */
+export function readAnthropicSlowMode(): boolean {
+  try {
+    const data = readDocument().doc.toJS();
+    if (!isRecord(data)) return false;
+    const providers = isRecord(data.providers) ? data.providers : {};
+    const anthropic = isRecord(providers.anthropic) ? providers.anthropic : {};
+    // omp's migration also accepts top-level dotted keys, nested values winning.
+    return (anthropic.slowMode ?? data["providers.anthropic.slowMode"]) === "auto";
+  } catch {
+    return false;
+  }
+}
+
 /** Returns the persisted native OMP values only; omitted keys keep OMP defaults. */
 export function readNativeSettings(): { path: string; settings: NativeSettings } {
   const { path, doc } = readDocument();
   const data = doc.toJS();
   if (!isRecord(data)) return { path, settings: {} };
   const advisor = isRecord(data.advisor) ? data.advisor : {};
+  const providers = isRecord(data.providers) ? data.providers : {};
+  const autoThinkingSource = providers.autoThinkingSource;
   const tools = isRecord(data.tools) ? data.tools : {};
   const approval = isRecord(tools.approval) ? tools.approval : {};
+  const skills = isRecord(data.skills) ? data.skills : {};
   const retry = isRecord(data.retry) ? data.retry : {};
   const fallbackChains = isRecord(retry.fallbackChains)
     ? Object.fromEntries(Object.entries(retry.fallbackChains).filter((entry): entry is [string, string[]] => typeof entry[0] === "string" && stringArray(entry[1]) !== undefined))
@@ -94,6 +114,9 @@ export function readNativeSettings(): { path: string; settings: NativeSettings }
     path,
     settings: {
       ...(THINKING_LEVELS.has(data.defaultThinkingLevel as string) ? { defaultThinkingLevel: data.defaultThinkingLevel as NativeSettings["defaultThinkingLevel"] } : {}),
+      ...(autoThinkingSource === "classifier" || autoThinkingSource === "vendor"
+        ? { providers: { autoThinkingSource } }
+        : {}),
       ...(typeof data.hideThinkingBlock === "boolean" ? { hideThinkingBlock: data.hideThinkingBlock } : {}),
       ...(typeof data.externalThinking === "boolean" ? { externalThinking: data.externalThinking } : {}),
       ...(TEXT_VERBOSITIES.has(data.textVerbosity as string) ? { textVerbosity: data.textVerbosity as NativeSettings["textVerbosity"] } : {}),
@@ -113,6 +136,9 @@ export function readNativeSettings(): { path: string; settings: NativeSettings }
           ...(approval.extension === "allow" || approval.extension === "prompt" ? { extension: approval.extension } : {}),
         } } : {}),
       } } : {}),
+      ...(typeof skills.showStartupDiagnostics === "boolean" ? {
+        skills: { showStartupDiagnostics: skills.showStartupDiagnostics },
+      } : {}),
       ...(stringArray(data.enabledModels) ? { enabledModels: stringArray(data.enabledModels) } : {}),
       ...(stringArray(data.disabledProviders) ? { disabledProviders: stringArray(data.disabledProviders) } : {}),
       ...(stringArray(data.modelProviderOrder) ? { modelProviderOrder: stringArray(data.modelProviderOrder) } : {}),
@@ -156,21 +182,31 @@ export function readNativeSettings(): { path: string; settings: NativeSettings }
 /** Validates and applies a reviewed subset of OMP's global config schema. */
 export function writeNativeSettings(settings: NativeSettings): void {
   if (!isRecord(settings)) throw new Error("Settings must be an object");
+  assertOptionalRecord(settings.providers, "providers");
+  const autoThinkingSource = settings.providers?.autoThinkingSource;
+  if (autoThinkingSource !== undefined && autoThinkingSource !== "classifier" && autoThinkingSource !== "vendor") {
+    throw new Error("Invalid Auto thinking source");
+  }
   assertOptionalRecord(settings.advisor, "advisor");
   assertOptionalRecord(settings.tools, "tools");
   assertOptionalRecord(settings.tools?.approval, "tools.approval");
+  assertOptionalRecord(settings.skills, "skills");
   assertOptionalRecord(settings.retry, "retry");
   assertOptionalRecord(settings.compaction, "compaction");
   assertOptionalRecord(settings.memory, "memory");
   assertOptionalRecord(settings.autolearn, "autolearn");
   assertOptionalRecord(settings.mnemopi, "mnemopi");
   assertOptionalRecord(settings.mcp, "mcp");
+  if (settings.skills && Object.keys(settings.skills).some((key) => key !== "showStartupDiagnostics")) {
+    throw new Error("Unsupported skills setting");
+  }
   for (const [name, value] of Object.entries({
     hideThinkingBlock: settings.hideThinkingBlock,
     externalThinking: settings.externalThinking,
     "advisor.enabled": settings.advisor?.enabled,
     "advisor.subagents": settings.advisor?.subagents,
     "retry.enabled": settings.retry?.enabled,
+    "skills.showStartupDiagnostics": settings.skills?.showStartupDiagnostics,
     "retry.modelFallback": settings.retry?.modelFallback,
     "compaction.enabled": settings.compaction?.enabled,
     "compaction.midTurnEnabled": settings.compaction?.midTurnEnabled,
@@ -219,6 +255,7 @@ export function writeNativeSettings(settings: NativeSettings): void {
   }
   if (!isMap(doc.contents)) throw new Error(`${path} must contain a YAML mapping`);
   if (settings.defaultThinkingLevel !== undefined) doc.set("defaultThinkingLevel", settings.defaultThinkingLevel);
+  if (autoThinkingSource !== undefined) doc.setIn(["providers", "autoThinkingSource"], autoThinkingSource);
   if (settings.hideThinkingBlock !== undefined) doc.set("hideThinkingBlock", settings.hideThinkingBlock);
   if (settings.externalThinking !== undefined) doc.set("externalThinking", settings.externalThinking);
   if (settings.textVerbosity !== undefined) doc.set("textVerbosity", settings.textVerbosity);
@@ -227,6 +264,9 @@ export function writeNativeSettings(settings: NativeSettings): void {
   if (settings.tools?.approvalMode !== undefined) doc.setIn(["tools", "approvalMode"], settings.tools.approvalMode);
   if (settings.tools?.approval?.bash !== undefined) doc.setIn(["tools", "approval", "bash"], settings.tools.approval.bash);
   if (settings.tools?.approval?.extension !== undefined) doc.setIn(["tools", "approval", "extension"], settings.tools.approval.extension);
+  if (settings.skills?.showStartupDiagnostics !== undefined) {
+    doc.setIn(["skills", "showStartupDiagnostics"], settings.skills.showStartupDiagnostics);
+  }
   if (settings.enabledModels !== undefined) doc.set("enabledModels", settings.enabledModels);
   if (settings.disabledProviders !== undefined) doc.set("disabledProviders", settings.disabledProviders);
   if (settings.modelProviderOrder !== undefined) doc.set("modelProviderOrder", settings.modelProviderOrder);

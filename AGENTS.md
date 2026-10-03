@@ -83,10 +83,14 @@ app/api/
   skills/route.ts                 GET/PATCH loaded skills and disable-model-invocation
   skills/install/route.ts         POST install skills through npx skills add
   skills/search/route.ts          GET/POST skills.sh search
+  stt/route.ts                    POST audio (+scope) → 202 { jobId } | GET ?scope= live jobs (lib/stt-jobs.ts)
+  stt/[jobId]/route.ts            GET job state | POST retry with kept audio | DELETE ?claim= claim/discard
+  stt/[jobId]/audio/route.ts      GET the kept recording (audio/* only) for playback
   worktrees/route.ts              GET/POST/DELETE git worktrees
 
 lib/
   omp/                 shared omp foundations (paths, CLI probe, RpcProcess)
+  provider-accounts.ts distinct omp accounts per provider from `omp usage` reports (Models → provider detail)
   agent-client.ts      typed fetch helper for /api/agent commands
   btw.ts               /btw side-question records + pure frame/snapshot merge (order-safe)
   draft-store.ts       local draft persistence helpers
@@ -108,6 +112,7 @@ lib/
   tool-presets.ts      PRESET_NONE/DEFAULT/FULL + getToolNamesForPreset()
   types.ts             shared TypeScript types
   normalize.ts         normalizeToolCalls() — field name mismatch between file format and our types
+  navigation-history.ts  pure back/forward view-history stack + shortcut matcher (⌘[/⌘], Alt+←/→)
   word-prediction.ts   pure ghost-text arithmetic (advance/accept) for composer word prediction
   worktree.ts          project/worktree resolution and git worktree operations
 
@@ -143,6 +148,7 @@ hooks/
   useIsMobile.ts           responsive breakpoint hook
   usePrefersReducedMotion.ts OS reduce-motion preference (SMIL-safe)
   useTheme.ts              theme state (localStorage key "omp-theme")
+  useNavigationHistory.ts  in-app back/forward stack (record/peek/commit/drop) for visited chat views
   useWordPrediction.ts     debounced omp predict_word ghost text + feedback
   useBtw.ts                /btw records/active panel/history dialog fed by btw_* SSE frames
 ```
@@ -185,6 +191,29 @@ hooks/
 - Only session ids are stored; paths are re-resolved on resume.
 - Known limit: resume does not detect a terminal `omp --resume <id>` started
   on the same session while omp-web was down; both would write the file.
+
+### Session moves (omp >= 18.5 ownership) and title generation
+- Only the first omp process to write a session file owns it; a non-owner moves
+  to a sibling file with a new id on its first write and emits a
+  `notice` with `source: "session-persistence"`. `handleFrame` answers it with
+  `followSessionMove()`: the pending flag makes the next `applyIdentity` treat
+  the id change as the same conversation (stream/run state kept, **old id kept
+  as a registry alias**, new id registered via `onIdentityChange({keepOldId})`).
+  Branch/new/switch still drop the old key. `startRpcSession` also reuses any
+  live wrapper reporting the requested session file instead of spawning a second
+  `--resume` child (which would fork again). `onDestroy` removes every key that
+  points at the wrapper.
+- `POST /api/sessions/[id]/auto-name` asks omp to generate the title
+  (`AgentSessionWrapper.generateTitle()`: native `generate_title`, else
+  argument-less `/rename`, never while a run is in flight). Only when omp cannot
+  does it fall back to the stored/derived title (`generated:false`), saved
+  through the live process when there is one.
+
+### Browser compatibility
+Client code (`components/`, `hooks/`) must not call `AbortSignal.timeout`,
+`AbortSignal.any` or `Promise.withResolvers` — older mobile browsers throw and
+the whole tree shows the "unexpected error" screen. Use `AbortController` + timers and
+executor-style promises instead. Server code may use them freely.
 
 ### Two kinds of branching — don't confuse them
 - **Fork** ("Fork a new session from this point" button, `messageView.newSessionTitle`, on user and assistant messages; only offered while the session is idle — ChatWindow gates it on `!sessionBusy && !isNew`): creates a new independent `.jsonl` file via omp's `branch` RPC. Shown as a child in the sidebar tree via `parentSession` header field. `branch` only takes a user entry and keeps the history *before* it, so `lib/chat-fork.ts` maps rows: a user prompt forks at itself and its returned text prefills the fork's composer (edit-and-resend, text only — attached images are not restored); an assistant reply forks at the next user prompt so the reply is kept; the newest reply falls back to its own prompt with the prefill. Rows that would edit the very first prompt (an empty fork) offer no fork.
@@ -230,18 +259,27 @@ client-side — every client viewing the session must show the same queue.
 One sequence (`queueSeqRef`) orders every source: a get_state snapshot takes
 a number when requested and applies only if no newer snapshot or
 `queue_update` was applied (HTTP and SSE can reorder). Edit/Delete use
-`remove_queued_message` (act only on `removed: true`), Steer uses
+`remove_queued_message` (act only on `removed: true`; newer omp also returns
+the message's `images`, which Edit restores), Steer uses
 `promote_queued_message`; the chip changes when omp's next snapshot arrives.
-`handleAbort` coalesces overlapping Stops, then withdraws pending messages BEFORE sending `abort` (bounded by
-`WITHDRAW_BEFORE_ABORT_MS`), like the TUI's Esc: omp runs a queued steer as
-soon as an abort lands. Withdrawn text goes to the session draft via
-`recoverDraftText`, saved as each removal confirms. A follow-up that answers
-`removed: false` is retried on `steering` (a concurrent promotion moved it);
-never the reverse. The abort is fenced to the prompt run id captured at Stop,
-so it cannot kill a prompt started during the wait. Known gap: input taken by
-live steering answers `removed: false`, and RPC `abort` does not call
-`withdrawLiveSteering` (the TUI's `clearQueue({ forInterrupt: true })` does),
-so omp requeues it on abort and runs it next; omp-web cannot prevent that.
+`handleAbort` coalesces overlapping Stops, then sends `abort_and_restore_queue`:
+omp's Esc (`clearQueue({ forInterrupt: true })`, then abort) in one step,
+returning the withdrawn user messages, whose texts and images go to the
+session draft via `recoverDraft`. omp labels an image-only message `[Image]`;
+that label is never restored as text. It covers what a client snapshot cannot: a steer promoted
+after the last `queue_update`, and live-steered input the run claimed but never
+recorded (omp would otherwise requeue it and drain it into a new turn right
+after the abort). Never reimplement this client-side. A failed request is
+retried once (omp returns whatever is still queued) and only while the run
+captured at the click is current; texts lost with a response that never
+arrived cannot be recovered, so the hook warns (`queueRestoreUncertain`).
+Fallback ONLY when omp answers "Unknown command" (omp without the command):
+withdraw each listed message with `remove_queued_message` BEFORE sending
+`abort` (bounded by `WITHDRAW_BEFORE_ABORT_MS`), saved as each removal
+confirms. A follow-up that answers `removed: false` is retried on `steering`
+(a concurrent promotion moved it); never the reverse. Every abort is fenced to
+the prompt run id captured at the click, so it cannot kill a prompt started
+during the wait.
 
 ### Running state SSE + reconciliation
 - The sidebar listens to `/api/agent/running/events`, backed by `subscribeRunningSessions()` in `lib/rpc-manager.ts`, so running badges update without polling.
@@ -269,9 +307,9 @@ so omp requeues it on abort and runs it next; omp-web cannot prevent that.
   running `btw_record` comes first.
 - `/btw <question>` and `/btw` are client builtins (`handleBuiltinSlashCommand`
   case `"btw"`). `ChatInput.sendSideQuestion` routes them there from both the
-  idle and the streaming submit path, *before* the attachment gate: never sent
-  as a prompt, never queued, and refused with a toast (draft and attachments
-  kept) while attachments are attached. Asking starts the wrapper
+  idle and the streaming submit path, *before* attachments are folded in:
+  never sent as a prompt, never queued, and refused with a toast (draft and
+  attachments kept) while attachments are attached. Asking starts the wrapper
   (`get_state`) and attaches SSE first when it is not open, so no early delta
   is lost; a second ask while one is starting is ignored.
 - The `btw` response, history snapshots and frames race (HTTP vs SSE): merge
@@ -461,6 +499,37 @@ so omp requeues it on abort and runs it next; omp-web cannot prevent that.
 - The Models panel reads and writes `models.yml` in the omp agent directory (`~/.omp/agent/models.yml`, `.yaml` fallback).
 - API-key status endpoints must never return the raw key.
 
+### Navigate back / forward (`lib/navigation-history.ts`, `hooks/useNavigationHistory.ts`)
+- Browser-style back/forward over visited chat views (sessions + the new-chat
+  composer), in-memory per page load. It is **omp-web's own stack**, never the
+  browser History API — the app only ever `router.replace`s `?session=`, and
+  the real history stack belongs to the mobile back-gesture / exit-guard
+  machinery (`useSidebarHistory` + the popstate bridge).
+- AppShell records views from one effect keyed on
+  `(selectedSession?.id, newSessionCwd)`: recording the entry the cursor
+  already sits on is a no-op, which is what makes back/forward
+  self-suppressing — `navigateInHistory` commits the step, the view lands, the
+  effect re-records the target, nothing is pushed. Any other view change
+  (sidebar/palette select, new chat, session created, fork, project-switch
+  close) pushes normally and truncates the forward branch, browser-style.
+- Applying a step: peek → resolve the session id via `/api/sessions` →
+  commit + `handleSelectSession`, or `handleNewSession` for new-chat entries.
+  A dead id (deleted session) drops that entry and tries the next one in the
+  same direction; a failed list fetch aborts without dropping. A view change
+  during the await (versioned ref) aborts the navigation so a slow fetch
+  never yanks the chat away.
+- Shortcuts live in `useGlobalKeyboardShortcuts`: ⌘[/⌘] (macOS standard),
+  Alt+←/Alt+→ (Windows/Linux standard; on macOS Alt+Arrow stays free — it is
+  word-wise caret movement), plus the mouse back/forward buttons
+  (`BrowserBack`/`BrowserForward`). The keystroke is always swallowed while a
+  handler is registered — an exhausted stack stops dead rather than falling
+  through to the browser's own back/forward, so the app is never backed out
+  of by accident — and shortcuts are skipped entirely while a
+  `[role="dialog"]` modal is open. The sidebar header buttons (before Archived
+  Sessions, wrapped in `.sidebar-nav-buttons`) disable on stack bounds, show
+  the platform shortcut in their tooltip, and hide below a 240px sidebar via
+  the `.sidebar-shell` container query (the keyboard shortcuts still work).
+
 ### Composer word prediction (`hooks/useWordPrediction.ts`, `components/GhostMirror.tsx`)
 - Ghost text comes from omp's `predict_word` RPC (engine = omp's
   `spelling.autocomplete` setting; omp applies the prose gates). Tab or →
@@ -479,6 +548,36 @@ so omp requeues it on abort and runs it next; omp-web cannot prevent that.
 - Ghost state lives in a small external store (`useSyncExternalStore` in
   `GhostMirror`), not ChatInput state: re-rendering the composer per ghost
   change was the dominant per-keystroke cost.
+
+### Voice transcription jobs (`lib/stt-jobs.ts`, `/api/stt`, `hooks/useDictation.ts`)
+- The browser never waits on the STT endpoint: `POST /api/stt` keeps the
+  recording in memory and starts a job; the hook polls `GET /api/stt/[jobId]`
+  (proxies with ~30s timeouts would otherwise return HTML 504s). Job failures
+  are 200 payloads for the same reason.
+- Jobs carry the composer scope (`draftKey`: session id or `new:<cwd>`). The
+  hook adopts the newest job for its scope on mount, focus, visibility and
+  every 4s while visible and idle, so another browser can play (`/audio`),
+  retry (`POST`) or discard it. Leaving the scope stops following without
+  discarding.
+- A finished job is delivered only by claim:
+  `DELETE ?claim=<instance token>&owner=<tab token>` returns the text to the
+  first claim token (repeatable with the same token); polls never carry text,
+  and other composers see `gone` and stand down silently. A claim on an
+  unfinished job is a no-op; a `DELETE` without `claim` discards and aborts
+  the upstream request.
+- Two tokens, never merged. The tab token (sessionStorage) identifies the
+  job owner: it survives the composer remounting (`AppShell` keys
+  `ChatWindow` by session), gets the 15s first claim, and alone gets the
+  send/queue choice back. A duplicated tab copies it, so exclusivity comes
+  from the claim token, which is per hook instance.
+- The send/queue choice (`after`: send | steer | followup) is uploaded with
+  the recording, kept on the job, and returned with the owner's claim. Never
+  keep it only in component state: a session switch remounts the composer and
+  loses it. A non-owner claim only inserts, since that composer holds its own
+  draft and attachments.
+- Store is per process (`globalThis` map) with caps (4 pending, 20 live) and
+  TTLs; a server restart loses jobs, and the hook then re-uploads its local
+  copy if it has one.
 
 ### Completion sound
 - `hooks/useAudio.ts` stores the toggle in `localStorage` and reuses one `AudioContext`.

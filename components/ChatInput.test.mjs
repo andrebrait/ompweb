@@ -3,6 +3,7 @@ import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createJiti } from "jiti";
+import { JSDOM } from "jsdom";
 
 const jiti = createJiti(import.meta.url, {
   jsx: { runtime: "automatic" },
@@ -10,6 +11,25 @@ const jiti = createJiti(import.meta.url, {
 });
 const { ChatInput, ModelErrorBanner, filterModelOptions } = await jiti.import("./ChatInput.tsx");
 const { setDraft, clearDraft } = await jiti.import("@/lib/draft-store");
+
+test("provider-defined reasoning levels appear once in the trigger", () => {
+  for (const thinkingLevel of ["ultra", "ultrathink-extended", "constructor"]) {
+    const html = renderToStaticMarkup(React.createElement(ChatInput, {
+      onSend() {},
+      onThinkingLevelChange() {},
+      thinkingLevel,
+      isStreaming: false,
+    }));
+    const dom = new JSDOM(html);
+    try {
+      const trigger = dom.window.document.querySelector(".composer-thinking-control > button");
+      assert.equal(trigger.textContent, thinkingLevel);
+      assert.ok(trigger.getAttribute("aria-label").endsWith(`: ${thinkingLevel}`));
+    } finally {
+      dom.window.close();
+    }
+  }
+});
 
 test("shows Queue instead of Stop for typed text during a run", () => {
   const draftKey = "chat-input-queue-action-test";
@@ -57,7 +77,7 @@ test("formats structured Claude low-priority state in the browser locale", () =>
     React.createElement(ChatInput, {
       onSend() {},
       isStreaming: false,
-      anthropicSlowMode: { stage: "low_priority", resetsAtSec, allowanceLeftPercent: 62 },
+      usageLimit: { stage: "low_priority", resetsAtSec, allowanceLeftPercent: 62 },
     }),
   );
   assert.match(html, new RegExp(`low priority until ${time.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")} · 62% left`));
@@ -76,11 +96,11 @@ test("formats every Claude usage-limit stage", () => {
     [{ stage: "wrap_up", extraUsage: true }, "limit reached · wrap-up, then extra usage"],
     [{ stage: "low_priority", resetsAtSec: longReset }, `low priority until ${longTime}`],
   ];
-  for (const [anthropicSlowMode, label] of rows) {
+  for (const [usageLimit, label] of rows) {
     const html = renderToStaticMarkup(
-      React.createElement(ChatInput, { onSend() {}, isStreaming: false, anthropicSlowMode }),
+      React.createElement(ChatInput, { onSend() {}, isStreaming: false, usageLimit }),
     );
-    assert.ok(html.includes(label), `${JSON.stringify(anthropicSlowMode)} should render ${label}`);
+    assert.ok(html.includes(label), `${JSON.stringify(usageLimit)} should render ${label}`);
   }
 });
 
@@ -97,18 +117,18 @@ test("never renders a null percentage, an invalid date, or a past reset clock", 
     { stage: "wrap_up", resetsAtSec: null, extraUsage: false },
     { stage: "wrap_up", resetsAtSec: pastSec, extraUsage: false },
   ];
-  for (const anthropicSlowMode of rows) {
+  for (const usageLimit of rows) {
     const html = renderToStaticMarkup(
-      React.createElement(ChatInput, { onSend() {}, isStreaming: false, anthropicSlowMode }),
+      React.createElement(ChatInput, { onSend() {}, isStreaming: false, usageLimit }),
     );
-    const label = `${JSON.stringify(anthropicSlowMode)} -> ${html}`;
+    const label = `${JSON.stringify(usageLimit)} -> ${html}`;
     // "null" / "NaN" / "Invalid Date" reaching the label is the bug this pins:
     // every one of them is a value the user would plan their session around.
     assert.ok(!html.includes("Invalid Date"), `invalid date rendered: ${label}`);
     assert.ok(!html.includes("null%"), `null percentage rendered: ${label}`);
     assert.ok(!html.includes("NaN%"), `NaN percentage rendered: ${label}`);
     // A reset already in the past must not render a plausible wrong clock.
-    if (anthropicSlowMode.resetsAtSec === pastSec) {
+    if (usageLimit.resetsAtSec === pastSec) {
       assert.ok(!html.includes(new Date(pastSec * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })),
         `past reset clock rendered: ${label}`);
     }
@@ -119,7 +139,7 @@ test("never renders a null percentage, an invalid date, or a past reset clock", 
       React.createElement(ChatInput, {
         onSend() {},
         isStreaming: false,
-        anthropicSlowMode: { stage: "low_priority", resetsAtSec: null, allowanceLeftPercent: 62 },
+        usageLimit: { stage: "low_priority", resetsAtSec: null, allowanceLeftPercent: 62 },
       }),
     ),
     /low priority · 62% left/,
@@ -130,10 +150,24 @@ test("never renders a null percentage, an invalid date, or a past reset clock", 
       React.createElement(ChatInput, {
         onSend() {},
         isStreaming: false,
-        anthropicSlowMode: { stage: "low_priority", resetsAtSec: null },
+        usageLimit: { stage: "low_priority", resetsAtSec: null },
       }),
     ),
-    /class="composer-slow-mode-badge"[^>]*>low priority</,
+    /class="composer-usage-limit-badge"[^>]*>low priority</,
+  );
+});
+
+test("shows the Slow toggle only when omp reports /slow applies, pressed when enabled", () => {
+  const render = (props) => renderToStaticMarkup(
+    React.createElement(ChatInput, { onSend() {}, isStreaming: false, onSlowModeChange() {}, ...props }),
+  );
+  // Older omp omits the field; an unsupported model reports false.
+  for (const props of [{}, { slowModeSupported: false, slowModeEnabled: true }]) {
+    assert.doesNotMatch(render(props), /composer-slow-control/);
+  }
+  assert.match(
+    render({ slowModeSupported: true, slowModeEnabled: true }),
+    /<button[^>]*class="composer-slow-control"[^>]*aria-pressed="true"/,
   );
 });
 
@@ -178,19 +212,6 @@ test("renders goal, planning, and advisor indicators at the composer", () => {
   // but the plus trigger renders for the same props.
   assert.doesNotMatch(html, /aria-pressed="true"/);
   assert.match(html, /aria-label="(More actions|chatInput\.plusMenu)"/);
-});
-
-test("renders the compact toolbar action", () => {
-  const html = renderToStaticMarkup(
-    React.createElement(ChatInput, {
-      onSend() {},
-      onAbort() {},
-      onCompact() {},
-      isStreaming: false,
-    }),
-  );
-
-  assert.match(html, /title="(Compact context|chatInput\.compactContext)"/);
 });
 
 test("shows the advisor thunder indicator with the reviewing model and reasoning", () => {

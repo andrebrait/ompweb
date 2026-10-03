@@ -16,7 +16,8 @@ import { normalizeToolCalls } from "@/lib/normalize";
 import { hasVisibleAssistantContent } from "@/lib/assistant-response";
 import type { ThinkingModelMeta } from "@/lib/thinking-levels";
 import { sendAgentCommand, setSessionAdvisorSpawn } from "@/lib/agent-client";
-import { recoverDraftText, setDraft } from "@/lib/draft-store";
+import { parseSkillDiagnosticsSnapshot, type SkillDiagnosticsSnapshot } from "@/lib/skill-diagnostics";
+import { recoverDraft, setDraft, toDraftImages, type ChatDraftImage } from "@/lib/draft-store";
 import { formatExitedSessionNotice, translate } from "@/lib/i18n";
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import { toastBtwError, useBtw } from "@/hooks/useBtw";
@@ -29,7 +30,7 @@ import { toast } from "@/components/ui/toast";
 import { expandWebSlashCommand } from "@/lib/web-slash-commands";
 import { validateOutgoingPrompt } from "@/lib/image-attachments";
 import { createActiveGoal, parseActiveGoal, type ActiveGoal, type ActivePlan } from "@/lib/web-mode-state";
-import type { AnthropicSlowModeState, HostToolDefinition, HostUriSchemeDefinition, RpcAskDialogAnswer, RpcAvailableSlashCommand, SessionStatsInfo, TodoPhase } from "@/lib/pi-types";
+import type { HostToolDefinition, HostUriSchemeDefinition, RpcAskDialogAnswer, RpcAvailableSlashCommand, SessionStatsInfo, SlowModeScope, TodoPhase, UsageLimitState } from "@/lib/pi-types";
 import { isRecord } from "@/lib/type-guards";
 import { subscribeSessionsChanged } from "@/lib/session-change-bus";
 import { createSessionCatchUp, type SessionCatchUp, type SessionLiveFields } from "./useAgentSession-sync";
@@ -231,8 +232,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevelOption>("auto");
   const [fastModeEnabled, setFastModeEnabled] = useState(false);
   const [fastModeActive, setFastModeActive] = useState<boolean | undefined>(undefined);
-  // omp's Claude usage-limit stage (wrap-up allowance / /slow low priority).
-  const [anthropicSlowMode, setAnthropicSlowMode] = useState<AnthropicSlowModeState | undefined>(undefined);
+  // `/slow` for the active model, as omp reports it: false whenever the model
+  // cannot use it, so it is re-read from every state, never carried over.
+  // Undefined support = no live omp state; the composer then falls back to
+  // the model catalog (see slowModeSupported below).
+  const [liveSlowModeSupported, setSlowModeSupported] = useState<boolean | undefined>(undefined);
+  const [liveSlowModeEnabled, setSlowModeEnabled] = useState(false);
+  const [liveSlowModeScope, setSlowModeScope] = useState<SlowModeScope | undefined>(undefined);
+  // omp's shared `providers.anthropic.slowMode` setting, from /api/models.
+  const [anthropicSlowMode, setAnthropicSlowMode] = useState(false);
+  // omp's provider usage-limit stage (wrap-up allowance / /slow low priority).
+  const [usageLimit, setUsageLimit] = useState<UsageLimitState | undefined>(undefined);
   // Runtime session modes returned by get_state and changed via RPC
   // (set_interrupt_mode / set_auto_compaction).
   const [interruptMode, setInterruptMode] = useState<"immediate" | "wait">("immediate");
@@ -244,6 +254,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [retryInfo, setRetryInfo] = useState<{ attempt: number; maxAttempts: number; errorMessage?: string } | null>(null);
   const [contextUsage, setContextUsage] = useState<{ percent: number | null; contextWindow: number; tokens: number | null } | null>(null);
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
+  const [skillDiagnostics, setSkillDiagnostics] = useState<SkillDiagnosticsSnapshot | null>(null);
   const [forkingEntryId, setForkingEntryId] = useState<string | null>(null);
   const [currentModelOverride, setCurrentModelOverride] = useState<{ provider: string; modelId: string } | null>(null);
   const [pendingModel, setPendingModel] = useState<{ provider: string; modelId: string } | null>(null);
@@ -332,6 +343,21 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     queueAppliedSeqRef.current = seq;
     updateQueuedMessages(readQueueSnapshot(value) ?? EMPTY_QUEUE);
   }, [updateQueuedMessages]);
+  // Orders get_state responses, the setter reply, and SSE updates so a response
+  // started before a newer frame cannot overwrite it.
+  const skillDiagnosticsSeqRef = useRef(0);
+  const skillDiagnosticsAppliedSeqRef = useRef(0);
+  // What the view shows now, for a setter reply that a newer frame overtook.
+  const skillDiagnosticsRef = useRef<SkillDiagnosticsSnapshot | null>(null);
+  const publishSkillDiagnostics = useCallback((seq: number, snapshot: SkillDiagnosticsSnapshot | null) => {
+    skillDiagnosticsAppliedSeqRef.current = seq;
+    skillDiagnosticsRef.current = snapshot;
+    setSkillDiagnostics(snapshot);
+  }, []);
+  const applySkillDiagnosticsSnapshot = useCallback((seq: number, value: unknown) => {
+    if (seq <= skillDiagnosticsAppliedSeqRef.current) return;
+    publishSkillDiagnostics(seq, parseSkillDiagnosticsSnapshot(value) ?? null);
+  }, [publishSkillDiagnostics]);
   const [subagents, setSubagents] = useState<SubagentInfo[]>([]);
   const [subagentEvents, setSubagentEvents] = useState<Record<string, SubagentActivityEvent[]>>({});
   const [subagentTranscriptVersions, setSubagentTranscriptVersions] = useState<Record<string, number>>({});
@@ -499,6 +525,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             : data?.context.model ?? pendingModel)),
     [isNew, newSessionModel, newSessionDefaultModel, currentModelOverride, liveModelMeta, data?.context.model, pendingModel],
   );
+
+  // Without live omp state (new or idle session), predict omp's own answer
+  // from the catalog: Claude low priority is the shared config setting
+  // (global); the flex tier is per session and starts off.
+  const catalogSlowModel = liveSlowModeSupported === undefined && displayModel
+    ? modelList.find((m) => m.provider === displayModel.provider && m.id === displayModel.modelId && m.supportsSlowMode)
+    : undefined;
+  const slowModeSupported = liveSlowModeSupported ?? Boolean(catalogSlowModel);
+  const slowModeEnabled = catalogSlowModel ? catalogSlowModel.provider === "anthropic" && anthropicSlowMode : liveSlowModeEnabled;
+  const slowModeScope: SlowModeScope | undefined = catalogSlowModel
+    ? (catalogSlowModel.provider === "anthropic" ? "global" : "session")
+    : liveSlowModeScope;
 
   const sessionStats = useMemo(() => {
     if (sessionStatsOverride) return sessionStatsOverride;
@@ -720,11 +758,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // must reach the composer so the ladder/active level match reality.
   const refreshLiveModelState = useCallback(async (sid: string) => {
     const token = beginAuthoritativeModelSync();
+    const skillDiagnosticsRevision = ++skillDiagnosticsSeqRef.current;
     try {
       const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/state`);
       if (!res.ok) return;
       const agentState = await res.json() as { running: boolean; state?: AgentStateResponse };
-      if (sessionIdRef.current !== sid) return;
+      if (!hookAliveRef.current || sessionIdRef.current !== sid) return;
+      applySkillDiagnosticsSnapshot(skillDiagnosticsRevision, agentState.state?.skillDiagnostics);
       const applied = applyAuthoritativeModel(toThinkingModelMeta(agentState.state?.model), token);
       if (!applied) return; // stale snapshot — drop its thinking level too
       if (agentState.state?.thinkingLevel !== undefined) {
@@ -737,7 +777,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setFastModeEnabled(agentState.state.fastModeEnabled);
       }
       setFastModeActive(agentState.state?.fastModeActive);
-      setAnthropicSlowMode(agentState.state?.anthropicSlowMode);
+      // No omp process: back to the catalog fallback.
+      setSlowModeSupported(agentState.running ? (agentState.state?.slowModeSupported ?? false) : undefined);
+      setSlowModeEnabled(agentState.state?.slowModeEnabled ?? false);
+      setSlowModeScope(agentState.state?.slowModeScope);
+      setUsageLimit(agentState.state?.usageLimit);
       if (agentState.state?.autoRetryEnabled !== undefined) setAutoRetryEnabled(agentState.state.autoRetryEnabled);
       if (agentState.state?.interruptMode !== undefined) setInterruptMode(agentState.state.interruptMode);
       if (agentState.state?.autoCompactionEnabled !== undefined) setAutoCompactionEnabled(agentState.state.autoCompactionEnabled);
@@ -746,7 +790,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } catch {
       // Best effort; the next loadSession/reconcile re-syncs.
     }
-  }, [applyAuthoritativeModel, beginAuthoritativeModelSync]);
+  }, [applyAuthoritativeModel, applySkillDiagnosticsSnapshot, beginAuthoritativeModelSync]);
 
   const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false, fenceRunId?: number) => {
     const requestSeq = ++contextRequestSeqRef.current;
@@ -811,6 +855,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // sync that started while this request was in flight.
         const token = beginAuthoritativeModelSync();
         const queueRevision = ++queueSeqRef.current;
+        const skillDiagnosticsRevision = ++skillDiagnosticsSeqRef.current;
         const stateRes = await fetch(`/api/sessions/${encodeURIComponent(sid)}/state`);
         if (!stateRes.ok) throw new Error(`HTTP ${stateRes.status}`);
         const agentState = await stateRes.json() as { running: boolean; state?: AgentStateResponse; exited?: ExitedRpcSession };
@@ -827,6 +872,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
 
         const liveState = agentState.state;
+        applySkillDiagnosticsSnapshot(skillDiagnosticsRevision, liveState?.skillDiagnostics);
         const modelApplied = applyAuthoritativeModel(toThinkingModelMeta(liveState?.model), token);
         if (liveState) {
           if (liveState.contextUsage !== undefined) setContextUsage(liveState.contextUsage ?? null);
@@ -834,7 +880,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (modelApplied && liveState.thinkingLevel !== undefined) setThinkingLevel(normalizeThinkingLevel(liveState.thinkingLevel));
           if (liveState.fastModeEnabled !== undefined) setFastModeEnabled(liveState.fastModeEnabled);
           setFastModeActive(liveState.fastModeActive);
-          setAnthropicSlowMode(liveState.anthropicSlowMode);
+          setSlowModeSupported(agentState.running ? (liveState.slowModeSupported ?? false) : undefined);
+          setSlowModeEnabled(liveState.slowModeEnabled ?? false);
+          setSlowModeScope(liveState.slowModeScope);
+          setUsageLimit(liveState.usageLimit);
           if (liveState.autoRetryEnabled !== undefined) setAutoRetryEnabled(liveState.autoRetryEnabled);
           if (liveState.interruptMode !== undefined) setInterruptMode(liveState.interruptMode);
           if (liveState.autoCompactionEnabled !== undefined) setAutoCompactionEnabled(liveState.autoCompactionEnabled);
@@ -845,6 +894,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (liveState.todoPhases !== undefined) setTodoPhases(liveState.todoPhases ?? []);
           applyQueueStateSnapshot(queueRevision, liveState.queuedMessages);
         } else if (!agentState.running) {
+          setSlowModeSupported(undefined);
           applyQueueStateSnapshot(queueRevision, null);
         }
         if (showLoading) setLoading(false);
@@ -870,7 +920,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // Ensure the flag is cleared even if the pre-state early-return path was taken
       if (showLoading && includeState && !messagesLoaded) initialHydrationPendingRef.current = false;
     }
-  }, [catchUp, refreshSubagentHistory, applyAuthoritativeModel, beginAuthoritativeModelSync, applyQueueStateSnapshot]);
+  }, [catchUp, refreshSubagentHistory, applyAuthoritativeModel, beginAuthoritativeModelSync, applyQueueStateSnapshot, applySkillDiagnosticsSnapshot]);
 
   const loadContext = useCallback(async (sid: string, leafId: string | null, includePreCompaction = false): Promise<boolean> => {
     const seq = ++contextRequestSeqRef.current;
@@ -923,6 +973,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     });
   }, [isNew, newSessionCwd, onSessionCreated]);
 
+  // Assigned after connectEvents is defined. A runtime created for an empty
+  // chat emits its startup frames before any stream exists, so it must be
+  // observed (and its state snapshot recovered on stream open) right away.
+  const observeCreatedSessionRef = useRef<((sid: string) => void) | null>(null);
+
   const ensureNewSession = useCallback(async () => {
     if (sessionIdRef.current) return sessionIdRef.current;
     if (!isNew || !newSessionCwd) return sessionIdRef.current;
@@ -957,6 +1012,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         } catch {
           // Best-effort: the spawned process already has --advisor.
         }
+      }
+      // A prompt or side question that created this runtime attaches its own stream,
+      // which would only replace an observer attached here.
+      if (hookAliveRef.current && !promptDispatchPendingRef.current && !btwAskPendingRef.current) {
+        observeCreatedSessionRef.current?.(realId);
       }
       return realId;
     })();
@@ -1028,17 +1088,19 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // below can restore everything the mount flow sets up — not just the stream.
   const reconnectActionsRef = useRef<((sid: string) => void) | null>(null);
 
-  const refreshQueueSnapshot = useCallback(async (sid: string) => {
-    const revision = ++queueSeqRef.current;
+  const refreshAgentSnapshots = useCallback(async (sid: string) => {
+    const queueRevision = ++queueSeqRef.current;
+    const skillDiagnosticsRevision = ++skillDiagnosticsSeqRef.current;
     try {
       const res = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
-      if (!res.ok || sessionIdRef.current !== sid) return;
+      if (!res.ok || !hookAliveRef.current || sessionIdRef.current !== sid) return;
       const data = await res.json() as { state?: AgentStateResponse };
-      applyQueueStateSnapshot(revision, data.state?.queuedMessages);
+      applyQueueStateSnapshot(queueRevision, data.state?.queuedMessages);
+      applySkillDiagnosticsSnapshot(skillDiagnosticsRevision, data.state?.skillDiagnostics);
     } catch {
-      // The next queue_update or state snapshot heals the panel.
+      // The next live update or state snapshot heals these views.
     }
-  }, [applyQueueStateSnapshot]);
+  }, [applyQueueStateSnapshot, applySkillDiagnosticsSnapshot]);
 
   const connectEvents = useCallback((sid: string, restoreWrapper = false): Promise<EventStreamConnectionResult> => {
     // A backoff timer from an earlier CLOSED stream may still be pending (e.g.
@@ -1085,9 +1147,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // Side questions: omp re-reads the persisted history on stream open, so
         // a snapshot here catches topics asked in the terminal or another tab.
         void refreshBtwHistory(sid);
-        // Subscribe, then snapshot: omp does not replay queue_update frames
-        // emitted before this stream opened (it coalesces against the last).
-        void refreshQueueSnapshot(sid);
+        // Subscribe, then snapshot: OMP does not replay queue or diagnostics
+        // updates emitted before this stream opened.
+        void refreshAgentSnapshots(sid);
       };
 
       es.onmessage = (e) => {
@@ -1159,7 +1221,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // connection must be ready before they continue.
       };
     });
-}, [applyBtwFrame, catchUp, clearLiveToolResults, eventCoalescer, refreshBtwHistory, refreshQueueSnapshot]);
+}, [applyBtwFrame, catchUp, clearLiveToolResults, eventCoalescer, refreshBtwHistory, refreshAgentSnapshots]);
+  observeCreatedSessionRef.current = (sid: string) => {
+    if (!hookAliveRef.current || sessionIdRef.current !== sid || eventSourceRef.current) return;
+    void connectEvents(sid);
+  };
 
   // ---------------------------------------------------------------------
   // Host-tool bridge: omp-web registers tools the AGENT can call. The server
@@ -1644,6 +1710,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (token === null) return;
     try {
       const queueRevision = ++queueSeqRef.current;
+      const skillDiagnosticsRevision = ++skillDiagnosticsSeqRef.current;
       const res = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
       if (!res.ok) return;
       const data = await res.json() as { running?: boolean; state?: AgentStateResponse };
@@ -1653,6 +1720,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (!hookAliveRef.current || sessionIdRef.current !== sid || promptRunIdRef.current !== runId
         || responseRunVersionRef.current !== responseVersion) return;
       const state = data.state;
+      applySkillDiagnosticsSnapshot(skillDiagnosticsRevision, state?.skillDiagnostics);
       if (!promptDispatchPendingRef.current && state?.responseObserved) runHadContentRef.current = true;
       // Mirror compaction state unconditionally: a missed compaction_end
       // would otherwise leave the "Stop compaction" UI stuck. No state
@@ -1692,7 +1760,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         void reconcileAgentState(sid);
       }
     }
-  }, [applyQueueStateSnapshot, finishPromptWithoutStream, refreshSubagentRoster]);
+  }, [applyQueueStateSnapshot, applySkillDiagnosticsSnapshot, finishPromptWithoutStream, refreshSubagentRoster]);
 
   // Recovery net for missed SSE events: while the agent is running, verify
   // against the server periodically and whenever the tab returns to the
@@ -1766,7 +1834,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (cancelled) return;
           const tps = data?.state?.tokensPerSecond;
           setTokensPerSecond(typeof tps === "number" && Number.isFinite(tps) && tps > 0 ? tps : null);
-          if (data?.state) setAnthropicSlowMode(data.state.anthropicSlowMode);
+          if (data?.state) setUsageLimit(data.state.usageLimit);
         })
         .catch(() => {});
       return () => { cancelled = true; };
@@ -1782,8 +1850,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           // A sample in flight when the run ends must not overwrite the end-of-run state.
           if (cancelled) return;
           const tps = data?.state?.tokensPerSecond;
-          // The usage-limit badge changes per Anthropic response (lane entry, % left).
-          if (data?.state) setAnthropicSlowMode(data.state.anthropicSlowMode);
+          // The usage-limit badge changes per provider response (lane entry, % left).
+          if (data?.state) setUsageLimit(data.state.usageLimit);
           setTokensPerSecond(typeof tps === "number" && Number.isFinite(tps) && tps > 0 ? tps : null);
         })
         .catch(() => {});
@@ -1808,8 +1876,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
 
   /** Cancel one pending message in omp. The chip itself leaves through omp's
-   *  queue snapshot; resolves true only when omp confirms the removal. */
-  const removeQueuedMessage = useCallback(async (text: string, queue: keyof QueuedMessages): Promise<boolean> => {
+   *  queue snapshot; resolves to the removed message's images (empty when it
+   *  had none or omp does not return them) only when omp confirms the
+   *  removal, else false. */
+  const removeQueuedMessage = useCallback(async (text: string, queue: keyof QueuedMessages): Promise<ChatDraftImage[] | false> => {
     const sid = sessionIdRef.current;
     if (!hookAliveRef.current || !sid || !text) return false;
     if (!queuedMessagesRef.current[queue].includes(text)) {
@@ -1820,10 +1890,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const removal = { sessionId: sid };
     queuedRemovalRef.current = removal;
     try {
-      const result = await sendAgentCommand<{ removed: boolean }>(sid, {
+      const result = await sendAgentCommand<{ removed: boolean; images?: unknown }>(sid, {
         type: "remove_queued_message", message: text, queue,
       });
-      if (result?.removed === true) return true;
+      if (result?.removed === true) return toDraftImages(result.images);
       if (hookAliveRef.current && sessionIdRef.current === sid) {
         addNotice({ type: "warning", message: translate("agentSession.queuedRemovalUnavailable") });
       }
@@ -1864,6 +1934,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const handleAgentEvent = useCallback((event: AgentEvent) => {
     switch (event.type) {
+      case "skill_diagnostics_update": {
+        const revision = ++skillDiagnosticsSeqRef.current;
+        applySkillDiagnosticsSnapshot(revision, event.data);
+        break;
+      }
       case "queue_update": {
         const snapshot = readQueueSnapshot(event);
         if (snapshot) {
@@ -1960,15 +2035,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           void loadSession(endedSid, false, false, endedRunId);
           const endToken = beginAuthoritativeModelSync();
           const queueRevision = ++queueSeqRef.current;
+          const skillDiagnosticsRevision = ++skillDiagnosticsSeqRef.current;
           fetch(`/api/agent/${encodeURIComponent(endedSid)}`)
             .then((r) => (r.ok ? r.json() as Promise<{ state?: AgentStateResponse }> : null))
             .then((d) => {
               // Stale terminal snapshot: the user switched sessions or started
               // the next run while this request was in flight — drop it.
-              if (!d || sessionIdRef.current !== endedSid || promptRunIdRef.current !== endedRunId) return;
+              if (!d || !hookAliveRef.current || sessionIdRef.current !== endedSid || promptRunIdRef.current !== endedRunId) return;
               // The queue does not depend on a model: an exited wrapper still
               // means nothing is queued.
               applyQueueStateSnapshot(queueRevision, d.state?.queuedMessages);
+              applySkillDiagnosticsSnapshot(skillDiagnosticsRevision, d.state?.skillDiagnostics);
               if (!d.state?.model) return;
               const applied = applyAuthoritativeModel(toThinkingModelMeta(d.state.model), endToken);
               if (!applied) return; // stale snapshot — drop everything derived from it
@@ -1979,7 +2056,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
               // composer toggle stuck on a stale value.
               if (d.state?.fastModeEnabled !== undefined) setFastModeEnabled(d.state.fastModeEnabled);
               setFastModeActive(d.state?.fastModeActive);
-              setAnthropicSlowMode(d.state?.anthropicSlowMode);
+              setSlowModeSupported(d.state?.slowModeSupported ?? false);
+              setSlowModeEnabled(d.state?.slowModeEnabled ?? false);
+              setSlowModeScope(d.state?.slowModeScope);
+              setUsageLimit(d.state?.usageLimit);
               if (d.state?.extensionStatuses !== undefined) setExtensionStatuses(d.state.extensionStatuses ?? []);
               if (d.state?.extensionWidgets !== undefined) setExtensionWidgets(d.state.extensionWidgets ?? []);
               if (d.state?.todoPhases !== undefined) setTodoPhases(d.state.todoPhases ?? []);
@@ -2089,7 +2169,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             if (d.state.thinkingLevel !== undefined) setThinkingLevel(normalizeThinkingLevel(d.state.thinkingLevel));
             if (d.state.fastModeEnabled !== undefined) setFastModeEnabled(d.state.fastModeEnabled);
             setFastModeActive(d.state.fastModeActive);
-            setAnthropicSlowMode(d.state.anthropicSlowMode);
+            setSlowModeSupported(d.state.slowModeSupported ?? false);
+            setSlowModeEnabled(d.state.slowModeEnabled ?? false);
+            setSlowModeScope(d.state.slowModeScope);
+            setUsageLimit(d.state.usageLimit);
             if (d.state.autoRetryEnabled !== undefined) setAutoRetryEnabled(d.state.autoRetryEnabled);
             if (d.state.interruptMode !== undefined) setInterruptMode(d.state.interruptMode);
             if (d.state.autoCompactionEnabled !== undefined) setAutoCompactionEnabled(d.state.autoCompactionEnabled);
@@ -2430,7 +2513,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         handleExtensionUiRequest(event as unknown as IncomingExtensionUiRequest);
         break;
     }
-}, [addNotice, catchUp, eventCoalescer, clearLiveToolResults, clearTerminalReconcileTimer, finishPromptWithoutStream, handleExtensionUiRequest, handleHostToolCall, handleHostUriRequest, loadSession, mergeSubagents, onAgentEnd, reconcileAgentState, refreshLiveModelState, resetSubagentActivityState, applyAuthoritativeModel, beginAuthoritativeModelSync, setLiveToolResult, surfaceQuotaOnStream, updateQueuedMessages, applyQueueStateSnapshot]);
+}, [addNotice, catchUp, eventCoalescer, clearLiveToolResults, clearTerminalReconcileTimer, finishPromptWithoutStream, handleExtensionUiRequest, handleHostToolCall, handleHostUriRequest, loadSession, mergeSubagents, onAgentEnd, reconcileAgentState, refreshLiveModelState, resetSubagentActivityState, applyAuthoritativeModel, applySkillDiagnosticsSnapshot, beginAuthoritativeModelSync, setLiveToolResult, surfaceQuotaOnStream, updateQueuedMessages, applyQueueStateSnapshot]);
   handleAgentEventRef.current = handleAgentEvent;
   syncActionsRef.current = {
     metadata: (context, version, hasLive = liveModelMeta !== null || currentModelOverride !== null) => {
@@ -2786,19 +2869,64 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   executeBashRef.current = executeBash;
 
   const withdrawAndAbort = useCallback(async (sid: string, onAbortSent: () => void) => {
-    // Take pending messages back out of omp BEFORE the abort, like the TUI's
-    // Esc: omp runs a queued steer as soon as an abort lands (and keeps a
-    // follow-up for after the next reply, #130). Withdrawn texts return to
-    // this session's draft; a message the model already took (removed:
-    // false) lands in the transcript instead. A steer whose send has not
-    // reached omp's queue snapshot yet is not withdrawn.
+    // Captured at the click: no abort below may reach a run that started
+    // since (this client's next prompt or another device's).
+    const runId = promptRunIdRef.current;
+    const runsEnded = runsEndedRef.current;
+    const sameRun = () => promptRunIdRef.current === runId && runsEndedRef.current === runsEnded;
+    // Like the TUI's Esc, omp takes every pending user message back and then
+    // aborts, in one step: it also catches a steer this client's queue
+    // snapshot does not list yet, or one the run already claimed but never
+    // recorded, which a removal by text cannot reach and which omp would
+    // otherwise run as a new turn right after the abort. The texts and images
+    // return to this session's draft (omp drops the images from a response
+    // over its transport limit). Known window: they exist only in the
+    // response until the abort finishes, so a reload during a slow abort
+    // loses them.
+    type RestoredQueue = { steering?: Array<{ text?: unknown; images?: unknown[] }>; followUp?: Array<{ text?: unknown; images?: unknown[] }> };
+    let restoredQueue: RestoredQueue | null | undefined;
+    let unsupported = false;
+    let failures = 0;
+    // A failure after omp already withdrew would lose the texts on the
+    // per-entry path (the queue is empty by then). Retrying the same command
+    // is safe instead: omp returns whatever is still queued.
+    for (let attempt = 0; attempt < 2 && restoredQueue === undefined && !unsupported && (attempt === 0 || sameRun()); attempt++) {
+      try {
+        restoredQueue = (await sendAgentCommand<RestoredQueue>(sid, { type: "abort_and_restore_queue" })) ?? null;
+      } catch (error) {
+        unsupported = error instanceof Error && error.message.includes("Unknown command");
+        if (!unsupported) failures += 1;
+      }
+    }
+    if (!unsupported) {
+      const steering = Array.isArray(restoredQueue?.steering) ? restoredQueue.steering : [];
+      const followUp = Array.isArray(restoredQueue?.followUp) ? restoredQueue.followUp : [];
+      const entries = [...steering, ...followUp];
+      const texts = entries
+        // An image-only message comes back as omp's "[Image]" chip label,
+        // which is not text to put back; a literal "[Image]" without images is.
+        .filter((entry) => !(entry.text === "[Image]" && Array.isArray(entry.images) && entry.images.length > 0))
+        .map((entry) => entry.text)
+        .filter((text): text is string => typeof text === "string" && text.length > 0);
+      const images = entries.flatMap((entry) => toDraftImages(entry.images));
+      if (texts.length > 0 || images.length > 0) recoverDraft(sid, { text: texts.join("\n\n"), images });
+      // A failed attempt may have withdrawn messages whose texts were in the
+      // lost response; say so unless the retry brought texts back.
+      if (failures > 0 && texts.length === 0 && hookAliveRef.current && sessionIdRef.current === sid) {
+        addNotice({ type: "warning", message: translate("agentSession.queueRestoreUncertain") });
+      }
+      return;
+    }
+    // omp before abort_and_restore_queue: take pending messages back out of
+    // omp BEFORE the abort: omp runs a queued steer as soon as an abort lands
+    // (and keeps a follow-up for after the next reply, #130). A message the
+    // model already took (removed: false) lands in the transcript instead. A
+    // steer whose send has not reached omp's queue snapshot yet is not withdrawn.
     const pending = queuedMessagesRef.current;
     const entries = [
       ...pending.steering.map((text) => ({ text, queue: "steering" as const })),
       ...pending.followUp.map((text) => ({ text, queue: "followUp" as const })),
     ];
-    const runId = promptRunIdRef.current;
-    const runsEnded = runsEndedRef.current;
     const removed: boolean[] = [];
     const restored: boolean[] = [];
     let recoveredBlock = "";
@@ -2810,7 +2938,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (fresh.length === 0) return;
       entries.forEach((_, i) => { if (removed[i]) restored[i] = true; });
       const block = entries.filter((_, i) => restored[i]).map((entry) => entry.text).join("\n\n");
-      recoverDraftText(sid, block, recoveredBlock ? { lead: recoveredBlock, fallback: fresh.join("\n\n") } : undefined);
+      recoverDraft(sid, { text: block, replace: recoveredBlock ? { lead: recoveredBlock, fallback: fresh.join("\n\n") } : undefined });
       recoveredBlock = block;
     };
     const removals = Promise.all(entries.map(async (entry, i) => {
@@ -2846,7 +2974,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     recoverWithdrawn();
     // The targeted run may have ended during the wait and another prompt
     // (this client's or another device's) started: this Stop is not for it.
-    if (promptRunIdRef.current === runId && runsEndedRef.current === runsEnded) {
+    if (sameRun()) {
       try {
         await sendAgentCommand(sid, { type: "abort" });
       } catch (e) {
@@ -2956,6 +3084,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
         if (!sid) return;
         await sendAgentCommand(sid, { type: "set_model", provider, modelId });
+        // A spawned new session reports /slow support per model.
+        await refreshLiveModelState(sid);
         return;
       }
       const sid = sessionIdRef.current;
@@ -2987,6 +3117,20 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [addNotice, ensureNewSession, refreshLiveModelState]);
 
+  const handleSlowModeChange = useCallback(async (enabled: boolean) => {
+    // Before omp runs, the toggle comes from the catalog: spawn it like Fast.
+    const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current ?? await ensureNewSession();
+    if (!sid) return;
+    try {
+      const result = await sendAgentCommand<{ enabled?: boolean }>(sid, { type: "set_slow_mode", enabled });
+      setSlowModeEnabled(result?.enabled ?? enabled);
+      void refreshLiveModelState(sid);
+    } catch (error) {
+      console.error("Failed to change Slow mode:", error);
+      addNotice({ type: "error", message: error instanceof Error ? error.message : String(error) });
+    }
+  }, [addNotice, ensureNewSession, refreshLiveModelState]);
+
   /** Toggle automatic retry for transient model failures. */
   const handleAutoRetryChange = useCallback(async (enabled: boolean) => {
     const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
@@ -2999,6 +3143,27 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       addNotice({ type: "error", message: error instanceof Error ? error.message : String(error) });
     }
   }, [addNotice]);
+
+  const setSkillStartupDiagnostics = useCallback(async (enabled: boolean): Promise<SkillDiagnosticsSnapshot> => {
+    if (typeof enabled !== "boolean") throw new Error("Skill startup diagnostics enabled must be a boolean");
+    const sid = sessionIdRef.current;
+    if (!sid) throw new Error("Skill diagnostics require an active session");
+    const revision = ++skillDiagnosticsSeqRef.current;
+    const result = await sendAgentCommand<unknown>(sid, { type: "set_skill_startup_diagnostics", enabled });
+    if (!hookAliveRef.current || sessionIdRef.current !== sid) throw new Error("Skill diagnostics request became stale");
+    const snapshot = parseSkillDiagnosticsSnapshot(result);
+    if (!snapshot) throw new Error("Skill diagnostics are unavailable for this session");
+    // OMP emits its update frame before answering, so a newer frame or snapshot can
+    // already own the view. The setting was still saved: report what is current
+    // instead of failing, and never roll the view back to this older reply.
+    if (revision <= skillDiagnosticsAppliedSeqRef.current) {
+      const current = skillDiagnosticsRef.current;
+      if (!current) throw new Error("Skill diagnostics are unavailable for this session");
+      return current;
+    }
+    publishSkillDiagnostics(revision, snapshot);
+    return snapshot;
+  }, [publishSkillDiagnostics]);
 
   /** Change how steering interrupts the running agent (immediate vs wait). */
   const handleInterruptModeChange = useCallback(async (mode: "immediate" | "wait") => {
@@ -3146,6 +3311,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setModelThinkingLevelMaps(d.thinkingLevelMaps ?? {});
       const nextModelList = d.modelList ?? [];
       setModelList(nextModelList);
+      setAnthropicSlowMode(d.anthropicSlowMode === true);
       if (isNew) {
         const match = d.defaultModel
           ? nextModelList.find((m) => m.id === d.defaultModel?.modelId && m.provider === d.defaultModel?.provider)
@@ -3218,9 +3384,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     };
 
     try {
-      const sid = sessionIdRef.current ?? await ensureNewSession();
+      // Commands that talk to the runtime create it here. /btw <question> and the web
+      // prompt commands create it inside askBtw/handleSend, which attach their own stream.
+      const ensureRuntime = async () => sessionIdRef.current ?? await ensureNewSession();
       switch (commandName) {
         case "compact": {
+          const sid = await ensureRuntime();
           if (!sid || isCompactingRef.current || isCompacting) return complete({ handled: true, error: translate("agentSession.noSessionToCompact") });
           isCompactingRef.current = true;
           setIsCompacting(true);
@@ -3242,6 +3411,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
 
         case "reload": {
+          const sid = await ensureRuntime();
           if (!sid) return complete({ handled: true, error: translate("agentSession.noSessionToReload") });
           await sendAgentCommand(sid, { type: "reload" });
           await Promise.all([
@@ -3253,6 +3423,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
 
         case "name": {
+          const sid = await ensureRuntime();
           if (!sid) return complete({ handled: true, error: translate("agentSession.noSessionToName") });
           if (!args) return complete({ handled: true, error: translate("agentSession.nameUsage") });
           await sendAgentCommand(sid, { type: "set_session_name", name: args });
@@ -3262,6 +3433,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
 
         case "session": {
+          const sid = await ensureRuntime();
           if (!sid) return complete({ handled: true, error: translate("agentSession.noActiveSession") });
           const stats = await sendAgentCommand<SessionStatsInfo>(sid, { type: "get_session_stats" });
           if (stats) {
@@ -3274,6 +3446,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         case "btw": {
           // `/btw` alone opens the history; with a question it asks one.
           if (!args) {
+            const sid = await ensureRuntime();
             if (!sid) return complete({ handled: true, error: translate("agentSession.noActiveSession") });
             void openBtwHistory(sid);
             return { handled: true };
@@ -3282,6 +3455,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
 
         case "copy": {
+          const sid = await ensureRuntime();
           if (!sid) return complete({ handled: true, error: translate("agentSession.noActiveSession") });
           const data = await sendAgentCommand<LastAssistantTextResponse>(sid, { type: "get_last_assistant_text" });
           const textToCopy = data?.text ?? "";
@@ -3345,7 +3519,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const toPiImages = (images?: AttachedImage[]) => images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
   const handleSteer = useCallback(async (message: string, images?: AttachedImage[]) => {
     const sid = sessionIdRef.current;
-    if (!sid) return;
+    if (!sid) return false;
     const piImages = toPiImages(images);
     try {
       await sendAgentCommand(sid, {
@@ -3353,12 +3527,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         message,
         ...(piImages?.length ? { images: piImages } : {}),
       });
+      return true;
     } catch (e) {
       console.error("Failed to steer:", e);
       addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
-      opts.chatInputRef?.current?.insertIfEmpty(message);
+      return false;
     }
-  }, [addNotice, opts.chatInputRef]);
+  }, [addNotice]);
 
   const handlePromptWithStreamingBehavior = useCallback(async (
     message: string,
@@ -3366,7 +3541,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     images?: AttachedImage[],
   ) => {
     const sid = sessionIdRef.current;
-    if (!sid) return;
+    if (!sid) return false;
     const piImages = toPiImages(images);
     try {
       await sendAgentCommand(sid, {
@@ -3375,16 +3550,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         streamingBehavior: behavior,
         ...(piImages?.length ? { images: piImages } : {}),
       });
+      return true;
     } catch (e) {
       console.error("Failed to queue prompt:", e);
       addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
-      opts.chatInputRef?.current?.insertIfEmpty(message);
+      return false;
     }
-  }, [addNotice, opts.chatInputRef]);
+  }, [addNotice]);
 
   const handleFollowUp = useCallback(async (message: string, images?: AttachedImage[]) => {
     const sid = sessionIdRef.current;
-    if (!sid) return;
+    if (!sid) return false;
     const piImages = toPiImages(images);
     try {
       await sendAgentCommand(sid, {
@@ -3392,12 +3568,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         message,
         ...(piImages?.length ? { images: piImages } : {}),
       });
+      return true;
     } catch (e) {
       console.error("Failed to follow up:", e);
       addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
-      opts.chatInputRef?.current?.insertIfEmpty(message);
+      return false;
     }
-  }, [addNotice, opts.chatInputRef]);
+  }, [addNotice]);
 
   const handleAbortCompaction = useCallback(async () => {
     const sid = sessionIdRef.current;
@@ -3723,9 +3900,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   return {
     // State
     data, loading, error, activeLeafId, messages, entryIds, showPreCompactionHistory, streamState,
-    agentRunning, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel, fastModeEnabled, fastModeActive, anthropicSlowMode, autoRetryEnabled, interruptMode, autoCompactionEnabled, steeringMode, followUpMode,
+    agentRunning, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel, fastModeEnabled, fastModeActive, slowModeSupported, slowModeEnabled, slowModeScope, usageLimit, autoRetryEnabled, interruptMode, autoCompactionEnabled, steeringMode, followUpMode,
     liveModelMeta,
-    retryInfo, contextUsage, systemPrompt, forkingEntryId,
+    retryInfo, contextUsage, systemPrompt, skillDiagnostics, forkingEntryId,
     isCompacting, compactError, compactResult, tokensPerSecond, currentModel, displayModel, isAutoModelSelection: !displayModel, sessionStats, agentPhase,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices: noticeState.visible, dismissNotice, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
@@ -3737,7 +3914,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     sessionIdRef, messagesEndRef, scrollContainerRef,
     pendingScrollToUserRef, initialScrollDoneRef,
     // Actions
-    handleSend, handleAbort, handleFork, handleNavigate, handleModelChange, handleFastModeChange, handleAutoRetryChange, handleInterruptModeChange, handleAutoCompactionChange, handleSteeringModeChange, handleFollowUpModeChange, handleCycleModel, handleCycleThinkingLevel, handleAbortRetry, handleInterruptAndReply,
+    handleSend, handleAbort, handleFork, handleNavigate, handleModelChange, handleFastModeChange, handleSlowModeChange, handleAutoRetryChange, handleInterruptModeChange, handleAutoCompactionChange, handleSteeringModeChange, handleFollowUpModeChange, handleCycleModel, handleCycleThinkingLevel, handleAbortRetry, handleInterruptAndReply, setSkillStartupDiagnostics,
     retrySession: () => { const sid = sessionIdRef.current; if (sid) void loadSession(sid, true, true); },
     handleCompact, handleHandoff, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleBuiltinSlashCommand, togglePreCompactionHistory,
