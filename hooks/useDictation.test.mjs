@@ -28,32 +28,6 @@ test("useDictation exposes a live analyser for the waveform", async () => {
   assert.match(source, /audioContextRef\.current\.close\(\)/);
 });
 
-test("ChatInput replaces the composer with the deck and routes dictation keys at window level", async () => {
-  const source = await readFile(new URL("../components/ChatInput.tsx", import.meta.url), "utf8");
-
-  // The deck covers every dictation state (recording, paused, transcribing, error)
-  assert.match(source, /isRecording \|\| isPaused \|\| (?:isReviewing \|\| )?isTranscribing \|\| transcribeError \? \(/);
-
-  // Window-level listener because the textarea is unmounted while the deck shows
-  assert.match(source, /window\.addEventListener\("keydown", onKeyDown\)/);
-  assert.match(source, /if \(e\.key === "Escape"\) \{\s*\n\s*e\.preventDefault\(\);\s*\n\s*cancelDictationAndReset\(\);/);
-});
-
-test("ChatInput supports transcribe-only and transcribe-and-send endings", async () => {
-  const source = await readFile(new URL("../components/ChatInput.tsx", import.meta.url), "utf8");
-
-  // Send mode flags the transcript to be sent once transcription succeeds,
-  // and queue modes route through sendQueued — asserted as one wired block
-  // so a regression in the branch cannot pass via unrelated string matches.
-  assert.match(
-    source,
-    /const after = dictationAfterRef\.current;[\s\S]*?if \(after === "send"\) \{\s*\n\s*void handleSend\(finalText\);\s*\n\s*\} else if \(after === "steer" \|\| after === "followup"\) \{\s*\n\s*sendQueued\(after, finalText\);/,
-  );
-
-  // handleSend accepts the composed dictation text override
-  assert.match(source, /async \(overrideText\?: string\) =>/);
-});
-
 test("useDictation supports playback preview while paused and review mode upon stop", async () => {
   const source = await readFile(new URL("./useDictation.ts", import.meta.url), "utf8");
 

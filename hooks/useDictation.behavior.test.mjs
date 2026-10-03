@@ -146,9 +146,10 @@ beforeEach(() => {
   override(URL, "revokeObjectURL", (url) => {
     world.revokedUrls.push(url);
   });
-  // Fake job API. POST /api/stt starts job-1; each GET poll answers with the
-  // next scripted response (the last one repeating); a claiming DELETE takes
-  // the last polled body; POST /api/stt/job-1 is a server-side retry.
+  // Fake job API. POST /api/stt starts job-1 and keeps its `after` intent and
+  // `owner` token, as the server does; each GET poll answers with the next
+  // scripted response (the last one repeating); a claiming DELETE takes the
+  // last polled body plus the kept intent; POST /api/stt/job-1 is a retry.
   world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "done", text: "transcribed words" }) }];
   world.polls = 0;
   world.lastPoll = null;
@@ -159,10 +160,15 @@ beforeEach(() => {
   world.scopeJobs = [];
   world.audioUrls = [];
   world.uploadGate = null;
+  world.postedAfter = null;
+  world.postedOwner = null;
+  world.claims = [];
   override(globalThis, "fetch", async (url, init) => {
     if (url.startsWith("/api/stt?scope=")) return { ok: true, status: 200, json: async () => ({ jobs: world.scopeJobs }) };
     if (init?.method === "POST" && url === "/api/stt") {
       world.postedFiles.push(init.body.get("file"));
+      world.postedAfter = init.body.get("after");
+      world.postedOwner = init.body.get("owner");
       await world.uploadGate;
       return { ok: true, status: 202, json: async () => ({ jobId: "job-1" }) };
     }
@@ -172,7 +178,12 @@ beforeEach(() => {
     }
     if (init?.method === "DELETE") {
       world.deletes.push(url);
-      const claimed = url.includes("?claim=") ? await world.lastPoll?.json() : null;
+      const query = new URL(url, "http://localhost").searchParams;
+      const claim = query.get("claim");
+      if (claim) world.claims.push({ claim, owner: query.get("owner") });
+      // As the server: only the job's owner gets the send/queue choice back.
+      const after = query.get("owner") === world.postedOwner ? world.postedAfter ?? undefined : undefined;
+      const claimed = claim ? { ...(await world.lastPoll?.json()), after } : null;
       return { ok: true, status: 200, json: async () => claimed ?? { status: "gone" } };
     }
     assert.equal(url, "/api/stt/job-1");
@@ -587,3 +598,74 @@ async function recordAndTranscribeUntilUpload(view) {
   await waitUntil(() => world.postedFiles.length === 1);
   assert.equal(view.result.current.isTranscribing, true);
 }
+
+test("a send started before leaving the session is still sent after coming back", async () => {
+  const delivered = [];
+  const mount = () =>
+    renderHook(() => useDictation({ scope: "session-1", onTranscript: (text, after) => delivered.push([text, after]) }));
+  world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "pending" }) }];
+
+  // Record and press send, then leave the session: AppShell remounts the
+  // composer per session, so the hook instance is replaced.
+  const first = mount();
+  await act(async () => {
+    first.result.current.toggle();
+  });
+  await settle();
+  await act(async () => {
+    first.result.current.stop({ after: "send" });
+  });
+  await waitUntil(() => world.polls >= 1);
+  first.unmount();
+  assert.deepEqual(world.deletes, [], "leaving must not discard the job");
+
+  // Come back: a fresh instance adopts the job and must still send it, as the
+  // job's owner, without waiting out another browser's grace period.
+  world.scopeJobs = [{ id: "job-1", status: "pending" }];
+  world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "done", text: "spoken" }) }];
+  mount();
+  await waitUntil(() => delivered.length === 1);
+
+  assert.deepEqual(delivered, [["spoken", "send"]]);
+  assert.equal(world.postedAfter, "send");
+  assert.deepEqual(world.claims.map((c) => c.owner), [world.postedOwner], "the tab keeps its owner token across remounts");
+  assert.notEqual(world.claims[0].claim, world.postedOwner, "claims use a per-composer token, never the shared tab token");
+});
+
+test("send from the review deck keeps the send choice, even when a retry has to re-upload", async () => {
+  const delivered = [];
+  const errors = [];
+  const view = renderHook(() => useDictation({
+    scope: "session-1",
+    onTranscript: (text, after) => delivered.push([text, after]),
+    onError: (message) => errors.push(message),
+  }));
+  await act(async () => {
+    view.result.current.toggle();
+  });
+  await settle();
+  await act(async () => {
+    view.result.current.stop();
+  });
+  await settle();
+  assert.equal(view.result.current.isReviewing, true);
+
+  world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "error", error: "boom" }) }];
+  await act(async () => {
+    view.result.current.confirmTranscribe({ after: "send" });
+  });
+  await waitUntil(() => errors.length === 1);
+  assert.equal(world.postedAfter, "send");
+
+  // The server lost the job: retry re-uploads the local copy, still as a send.
+  world.postedAfter = null;
+  world.retryResponse = { ok: false, status: 404, json: async () => ({ error: "Transcription job not found" }) };
+  world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "done", text: "resent" }) }];
+  await act(async () => {
+    view.result.current.retry();
+  });
+  await waitUntil(() => delivered.length === 1);
+  assert.equal(world.postedFiles.length, 2);
+  assert.equal(world.postedAfter, "send");
+  assert.deepEqual(delivered, [["resent", "send"]]);
+});

@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import { isSttAfter, type SttAfter } from "@/lib/stt";
 
 export interface UseDictationOptions {
-  onTranscript: (text: string) => void;
+  /** `after` is the send/queue choice made when the recording was sent, if any. */
+  onTranscript: (text: string, after?: SttAfter) => void;
   onError?: (error: string) => void;
   /**
    * Composer scope (session id or `new:<cwd>` draft key). Jobs started under
@@ -19,6 +21,11 @@ const STT_TIMEOUT_MS = 6 * 60_000;
 const STT_POLL_INTERVAL_MS = 500;
 const STT_POLL_REQUEST_TIMEOUT_MS = 10_000;
 const STT_ADOPT_INTERVAL_MS = 4_000;
+const STT_OWNER_TOKEN_KEY = "omp-web:stt-owner-token";
+
+function randomToken(): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 /**
  * Live capture state polled by RecordingDeck (timer + waveform) without
@@ -62,24 +69,42 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const previewUrlRef = useRef<string | null>(null);
   const chunksRef = useRef<Blob[]>([]);
-  const immediateSendRef = useRef(false);
+  // Send/queue choice for the capture being finished; null = review first.
+  const captureAfterRef = useRef<SttAfter | null>(null);
   // Audio kept after a failed/timed-out transcription so the user can retry
   // instead of losing the recording.
-  const pendingAudioRef = useRef<{ blob: Blob; ext: string } | null>(null);
+  const pendingAudioRef = useRef<{ blob: Blob; ext: string; after?: SttAfter } | null>(null);
   // Server job the deck currently shows. The server keeps its audio, so it can
   // be played and retried even from a browser that never had the recording.
   const jobIdRef = useRef<string | null>(null);
   // The upload in flight, if any. Uploads are not aborted (see runTranscription);
   // these flags tell its completion whether to discard or just drop the job.
   const uploadRef = useRef<{ discard: boolean; detached: boolean } | null>(null);
-  // Identifies this browser to the job API: it owns the jobs it uploads or
-  // retries (first claim on their transcript), and a claim whose response was
-  // lost can be repeated with it. Created on first use, never during render.
-  const claimTokenRef = useRef<string | null>(null);
-  const claimToken = useCallback(() => {
-    claimTokenRef.current ??= Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
-    return claimTokenRef.current;
+  // This tab's lasting identity: it owns the jobs it uploads or retries
+  // (first claim, and the only one told the send/queue choice). Kept in
+  // sessionStorage because AppShell remounts the composer on every session
+  // switch. A duplicated tab copies it, so it never stands in for the claim
+  // token below. Created on first use, never during render.
+  const ownerTokenRef = useRef<string | null>(null);
+  const ownerToken = useCallback(() => {
+    if (ownerTokenRef.current) return ownerTokenRef.current;
+    let token: string | null = null;
+    try {
+      token = sessionStorage.getItem(STT_OWNER_TOKEN_KEY);
+    } catch {}
+    if (!token) {
+      token = randomToken();
+      try {
+        sessionStorage.setItem(STT_OWNER_TOKEN_KEY, token);
+      } catch {}
+    }
+    ownerTokenRef.current = token;
+    return token;
   }, []);
+  // Per composer instance: only the first claim token gets the transcript, so
+  // two composers (even duplicated tabs sharing an owner token) never both
+  // insert it, and a claim whose response was lost repeats with this one.
+  const claimTokenRef = useRef<string | null>(null);
   const callbacksRef = useRef({ onTranscript, onError });
   useEffect(() => {
     callbacksRef.current = { onTranscript, onError };
@@ -198,8 +223,9 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
         await tick.promise;
         delay = STT_POLL_INTERVAL_MS;
         if (stale()) return;
+        const claimUrl = `${jobUrl}?claim=${encodeURIComponent((claimTokenRef.current ??= randomToken()))}&owner=${encodeURIComponent(ownerToken())}`;
         // Per-request timeout: a stalled request must not freeze the loop past its deadline.
-        const res = await fetch(claiming ? `${jobUrl}?claim=${encodeURIComponent(claimToken())}` : jobUrl, {
+        const res = await fetch(claiming ? claimUrl : jobUrl, {
           method: claiming ? "DELETE" : "GET",
           signal: AbortSignal.any([signal, AbortSignal.timeout(STT_POLL_REQUEST_TIMEOUT_MS)]),
           cache: "no-store",
@@ -242,7 +268,7 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
         jobIdRef.current = null;
         teardownPreviewAudio();
         pendingAudioRef.current = null;
-        callbacksRef.current.onTranscript(job.text.trim());
+        callbacksRef.current.onTranscript(job.text.trim(), isSttAfter(job.after) ? job.after : undefined);
         return;
       }
     } catch (err) {
@@ -255,13 +281,13 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
         setIsTranscribing(false);
       }
     }
-  }, [claimToken, failTranscription, releaseJob, teardownPreviewAudio]);
+  }, [ownerToken, failTranscription, releaseJob, teardownPreviewAudio]);
 
   // Uploads the recording; the server keeps it and transcribes in the background.
   // The upload is never aborted: once sent, the server may already have started
   // the job, so the 202 is always read. A discard during the upload then ends
   // that job; leaving the scope or unmounting leaves it adoptable.
-  const runTranscription = useCallback(async (blob: Blob, ext: string) => {
+  const runTranscription = useCallback(async (blob: Blob, ext: string, after?: SttAfter) => {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     const upload = { discard: false, detached: false };
@@ -272,7 +298,8 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
       const body = new FormData();
       body.append("file", blob, ext);
       if (scope) body.append("scope", scope);
-      body.append("owner", claimToken());
+      body.append("owner", ownerToken());
+      if (after) body.append("after", after);
       const startRes = await fetch("/api/stt", { method: "POST", body });
       const started = await startRes.json().catch(() => null);
       if (upload.discard) {
@@ -297,7 +324,7 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
       }
     }
     if (jobId) void followJob(jobId);
-  }, [scope, claimToken, failTranscription, followJob]);
+  }, [scope, ownerToken, failTranscription, followJob]);
 
   // Pick up this scope's job on mount, on focus or visibility, and every few
   // seconds while visible: a recording another browser sent (or this one
@@ -441,13 +468,13 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
     }
   }, []);
 
-  // Ends capture and moves the session into transcription or review. Gates on the live
-  // MediaRecorder state (not the isRecording closure) because the 5-minute
-  // cap timeout captures this callback from the render that started the
-  // recording.
-  const finishCapture = useCallback((options?: { immediateSend?: boolean }) => {
+  // Ends capture and moves the session into transcription (with a send/queue
+  // `after` choice) or review (without). Gates on the live MediaRecorder state
+  // (not the isRecording closure) because the 5-minute cap timeout captures
+  // this callback from the render that started the recording.
+  const finishCapture = useCallback((options?: { after?: SttAfter }) => {
     clearMaxTimeout();
-    immediateSendRef.current = options?.immediateSend ?? false;
+    captureAfterRef.current = options?.after ?? null;
     const recorder = mediaRecorderRef.current;
     if (!recorder || recorder.state === "inactive") return;
     const capture = captureRef.current;
@@ -466,7 +493,7 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
     captureRef.current.analyser = null;
     setIsRecording(false);
     setIsPaused(false);
-    if (options?.immediateSend) {
+    if (options?.after) {
       setIsTranscribing(true);
     } else {
       setIsReviewing(true);
@@ -483,7 +510,7 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
     }
     cancelledRef.current = false;
     chunksRef.current = [];
-    immediateSendRef.current = false;
+    captureAfterRef.current = null;
     pendingAudioRef.current = null;
     // A new recording replaces the job the deck was showing.
     if (jobIdRef.current) {
@@ -552,9 +579,10 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
         const mimeType = recorder.mimeType || "audio/webm";
         const blob = new Blob(chunksRef.current, { type: mimeType });
         const ext = mimeType.includes("mp4") ? "audio.mp4" : mimeType.includes("ogg") ? "audio.ogg" : "audio.webm";
-        pendingAudioRef.current = { blob, ext };
-        if (immediateSendRef.current) {
-          void runTranscription(blob, ext);
+        const after = captureAfterRef.current ?? undefined;
+        pendingAudioRef.current = { blob, ext, after };
+        if (after) {
+          void runTranscription(blob, ext, after);
         } else {
           setIsReviewing(true);
           setupPreviewAudio(blob);
@@ -609,14 +637,18 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
     }
   }, [isTranscribing, transcribeError, getCapturedBlob, setupPreviewAudio, pausePreview, teardownPreviewAudio]);
 
-  const confirmTranscribe = useCallback(() => {
+  // From review: transcribe, then insert (no `after`) or send/queue. Also wired
+  // straight to a click handler; a MouseEvent has no `after`, so it inserts.
+  const confirmTranscribe = useCallback((options?: { after?: SttAfter }) => {
     const pending = pendingAudioRef.current || getCapturedBlob();
     if (!pending || isTranscribing) return;
     pausePreview();
     teardownPreviewAudio();
     setIsReviewing(false);
     setTranscribeError(null);
-    void runTranscription(pending.blob, pending.ext);
+    // Keep the choice with the recording: a retry that re-uploads it sends too.
+    pendingAudioRef.current = { ...pending, after: options?.after };
+    void runTranscription(pending.blob, pending.ext, options?.after);
   }, [getCapturedBlob, isTranscribing, pausePreview, teardownPreviewAudio, runTranscription]);
   const cancel = useCallback(() => {
     cancelledRef.current = true;
@@ -651,7 +683,7 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
     const jobId = jobIdRef.current;
     if (jobId) {
       setIsTranscribing(true);
-      const res = await fetch(`/api/stt/${encodeURIComponent(jobId)}?owner=${encodeURIComponent(claimToken())}`, { method: "POST" }).catch(() => null);
+      const res = await fetch(`/api/stt/${encodeURIComponent(jobId)}?owner=${encodeURIComponent(ownerToken())}`, { method: "POST" }).catch(() => null);
       const job = await res?.json().catch(() => null);
       // Discarded, or the user left this session, while the retry was in flight.
       if (cancelledRef.current || jobIdRef.current !== jobId) return;
@@ -671,9 +703,9 @@ export function useDictation({ onTranscript, onError, scope }: UseDictationOptio
       jobIdRef.current = null;
     }
     const pending = pendingAudioRef.current;
-    if (pending) void runTranscription(pending.blob, pending.ext);
+    if (pending) void runTranscription(pending.blob, pending.ext, pending.after);
     else failTranscription("Transcription job not found");
-  }, [isTranscribing, pausePreview, teardownPreviewAudio, claimToken, followJob, releaseJob, failTranscription, runTranscription]);
+  }, [isTranscribing, pausePreview, teardownPreviewAudio, ownerToken, followJob, releaseJob, failTranscription, runTranscription]);
   const toggle = useCallback(() => {
     if (isRecording) finishCapture();
     else void start();

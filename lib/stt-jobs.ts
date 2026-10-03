@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { SttConfig } from "@/lib/stt";
+import type { SttAfter, SttConfig } from "@/lib/stt";
 
 /**
  * Server-owned transcription jobs. POST /api/stt starts one and returns its id
@@ -25,6 +25,7 @@ interface SttJob {
   claimedBy?: string;
   /** Claim token of the recording browser: it alone may claim during OWNER_GRACE_MS. */
   owner?: string;
+  after?: SttAfter;
   doneAt?: number;
   expiry?: NodeJS.Timeout;
 }
@@ -38,6 +39,7 @@ export interface SttJobView {
 
 export interface SttClaim extends SttJobView {
   text?: string;
+  after?: SttAfter;
 }
 
 /**
@@ -156,7 +158,7 @@ function countLive(): { pending: number; live: number } {
 /** Starts a job; null when the pending or live job caps are reached. */
 export function startSttJob(
   config: SttConfig,
-  input: { audio: File; scope: string | null; owner: string | undefined },
+  input: { audio: File; scope: string | null; owner: string | undefined; after: SttAfter | undefined },
 ): string | null {
   const { pending, live } = countLive();
   if (pending >= MAX_PENDING_JOBS || live >= MAX_LIVE_JOBS) return null;
@@ -192,26 +194,35 @@ export function listSttJobs(scope: string): SttJobView[] {
 }
 
 /**
- * With a claim token, claims a finished job: only the first claimer gets the
- * text, so exactly one browser inserts it, and the same token may repeat the
- * claim if its response was lost. A token on an unfinished job changes
- * nothing. Without a token, discards the job. Either way a closed job frees
- * its audio, aborts its upstream attempt, and answers "gone" afterwards.
+ * With a claim token, claims a finished job: only the first claim token gets
+ * the text, so exactly one composer inserts it, and the same claim token may
+ * repeat the claim if its response was lost. A claim token is per composer
+ * instance; `ownerToken` is the tab's lasting identity (it survives remounts
+ * but is copied into duplicated tabs, so it must never stand in for the claim
+ * token). Only the owner may claim during OWNER_GRACE_MS, and only the owner
+ * gets the send/queue `after` choice: another browser's composer holds its own
+ * draft and attachments, so it just inserts the text.
+ * A claim token on an unfinished job changes nothing. Without a claim token,
+ * discards the job. Either way a closed job frees its audio, aborts its
+ * upstream attempt, and answers "gone" afterwards.
  */
-export function closeSttJob(id: string, claimToken?: string): SttClaim | null {
+export function closeSttJob(id: string, claimToken?: string, ownerToken?: string): SttClaim | null {
   const job = store.get(id);
   if (!job) return null;
   if (job.status === "gone") {
     return claimToken && job.claimedBy === claimToken
-      ? { id, status: "done", text: job.text }
+      ? { id, status: "done", text: job.text, after: job.after }
       : view(job);
   }
   if (claimToken && job.status !== "done") return view(job);
+  const isOwner = job.owner !== undefined && ownerToken === job.owner;
   // Not yet claimable by this browser: "done" without text means "ask again".
-  if (claimToken && job.owner && claimToken !== job.owner && Date.now() - (job.doneAt ?? 0) < OWNER_GRACE_MS) {
+  if (claimToken && job.owner && !isOwner && Date.now() - (job.doneAt ?? 0) < OWNER_GRACE_MS) {
     return view(job);
   }
-  const before: SttClaim = { ...view(job), text: claimToken ? job.text : undefined };
+  // The tombstone keeps exactly what this claim delivered, for repeats.
+  job.after = claimToken && isOwner ? job.after : undefined;
+  const before: SttClaim = claimToken ? { ...view(job), text: job.text, after: job.after } : view(job);
   if (claimToken) job.claimedBy = claimToken;
   else job.text = undefined;
   job.attempt?.abort();

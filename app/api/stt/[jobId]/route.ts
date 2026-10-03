@@ -36,13 +36,17 @@ export async function POST(req: Request, { params }: Params) {
 }
 
 /**
- * DELETE /api/stt/[jobId]?claim=<token> — claim a finished transcript, or
- * (without a token) discard the job. Returns the job as it was before
- * closing: only the first claimer of a "done" job sees status "done" with its
- * text (repeatable with the same token); everyone else sees "gone".
+ * DELETE /api/stt/[jobId]?claim=<instance token>&owner=<tab token> — claim a
+ * finished transcript, or (without `claim`) discard the job. Returns the job
+ * as it was before closing: only the first claimer of a "done" job sees
+ * status "done" with its text (repeatable with the same claim token), and
+ * only the job's owner also gets its send/queue `after`; everyone else sees
+ * "gone".
  */
 export async function DELETE(req: Request, { params }: Params) {
-  const claim = new URL(req.url).searchParams.get("claim") ?? undefined;
-  const job = closeSttJob((await params).jobId, claim?.slice(0, 128));
+  const query = new URL(req.url).searchParams;
+  const claim = query.get("claim")?.slice(0, 128) || undefined;
+  const owner = query.get("owner")?.slice(0, 128) || undefined;
+  const job = closeSttJob((await params).jobId, claim, owner);
   return job ? NextResponse.json(job) : notFound();
 }

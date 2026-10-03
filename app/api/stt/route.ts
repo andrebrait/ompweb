@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { parseFormDataWithinLimit, RequestBodyTooLargeError } from "@/lib/bounded-form-data";
-import { MAX_STT_AUDIO_BYTES, MAX_STT_REQUEST_BYTES, readSttConfig } from "@/lib/stt";
+import { isSttAfter, MAX_STT_AUDIO_BYTES, MAX_STT_REQUEST_BYTES, readSttConfig } from "@/lib/stt";
 import { listSttJobs, startSttJob } from "@/lib/stt-jobs";
 
 export const dynamic = "force-dynamic";
@@ -51,11 +51,17 @@ export async function POST(request: Request) {
     }
     // The uploader's claim token: it gets first claim on the transcript.
     const owner = formData.get("owner");
+    // What to do with the transcript (send/steer/followup); absent = insert.
+    const after = formData.get("after");
+    if (after !== null && !isSttAfter(after)) {
+      return NextResponse.json({ error: "Invalid after", code: "invalid_after" }, { status: 400 });
+    }
 
     const jobId = startSttJob(config, {
       audio: file,
       scope: scope || null,
       owner: typeof owner === "string" && owner ? owner.slice(0, 128) : undefined,
+      after: after ?? undefined,
     });
     if (!jobId) {
       return NextResponse.json(
