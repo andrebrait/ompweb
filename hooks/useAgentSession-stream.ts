@@ -10,7 +10,7 @@ import type {
   SessionTreeNode,
 } from "@/lib/types";
 import type { ThinkingModelMeta } from "@/lib/thinking-levels";
-import type { RpcAvailableSlashCommand, TodoPhase } from "@/lib/pi-types";
+import type { AnthropicSlowModeState, RpcAvailableSlashCommand, TodoPhase } from "@/lib/pi-types";
 import type {
   SubagentHistoryEntry,
   SubagentInfo,
@@ -157,7 +157,7 @@ export type AgentStateResponse = {
   thinkingLevel?: string;
   fastModeEnabled?: boolean;
   fastModeActive?: boolean;
-  anthropicSlowModeLabel?: string;
+  anthropicSlowMode?: AnthropicSlowModeState;
   autoRetryEnabled?: boolean;
   interruptMode?: "immediate" | "wait";
   autoCompactionEnabled?: boolean;

@@ -28,7 +28,7 @@ import { toast } from "@/components/ui/toast";
 import { expandWebSlashCommand } from "@/lib/web-slash-commands";
 import { validateOutgoingPrompt } from "@/lib/image-attachments";
 import { createActiveGoal, parseActiveGoal, type ActiveGoal, type ActivePlan } from "@/lib/web-mode-state";
-import type { HostToolDefinition, HostUriSchemeDefinition, RpcAskDialogAnswer, RpcAvailableSlashCommand, SessionStatsInfo, TodoPhase } from "@/lib/pi-types";
+import type { AnthropicSlowModeState, HostToolDefinition, HostUriSchemeDefinition, RpcAskDialogAnswer, RpcAvailableSlashCommand, SessionStatsInfo, TodoPhase } from "@/lib/pi-types";
 import { isRecord } from "@/lib/type-guards";
 import { subscribeSessionsChanged } from "@/lib/session-change-bus";
 import { createSessionCatchUp, type SessionCatchUp, type SessionLiveFields } from "./useAgentSession-sync";
@@ -238,8 +238,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevelOption>("auto");
   const [fastModeEnabled, setFastModeEnabled] = useState(false);
   const [fastModeActive, setFastModeActive] = useState<boolean | undefined>(undefined);
-  // omp's Claude usage-limit badge (wrap-up allowance / /slow low priority).
-  const [anthropicSlowModeLabel, setAnthropicSlowModeLabel] = useState<string | undefined>(undefined);
+  // omp's Claude usage-limit stage (wrap-up allowance / /slow low priority).
+  const [anthropicSlowMode, setAnthropicSlowMode] = useState<AnthropicSlowModeState | undefined>(undefined);
   // Runtime session modes returned by get_state and changed via RPC
   // (set_interrupt_mode / set_auto_compaction).
   const [interruptMode, setInterruptMode] = useState<"immediate" | "wait">("immediate");
@@ -735,7 +735,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setFastModeEnabled(agentState.state.fastModeEnabled);
       }
       setFastModeActive(agentState.state?.fastModeActive);
-      setAnthropicSlowModeLabel(agentState.state?.anthropicSlowModeLabel);
+      setAnthropicSlowMode(agentState.state?.anthropicSlowMode);
       if (agentState.state?.autoRetryEnabled !== undefined) setAutoRetryEnabled(agentState.state.autoRetryEnabled);
       if (agentState.state?.interruptMode !== undefined) setInterruptMode(agentState.state.interruptMode);
       if (agentState.state?.autoCompactionEnabled !== undefined) setAutoCompactionEnabled(agentState.state.autoCompactionEnabled);
@@ -831,7 +831,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (modelApplied && liveState.thinkingLevel !== undefined) setThinkingLevel(normalizeThinkingLevel(liveState.thinkingLevel));
           if (liveState.fastModeEnabled !== undefined) setFastModeEnabled(liveState.fastModeEnabled);
           setFastModeActive(liveState.fastModeActive);
-          setAnthropicSlowModeLabel(liveState.anthropicSlowModeLabel);
+          setAnthropicSlowMode(liveState.anthropicSlowMode);
           if (liveState.autoRetryEnabled !== undefined) setAutoRetryEnabled(liveState.autoRetryEnabled);
           if (liveState.interruptMode !== undefined) setInterruptMode(liveState.interruptMode);
           if (liveState.autoCompactionEnabled !== undefined) setAutoCompactionEnabled(liveState.autoCompactionEnabled);
@@ -1749,7 +1749,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (cancelled) return;
           const tps = data?.state?.tokensPerSecond;
           setTokensPerSecond(typeof tps === "number" && Number.isFinite(tps) && tps > 0 ? tps : null);
-          if (data?.state) setAnthropicSlowModeLabel(data.state.anthropicSlowModeLabel);
+          if (data?.state) setAnthropicSlowMode(data.state.anthropicSlowMode);
         })
         .catch(() => {});
       return () => { cancelled = true; };
@@ -1766,7 +1766,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (cancelled) return;
           const tps = data?.state?.tokensPerSecond;
           // The usage-limit badge changes per Anthropic response (lane entry, % left).
-          if (data?.state) setAnthropicSlowModeLabel(data.state.anthropicSlowModeLabel);
+          if (data?.state) setAnthropicSlowMode(data.state.anthropicSlowMode);
           setTokensPerSecond(typeof tps === "number" && Number.isFinite(tps) && tps > 0 ? tps : null);
         })
         .catch(() => {});
@@ -1996,7 +1996,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
               // composer toggle stuck on a stale value.
               if (d.state?.fastModeEnabled !== undefined) setFastModeEnabled(d.state.fastModeEnabled);
               setFastModeActive(d.state?.fastModeActive);
-              setAnthropicSlowModeLabel(d.state?.anthropicSlowModeLabel);
+              setAnthropicSlowMode(d.state?.anthropicSlowMode);
               if (d.state?.extensionStatuses !== undefined) setExtensionStatuses(d.state.extensionStatuses ?? []);
               if (d.state?.extensionWidgets !== undefined) setExtensionWidgets(d.state.extensionWidgets ?? []);
               if (d.state?.todoPhases !== undefined) setTodoPhases(d.state.todoPhases ?? []);
@@ -2109,7 +2109,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             if (d.state.thinkingLevel !== undefined) setThinkingLevel(normalizeThinkingLevel(d.state.thinkingLevel));
             if (d.state.fastModeEnabled !== undefined) setFastModeEnabled(d.state.fastModeEnabled);
             setFastModeActive(d.state.fastModeActive);
-            setAnthropicSlowModeLabel(d.state.anthropicSlowModeLabel);
+            setAnthropicSlowMode(d.state.anthropicSlowMode);
             if (d.state.autoRetryEnabled !== undefined) setAutoRetryEnabled(d.state.autoRetryEnabled);
             if (d.state.interruptMode !== undefined) setInterruptMode(d.state.interruptMode);
             if (d.state.autoCompactionEnabled !== undefined) setAutoCompactionEnabled(d.state.autoCompactionEnabled);
@@ -3682,7 +3682,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   return {
     // State
     data, loading, error, activeLeafId, messages, entryIds, showPreCompactionHistory, streamState,
-    agentRunning, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel, fastModeEnabled, fastModeActive, anthropicSlowModeLabel, autoRetryEnabled, interruptMode, autoCompactionEnabled, steeringMode, followUpMode,
+    agentRunning, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel, fastModeEnabled, fastModeActive, anthropicSlowMode, autoRetryEnabled, interruptMode, autoCompactionEnabled, steeringMode, followUpMode,
     liveModelMeta,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, tokensPerSecond, currentModel, displayModel, isAutoModelSelection: !displayModel, sessionStats, agentPhase,
