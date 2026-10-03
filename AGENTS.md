@@ -83,6 +83,9 @@ app/api/
   skills/route.ts                 GET/PATCH loaded skills and disable-model-invocation
   skills/install/route.ts         POST install skills through npx skills add
   skills/search/route.ts          GET/POST skills.sh search
+  stt/route.ts                    POST audio (+scope) → 202 { jobId } | GET ?scope= live jobs (lib/stt-jobs.ts)
+  stt/[jobId]/route.ts            GET job state | POST retry with kept audio | DELETE ?claim= claim/discard
+  stt/[jobId]/audio/route.ts      GET the kept recording (audio/* only) for playback
   worktrees/route.ts              GET/POST/DELETE git worktrees
 
 lib/
@@ -232,16 +235,23 @@ a number when requested and applies only if no newer snapshot or
 `queue_update` was applied (HTTP and SSE can reorder). Edit/Delete use
 `remove_queued_message` (act only on `removed: true`), Steer uses
 `promote_queued_message`; the chip changes when omp's next snapshot arrives.
-`handleAbort` coalesces overlapping Stops, then withdraws pending messages BEFORE sending `abort` (bounded by
-`WITHDRAW_BEFORE_ABORT_MS`), like the TUI's Esc: omp runs a queued steer as
-soon as an abort lands. Withdrawn text goes to the session draft via
-`recoverDraftText`, saved as each removal confirms. A follow-up that answers
-`removed: false` is retried on `steering` (a concurrent promotion moved it);
-never the reverse. The abort is fenced to the prompt run id captured at Stop,
-so it cannot kill a prompt started during the wait. Known gap: input taken by
-live steering answers `removed: false`, and RPC `abort` does not call
-`withdrawLiveSteering` (the TUI's `clearQueue({ forInterrupt: true })` does),
-so omp requeues it on abort and runs it next; omp-web cannot prevent that.
+`handleAbort` coalesces overlapping Stops, then sends `abort_and_restore_queue`:
+omp's Esc (`clearQueue({ forInterrupt: true })`, then abort) in one step,
+returning the withdrawn user messages, which go to the session draft via
+`recoverDraftText`. It covers what a client snapshot cannot: a steer promoted
+after the last `queue_update`, and live-steered input the run claimed but never
+recorded (omp would otherwise requeue it and drain it into a new turn right
+after the abort). Never reimplement this client-side. A failed request is
+retried once (omp returns whatever is still queued) and only while the run
+captured at the click is current; texts lost with a response that never
+arrived cannot be recovered, so the hook warns (`queueRestoreUncertain`).
+Fallback ONLY when omp answers "Unknown command" (omp without the command):
+withdraw each listed message with `remove_queued_message` BEFORE sending
+`abort` (bounded by `WITHDRAW_BEFORE_ABORT_MS`), saved as each removal
+confirms. A follow-up that answers `removed: false` is retried on `steering`
+(a concurrent promotion moved it); never the reverse. Every abort is fenced to
+the prompt run id captured at the click, so it cannot kill a prompt started
+during the wait.
 
 ### Running state SSE + reconciliation
 - The sidebar listens to `/api/agent/running/events`, backed by `subscribeRunningSessions()` in `lib/rpc-manager.ts`, so running badges update without polling.
@@ -479,6 +489,36 @@ so omp requeues it on abort and runs it next; omp-web cannot prevent that.
 - Ghost state lives in a small external store (`useSyncExternalStore` in
   `GhostMirror`), not ChatInput state: re-rendering the composer per ghost
   change was the dominant per-keystroke cost.
+
+### Voice transcription jobs (`lib/stt-jobs.ts`, `/api/stt`, `hooks/useDictation.ts`)
+- The browser never waits on the STT endpoint: `POST /api/stt` keeps the
+  recording in memory and starts a job; the hook polls `GET /api/stt/[jobId]`
+  (proxies with ~30s timeouts would otherwise return HTML 504s). Job failures
+  are 200 payloads for the same reason.
+- Jobs carry the composer scope (`draftKey`: session id or `new:<cwd>`). The
+  hook adopts the newest job for its scope on mount, focus, visibility and
+  every 4s while visible and idle, so another browser can play (`/audio`),
+  retry (`POST`) or discard it. Leaving the scope stops following without
+  discarding.
+- A finished job is delivered only by claim:
+  `DELETE ?claim=<instance token>&owner=<tab token>` returns the text to the
+  first claim token (repeatable with the same token); polls never carry text,
+  and other composers see `gone` and stand down silently. A claim on an
+  unfinished job is a no-op; a `DELETE` without `claim` discards and aborts
+  the upstream request.
+- Two tokens, never merged. The tab token (sessionStorage) identifies the
+  job owner: it survives the composer remounting (`AppShell` keys
+  `ChatWindow` by session), gets the 15s first claim, and alone gets the
+  send/queue choice back. A duplicated tab copies it, so exclusivity comes
+  from the claim token, which is per hook instance.
+- The send/queue choice (`after`: send | steer | followup) is uploaded with
+  the recording, kept on the job, and returned with the owner's claim. Never
+  keep it only in component state: a session switch remounts the composer and
+  loses it. A non-owner claim only inserts, since that composer holds its own
+  draft and attachments.
+- Store is per process (`globalThis` map) with caps (4 pending, 20 live) and
+  TTLs; a server restart loses jobs, and the hook then re-uploads its local
+  copy if it has one.
 
 ### Completion sound
 - `hooks/useAudio.ts` stores the toggle in `localStorage` and reuses one `AudioContext`.
