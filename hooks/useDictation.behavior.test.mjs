@@ -163,6 +163,8 @@ beforeEach(() => {
   world.postedAfter = null;
   world.postedOwner = null;
   world.claims = [];
+  // Optional scripted claim answers (shifted per claim) before the default.
+  world.claimResponses = [];
   override(globalThis, "fetch", async (url, init) => {
     if (url.startsWith("/api/stt?scope=")) return { ok: true, status: 200, json: async () => ({ jobs: world.scopeJobs }) };
     if (init?.method === "POST" && url === "/api/stt") {
@@ -183,7 +185,8 @@ beforeEach(() => {
       if (claim) world.claims.push({ claim, owner: query.get("owner") });
       // As the server: only the job's owner gets the send/queue choice back.
       const after = query.get("owner") === world.postedOwner ? world.postedAfter ?? undefined : undefined;
-      const claimed = claim ? { ...(await world.lastPoll?.json()), after } : null;
+      const scripted = claim ? world.claimResponses.shift() : undefined;
+      const claimed = claim ? scripted ?? { ...(await world.lastPoll?.json()), after } : null;
       return { ok: true, status: 200, json: async () => claimed ?? { status: "gone" } };
     }
     assert.equal(url, "/api/stt/job-1");
@@ -668,4 +671,31 @@ test("send from the review deck keeps the send choice, even when a retry has to 
   assert.equal(world.postedFiles.length, 2);
   assert.equal(world.postedAfter, "send");
   assert.deepEqual(delivered, [["resent", "send"]]);
+});
+
+test("a claim answered without text (another browser's grace window) keeps asking until the text arrives", async () => {
+  const { view, transcripts, errors } = mountDictation();
+  world.claimResponses = [{ status: "done" }, { status: "done" }];
+  await recordAndTranscribe(view);
+  await waitUntil(() => transcripts.length === 1);
+
+  assert.deepEqual(errors, []);
+  assert.deepEqual(transcripts, ["transcribed words"]);
+  assert.equal(world.claims.length, 3);
+});
+
+test("starting a new recording discards the job the deck was showing, for every browser", async () => {
+  const { view } = mountDictation();
+  world.pollResponses = [{ ok: true, status: 200, json: async () => ({ status: "error", error: "boom" }) }];
+  await recordAndTranscribe(view);
+  await waitUntil(() => view.result.current.transcribeError === "boom");
+  assert.deepEqual(world.deletes, []);
+
+  await act(async () => {
+    view.result.current.toggle();
+  });
+  await settle();
+
+  assert.equal(view.result.current.isRecording, true);
+  assert.deepEqual(world.deletes, ["/api/stt/job-1"]);
 });

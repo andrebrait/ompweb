@@ -888,7 +888,13 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       const finalText = base + sep + text;
       insertTextAtCursor(text);
       if (after && onFollowUp) {
-        sendQueued(after === "send" ? "followup" : after, finalText);
+        // Queued messages are text-only: with attachments in the composer the
+        // queue would refuse it, so keep it here and say why.
+        if (attachedImagesRef.current.length || attachedTextFilesRef.current.length) {
+          toast.info(t("chatInput.dictationKeptWithAttachments"));
+        } else {
+          sendQueued(after === "send" ? "followup" : after, finalText);
+        }
       } else if (after && !isStreaming) {
         void handleSend(finalText);
       } else {

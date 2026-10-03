@@ -62,6 +62,12 @@ const OWNER_GRACE_MS = 15_000;
 const MAX_PENDING_JOBS = 4;
 /** Each live job holds up to 25MB of audio; refuse new ones past this. */
 const MAX_LIVE_JOBS = 20;
+/**
+ * Tombstones hold no audio but would otherwise keep a slot for
+ * GONE_JOB_TTL_MS, so an upload/discard loop would grow the store at the
+ * client's request rate. Keep at most this many; live jobs are never evicted.
+ */
+const MAX_TOMBSTONES = 20;
 
 declare global {
   // globalThis survives Next.js hot reload and is shared by the separately
@@ -95,10 +101,12 @@ function extractUpstreamErrorMessage(data: unknown, rawText: string, status: num
 }
 
 async function transcribe({ endpoint, apiKey, model }: SttConfig, audio: File, signal: AbortSignal): Promise<Pick<SttJob, "status" | "text" | "error">> {
-  const formData = new FormData();
-  formData.append("file", audio, audio.name);
-  if (model) formData.append("model", model);
+  // Everything, including building the request, stays inside the try: a
+  // rejection here would leave the job pending forever with no expiry timer.
   try {
+    const formData = new FormData();
+    formData.append("file", audio, audio.name);
+    if (model) formData.append("model", model);
     const res = await fetch(endpoint, {
       method: "POST",
       headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
@@ -155,11 +163,30 @@ function countLive(): { pending: number; live: number } {
   return { pending, live };
 }
 
+/**
+ * Drops the oldest tombstones beyond MAX_TOMBSTONES (Map order is insertion
+ * order). Tombstones never count as live: counting them would turn an
+ * upload/discard loop into a recording outage for GONE_JOB_TTL_MS.
+ */
+function pruneTombstones(): void {
+  let tombstones = 0;
+  for (const job of store.values()) if (job.status === "gone") tombstones++;
+  for (const [id, job] of store) {
+    if (tombstones <= MAX_TOMBSTONES) return;
+    if (job.status !== "gone") continue;
+    clearTimeout(job.expiry);
+    store.delete(id);
+    tombstones--;
+  }
+}
+
 /** Starts a job; null when the pending or live job caps are reached. */
 export function startSttJob(
   config: SttConfig,
   input: { audio: File; scope: string | null; owner: string | undefined; after: SttAfter | undefined },
 ): string | null {
+  // The only entry point that adds to the store, so the only one a loop can grow.
+  pruneTombstones();
   const { pending, live } = countLive();
   if (pending >= MAX_PENDING_JOBS || live >= MAX_LIVE_JOBS) return null;
   const job: SttJob = { id: randomUUID(), ...input, status: "pending" };
