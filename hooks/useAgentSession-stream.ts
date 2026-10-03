@@ -157,6 +157,7 @@ export type AgentStateResponse = {
   thinkingLevel?: string;
   fastModeEnabled?: boolean;
   fastModeActive?: boolean;
+  anthropicSlowModeLabel?: string;
   autoRetryEnabled?: boolean;
   interruptMode?: "immediate" | "wait";
   autoCompactionEnabled?: boolean;

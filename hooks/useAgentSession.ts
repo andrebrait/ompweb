@@ -238,6 +238,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevelOption>("auto");
   const [fastModeEnabled, setFastModeEnabled] = useState(false);
   const [fastModeActive, setFastModeActive] = useState<boolean | undefined>(undefined);
+  // omp's Claude usage-limit badge (wrap-up allowance / /slow low priority).
+  const [anthropicSlowModeLabel, setAnthropicSlowModeLabel] = useState<string | undefined>(undefined);
   // Runtime session modes returned by get_state and changed via RPC
   // (set_interrupt_mode / set_auto_compaction).
   const [interruptMode, setInterruptMode] = useState<"immediate" | "wait">("immediate");
@@ -733,6 +735,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setFastModeEnabled(agentState.state.fastModeEnabled);
       }
       setFastModeActive(agentState.state?.fastModeActive);
+      setAnthropicSlowModeLabel(agentState.state?.anthropicSlowModeLabel);
       if (agentState.state?.autoRetryEnabled !== undefined) setAutoRetryEnabled(agentState.state.autoRetryEnabled);
       if (agentState.state?.interruptMode !== undefined) setInterruptMode(agentState.state.interruptMode);
       if (agentState.state?.autoCompactionEnabled !== undefined) setAutoCompactionEnabled(agentState.state.autoCompactionEnabled);
@@ -828,6 +831,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (modelApplied && liveState.thinkingLevel !== undefined) setThinkingLevel(normalizeThinkingLevel(liveState.thinkingLevel));
           if (liveState.fastModeEnabled !== undefined) setFastModeEnabled(liveState.fastModeEnabled);
           setFastModeActive(liveState.fastModeActive);
+          setAnthropicSlowModeLabel(liveState.anthropicSlowModeLabel);
           if (liveState.autoRetryEnabled !== undefined) setAutoRetryEnabled(liveState.autoRetryEnabled);
           if (liveState.interruptMode !== undefined) setInterruptMode(liveState.interruptMode);
           if (liveState.autoCompactionEnabled !== undefined) setAutoCompactionEnabled(liveState.autoCompactionEnabled);
@@ -1745,23 +1749,29 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (cancelled) return;
           const tps = data?.state?.tokensPerSecond;
           setTokensPerSecond(typeof tps === "number" && Number.isFinite(tps) && tps > 0 ? tps : null);
+          if (data?.state) setAnthropicSlowModeLabel(data.state.anthropicSlowModeLabel);
         })
         .catch(() => {});
       return () => { cancelled = true; };
     }
     wasRunningForGaugeRef.current = true;
+    let cancelled = false;
     const id = setInterval(() => {
       const sid = sessionIdRef.current;
       if (!sid) return;
       void fetch(`/api/agent/${encodeURIComponent(sid)}`)
         .then((res) => (res.ok ? res.json() : null))
         .then((data: { state?: AgentStateResponse } | null) => {
+          // A sample in flight when the run ends must not overwrite the end-of-run state.
+          if (cancelled) return;
           const tps = data?.state?.tokensPerSecond;
+          // The usage-limit badge changes per Anthropic response (lane entry, % left).
+          if (data?.state) setAnthropicSlowModeLabel(data.state.anthropicSlowModeLabel);
           setTokensPerSecond(typeof tps === "number" && Number.isFinite(tps) && tps > 0 ? tps : null);
         })
         .catch(() => {});
     }, 2000);
-    return () => clearInterval(id);
+    return () => { cancelled = true; clearInterval(id); };
   }, [agentRunning]);
 
   // A different session starts from a clean slate — no stale gauge carry-over.
@@ -1986,6 +1996,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
               // composer toggle stuck on a stale value.
               if (d.state?.fastModeEnabled !== undefined) setFastModeEnabled(d.state.fastModeEnabled);
               setFastModeActive(d.state?.fastModeActive);
+              setAnthropicSlowModeLabel(d.state?.anthropicSlowModeLabel);
               if (d.state?.extensionStatuses !== undefined) setExtensionStatuses(d.state.extensionStatuses ?? []);
               if (d.state?.extensionWidgets !== undefined) setExtensionWidgets(d.state.extensionWidgets ?? []);
               if (d.state?.todoPhases !== undefined) setTodoPhases(d.state.todoPhases ?? []);
@@ -2002,7 +2013,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // A prompt handled entirely by a builtin/extension slash command:
         // no agent_start/agent_end pair will follow.
         if (event.agentInvoked !== false) break;
-        if (!agentRunningRef.current) break;
+        if (!agentRunningRef.current) {
+          // Slash commands such as /slow change session state without a run;
+          // the running path below re-reads it via loadSession instead.
+          if (sessionIdRef.current) void refreshLiveModelState(sessionIdRef.current);
+          break;
+        }
         // Fence with the current run id like agent_end does: the reload below
         // is async, and a prompt that starts while it is in flight must not be
         // overwritten by this finished run's snapshot.
@@ -2093,6 +2109,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             if (d.state.thinkingLevel !== undefined) setThinkingLevel(normalizeThinkingLevel(d.state.thinkingLevel));
             if (d.state.fastModeEnabled !== undefined) setFastModeEnabled(d.state.fastModeEnabled);
             setFastModeActive(d.state.fastModeActive);
+            setAnthropicSlowModeLabel(d.state.anthropicSlowModeLabel);
             if (d.state.autoRetryEnabled !== undefined) setAutoRetryEnabled(d.state.autoRetryEnabled);
             if (d.state.interruptMode !== undefined) setInterruptMode(d.state.interruptMode);
             if (d.state.autoCompactionEnabled !== undefined) setAutoCompactionEnabled(d.state.autoCompactionEnabled);
@@ -2440,7 +2457,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         handleExtensionUiRequest(event as unknown as IncomingExtensionUiRequest);
         break;
     }
-  }, [addNotice, catchUp, eventCoalescer, clearLiveToolResults, clearTerminalReconcileTimer, consumeQueuedMessage, finishPromptWithoutStream, handleExtensionUiRequest, handleHostToolCall, handleHostUriRequest, loadSession, mergeSubagents, onAgentEnd, reconcileAgentState, resetSubagentActivityState, applyAuthoritativeModel, beginAuthoritativeModelSync, setLiveToolResult, surfaceQuotaOnStream, updateQueuedMessages]);
+  }, [addNotice, catchUp, eventCoalescer, clearLiveToolResults, clearTerminalReconcileTimer, consumeQueuedMessage, finishPromptWithoutStream, handleExtensionUiRequest, handleHostToolCall, handleHostUriRequest, loadSession, mergeSubagents, onAgentEnd, reconcileAgentState, refreshLiveModelState, resetSubagentActivityState, applyAuthoritativeModel, beginAuthoritativeModelSync, setLiveToolResult, surfaceQuotaOnStream, updateQueuedMessages]);
   handleAgentEventRef.current = handleAgentEvent;
   syncActionsRef.current = {
     metadata: (context, version, hasLive = liveModelMeta !== null || currentModelOverride !== null) => {
@@ -3665,7 +3682,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   return {
     // State
     data, loading, error, activeLeafId, messages, entryIds, showPreCompactionHistory, streamState,
-    agentRunning, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel, fastModeEnabled, fastModeActive, autoRetryEnabled, interruptMode, autoCompactionEnabled, steeringMode, followUpMode,
+    agentRunning, modelNames, modelList, modelsLoading, modelError, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel, fastModeEnabled, fastModeActive, anthropicSlowModeLabel, autoRetryEnabled, interruptMode, autoCompactionEnabled, steeringMode, followUpMode,
     liveModelMeta,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, tokensPerSecond, currentModel, displayModel, isAutoModelSelection: !displayModel, sessionStats, agentPhase,

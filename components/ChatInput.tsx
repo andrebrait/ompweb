@@ -98,6 +98,8 @@ interface Props {
   onModelChange?: (provider: string, modelId: string) => void;
   fastModeEnabled?: boolean;
   fastModeActive?: boolean;
+  /** omp's Claude usage-limit badge, shown as a warning chip. */
+  anthropicSlowModeLabel?: string;
   fastModeSupported?: boolean;
   onFastModeChange?: (enabled: boolean) => void;
   onAbortCompaction?: () => void;
@@ -242,7 +244,7 @@ function menuDropStyle(placement: MenuPlacement, maxHeight: number | null): Reac
 
 
 export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatInput({
-  onSend, onPredictWord, onPredictWordFeedback, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, modelsLoading, onModelChange, fastModeEnabled, fastModeActive, fastModeSupported, onFastModeChange,
+  onSend, onPredictWord, onPredictWordFeedback, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, modelsLoading, onModelChange, fastModeEnabled, fastModeActive, anthropicSlowModeLabel, fastModeSupported, onFastModeChange,
   onAbortCompaction, isCompacting, compactResult,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap, modelNameOverride,
   toolPreset, onToolPresetChange,
@@ -2992,6 +2994,16 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 </svg>
                 <span>{t("chatInput.fastLabel")}</span>
               </button>
+            )}
+
+            {/* Claude usage-limit stage (wrap-up allowance or /slow low
+                priority), warning-colored like the TUI status line so
+                past-the-limit service is never mistaken for normal.
+                Layout lives in globals.css (own row on mobile). */}
+            {anthropicSlowModeLabel && (
+              <div className="composer-slow-mode-badge" title={anthropicSlowModeLabel}>
+                {anthropicSlowModeLabel}
+              </div>
             )}
 
             <div className="composer-toolbar-spacer" style={{ marginLeft: "auto" }} />

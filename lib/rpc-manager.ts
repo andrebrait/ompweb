@@ -1196,6 +1196,7 @@ export class AgentSessionWrapper {
       // The wrapper's own flag is only the spawn-time cache.
       fastModeEnabled: state.fastModeEnabled ?? state.fastMode ?? this.fastModeEnabled,
       fastModeActive: state.fastModeActive,
+      anthropicSlowModeLabel: state.anthropicSlowModeLabel,
       todoPhases: state.todoPhases ?? [],
       extensionStatuses: Array.from(this.extensionStatuses, ([key, text]) => ({ key, text })),
       extensionWidgets: Array.from(this.extensionWidgets.values()),

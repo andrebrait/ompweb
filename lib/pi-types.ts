@@ -72,6 +72,8 @@ export interface RpcSessionState {
   fastMode?: boolean;
   fastModeEnabled?: boolean;
   fastModeActive?: boolean;
+  /** Claude usage-limit badge (`low priority until 14:30 · 62% left`); absent outside it. */
+  anthropicSlowModeLabel?: string;
   /** omp's reported output throughput; null/undefined when not generating. */
   tokensPerSecond?: number | null;
 }
@@ -102,6 +104,7 @@ export interface WebSessionState {
   thinkingLevel: string;
   fastModeEnabled: boolean;
   fastModeActive?: boolean;
+  anthropicSlowModeLabel?: string;
   autoRetryEnabled?: boolean;
   tokensPerSecond?: number | null;
   todoPhases: TodoPhase[];
