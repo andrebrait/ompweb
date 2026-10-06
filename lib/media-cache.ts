@@ -159,6 +159,13 @@ export function eventWithToolResultImageUrls<E extends { type: string; [key: str
     case "message_end": return swap("message", toolResultMessageAsUrls(event.message));
     case "turn_end": return swap("toolResults", mapMessages(event.toolResults));
     case "agent_end": return swap("messages", mapMessages(event.messages));
+    case "subagent_event": {
+      // The child's raw event rides in `payload.event`.
+      const payload = event.payload;
+      if (!isRecord(payload) || !isRecord(payload.event) || typeof payload.event.type !== "string") return event;
+      const inner = eventWithToolResultImageUrls(payload.event as { type: string });
+      return inner === payload.event ? event : swap("payload", { ...payload, event: inner });
+    }
     default: return event;
   }
 }
