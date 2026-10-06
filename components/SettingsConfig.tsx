@@ -23,6 +23,7 @@ import { NOTIFICATION_TYPES, renderNotification, type NotificationType } from "@
 import {
   ensurePushSubscription,
   getNotificationDeviceId,
+  getNotificationPrefs,
   getNotificationSupport,
   showSystemNotification,
   updateNotificationPrefs,
@@ -530,10 +531,14 @@ function NotificationSettingsPanel() {
   useEffect(() => {
     let alive = true;
     setSupport(getNotificationSupport());
-    fetch(`/api/notifications/devices?deviceId=${encodeURIComponent(getNotificationDeviceId())}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: { subscribed?: boolean } | null) => { if (alive) setPushActive(data?.subscribed === true); })
-      .catch(() => {});
+    // Enabled: join (or redo) the app's startup repair, which is single-flight,
+    // so the status reflects the subscription after any repair, not before it.
+    const pushState: Promise<boolean> = getNotificationPrefs().enabled
+      ? ensurePushSubscription()
+      : fetch(`/api/notifications/devices?deviceId=${encodeURIComponent(getNotificationDeviceId())}`)
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data: { subscribed?: boolean } | null) => data?.subscribed === true);
+    pushState.then((active) => { if (alive) setPushActive(active); }).catch(() => {});
     return () => { alive = false; };
   }, []);
 

@@ -555,6 +555,8 @@ export class AgentSessionWrapper {
       this.awaitingAgentStart = false;
       this.awaitingAgentStartDeadline = 0;
       this.continuationGraceUntil = 0;
+      // A different conversation now: the old one's ids must not suppress its notifications.
+      this.movedFromIds.length = 0;
     }
     this._sessionId = state.sessionId;
     this._sessionFile = state.sessionFile ?? "";
