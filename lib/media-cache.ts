@@ -76,22 +76,25 @@ let recentChars = 0;
 
 /** Store a base64 image under its content address and return the hash. */
 export function storeInlineImage(base64: string): string {
-  const cached = recentHashes.get(base64);
-  if (cached) return cached;
-  const bytes = Buffer.from(base64, "base64");
-  const hash = createHash("sha256").update(bytes).digest("hex");
-  const copy = path.join(mediaDir(), hash);
-  // omp writes blobs in place: keep our own copy unless its blob is already complete.
-  if (fileSize(path.join(getBlobsDir(), hash)) !== bytes.length && fileSize(copy) !== bytes.length) writeAtomic(copy, bytes);
-  if (base64.length <= RECENT_MAX_CHARS) {
-    recentHashes.set(base64, hash);
-    recentChars += base64.length;
-    while (recentChars > RECENT_MAX_CHARS) {
-      const oldest = recentHashes.keys().next().value!;
-      recentChars -= oldest.length;
-      recentHashes.delete(oldest);
+  // The memo skips only decoding and hashing: the files are rechecked every
+  // time, because the sweep may have removed the copy since.
+  let hash = recentHashes.get(base64);
+  if (!hash) {
+    hash = createHash("sha256").update(Buffer.from(base64, "base64")).digest("hex");
+    if (base64.length <= RECENT_MAX_CHARS) {
+      recentHashes.set(base64, hash);
+      recentChars += base64.length;
+      while (recentChars > RECENT_MAX_CHARS) {
+        const oldest = recentHashes.keys().next().value!;
+        recentChars -= oldest.length;
+        recentHashes.delete(oldest);
+      }
     }
   }
+  const size = Buffer.byteLength(base64, "base64");
+  const copy = path.join(mediaDir(), hash);
+  // omp writes blobs in place: keep our own copy unless its blob is already complete.
+  if (fileSize(path.join(getBlobsDir(), hash)) !== size && fileSize(copy) !== size) writeAtomic(copy, Buffer.from(base64, "base64"));
   return hash;
 }
 
