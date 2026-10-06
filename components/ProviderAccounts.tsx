@@ -13,7 +13,6 @@ interface StoredAccount {
   label: string;
   detail: string;
   type: "api_key" | "oauth";
-  active: boolean;
 }
 
 /**
@@ -61,7 +60,7 @@ export function ProviderAccounts({ providerId, enabled, onChanged }: { providerI
       const d = await res.json().catch(() => ({})) as { error?: string; code?: string };
       if (!res.ok) throw new Error(d.error || d.code ? formatApiError(d) : `HTTP ${res.status}`);
       setConfirm(null);
-      // Drop the row now; the refetch only reconciles which account is active.
+      // Drop the row now; the refetch reconciles with omp's store.
       setStored((s) => s && { ...s, accounts: s.accounts.filter((a) => a.credentialId !== account.credentialId) });
       setVersion((v) => v + 1);
       onChanged();
@@ -98,7 +97,6 @@ export function ProviderAccounts({ providerId, enabled, onChanged }: { providerI
               <span title={row.title} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
               {row.plan && <span style={{ color: "var(--text-dim)" }}>{row.plan}</span>}
               {row.account?.type === "api_key" && <span style={{ color: "var(--text-dim)" }}>{t("modelsConfig.accountApiKey")}</span>}
-              {row.account?.active && <span style={{ color: "var(--status-success)", fontSize: 11 }}>{t("modelsConfig.accountActive")}</span>}
               {row.account && (
                 <button
                   type="button"

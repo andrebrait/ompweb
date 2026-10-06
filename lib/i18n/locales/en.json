@@ -1642,7 +1642,6 @@
   "modelsConfig.accountsLoading": "Loading accounts…",
   "modelsConfig.accountNumber": "Account {index}",
   "modelsConfig.accountsRotationHint": "omp manages account selection and rotation.",
-  "modelsConfig.accountActive": "active",
   "modelsConfig.accountApiKey": "API key",
   "modelsConfig.disconnectAccount": "Disconnect {label}",
   "modelsConfig.disconnectAccountTitle": "Disconnect account?",

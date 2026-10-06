@@ -10,7 +10,6 @@ interface OmpProviderAccount {
   label: string;
   detail: string;
   type: "api_key" | "oauth";
-  active: boolean;
 }
 
 // omp releases older than the get_logout_accounts/logout RPC answer "Unknown command".
@@ -20,10 +19,12 @@ function isAccount(value: unknown): value is OmpProviderAccount {
   if (typeof value !== "object" || value === null) return false;
   const a = value as Record<string, unknown>;
   return Number.isInteger(a.credentialId) && typeof a.label === "string" && typeof a.detail === "string"
-    && (a.type === "api_key" || a.type === "oauth") && typeof a.active === "boolean";
+    && (a.type === "api_key" || a.type === "oauth");
 }
 
-/** Stored credentials omp holds for one provider, active first. */
+// omp's `active` flag is relative to the utility process's own throwaway
+// session, not to any chat, so it is deliberately not passed on.
+/** Stored credentials omp holds for one provider. */
 export async function GET(_req: Request, { params }: { params: Promise<{ provider: string }> }) {
   const { provider } = await params;
   try {
@@ -34,7 +35,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ provide
     const list = Array.isArray(accounts) ? accounts.filter(isAccount) : [];
     return NextResponse.json({
       supported: true,
-      accounts: list.map(({ credentialId, label, detail, type, active }) => ({ credentialId, label, detail, type, active })),
+      accounts: list.map(({ credentialId, label, detail, type }) => ({ credentialId, label, detail, type })),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

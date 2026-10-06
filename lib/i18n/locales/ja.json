@@ -1605,7 +1605,6 @@
   "modelsConfig.accountsLoading": "アカウントを読み込み中…",
   "modelsConfig.accountNumber": "アカウント {index}",
   "modelsConfig.accountsRotationHint": "アカウントの選択とローテーションは omp が管理します。",
-  "modelsConfig.accountActive": "使用中",
   "modelsConfig.accountApiKey": "APIキー",
   "modelsConfig.disconnectAccount": "{label} を切断",
   "modelsConfig.disconnectAccountTitle": "アカウントを切断しますか？",
