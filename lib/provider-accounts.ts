@@ -33,3 +33,14 @@ export function summarizeProviderAccounts(reports: readonly ProviderUsageReport[
   }
   return [...accounts.values()];
 }
+
+/**
+ * The usage plan for one of omp's stored-account labels. omp suffixes the org
+ * (`email (org)`) while usage reports the bare email, so a plan is returned
+ * only when its email identifies exactly one stored account.
+ */
+export function planForStoredAccount(label: string, storedLabels: readonly string[], usage: readonly ProviderAccountSummary[]): string | undefined {
+  const sameEmail = (stored: string, email: string | undefined) => !!email && (stored === email || stored.startsWith(`${email} (`));
+  const match = usage.find((u) => sameEmail(label, u.label));
+  return match && storedLabels.filter((stored) => sameEmail(stored, match.label)).length === 1 ? match.plan : undefined;
+}
