@@ -19,12 +19,12 @@ import { useUiScale, type UiScalePreference } from "@/hooks/useUiScale";
 import { useTouchTargets, type TouchTargetsPreference } from "@/hooks/useTouchTargets";
 import { useSpeechSynthesis } from "@/hooks/useSpeechSynthesis";
 import { useNotificationPrefs } from "@/hooks/useNotifications";
-import { NOTIFICATION_TYPES, type NotificationType } from "@/lib/notification-events";
+import { NOTIFICATION_TYPES, renderNotification, type NotificationType } from "@/lib/notification-events";
 import {
   ensurePushSubscription,
   getNotificationDeviceId,
   getNotificationSupport,
-  notificationClientId,
+  showSystemNotification,
   updateNotificationPrefs,
   type NotificationSupport,
 } from "@/lib/notification-client";
@@ -215,7 +215,7 @@ const SETTING_INDEX: SettingIndexEntry[] = [
   { id: "notifications-completed", tab: "notifications", sectionKey: "notifications.title", labelKey: "notifications.typeCompleted", descKey: "notifications.typeCompletedDesc", fallbackSection: "Notifications", fallbackLabel: "Task finished", fallbackDesc: "A prompt and the background work it started are done. Subagents never notify.", scope: "UI" },
   { id: "notifications-input", tab: "notifications", sectionKey: "notifications.title", labelKey: "notifications.typeInput", descKey: "notifications.typeInputDesc", fallbackSection: "Notifications", fallbackLabel: "Waiting for input", fallbackDesc: "The agent asks a question or needs an approval.", scope: "UI" },
   { id: "notifications-error", tab: "notifications", sectionKey: "notifications.title", labelKey: "notifications.typeError", descKey: "notifications.typeErrorDesc", fallbackSection: "Notifications", fallbackLabel: "Run failed", fallbackDesc: "A run stops with an error after retries and fallbacks, or the omp process exits.", scope: "UI" },
-  { id: "notifications-modelSwitch", tab: "notifications", sectionKey: "notifications.title", labelKey: "notifications.typeModelSwitch", descKey: "notifications.typeModelSwitchDesc", fallbackSection: "Notifications", fallbackLabel: "Model switched automatically", fallbackDesc: "omp falls back to another model, for example after a refusal or a usage limit.", scope: "UI" },
+  { id: "notifications-modelSwitch", tab: "notifications", sectionKey: "notifications.title", labelKey: "notifications.typeModelSwitch", descKey: "notifications.typeModelSwitchDesc", fallbackSection: "Notifications", fallbackLabel: "Model switched automatically", fallbackDesc: "omp switches models on its own: a fallback after a refusal, rate limit, or usage limit, or a prewalk / plan hand-off.", scope: "UI" },
   { id: "notifications-when-active", tab: "notifications", sectionKey: "notifications.title", labelKey: "notifications.whenActive", descKey: "notifications.whenActiveDesc", fallbackSection: "Notifications", fallbackLabel: "When I'm using omp-web in another tab", fallbackDesc: "Nothing is shown for the session you are viewing.", scope: "UI" },
 ];
 
@@ -521,7 +521,7 @@ const NOTIFICATION_STATUS_KEYS: Record<Exclude<NotificationSupport, "push" | "no
 
 /** Per-device notification prefs (lib/notification-client.ts), mirrored to the server. */
 function NotificationSettingsPanel() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const prefs = useNotificationPrefs();
   const [support, setSupport] = useState<NotificationSupport | null>(null);
   const [pushActive, setPushActive] = useState(false);
@@ -537,8 +537,10 @@ function NotificationSettingsPanel() {
     return () => { alive = false; };
   }, []);
 
+  const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
   const save = (patch: Parameters<typeof updateNotificationPrefs>[0]) => {
-    void updateNotificationPrefs(patch).catch((error: unknown) => toast.error(t("notifications.enableFailed", { error: error instanceof Error ? error.message : String(error) })));
+    void updateNotificationPrefs(patch).catch((error: unknown) => toast.error(t("notifications.saveFailed"), errorText(error)));
   };
 
   const setEnabled = async (enabled: boolean) => {
@@ -546,33 +548,44 @@ function NotificationSettingsPanel() {
     try {
       // First await inside the click: Safari only prompts during the user gesture.
       if (enabled && "Notification" in window && Notification.permission === "default") await Notification.requestPermission();
-      await updateNotificationPrefs({ enabled });
+      await updateNotificationPrefs({ enabled, locale });
       if (enabled) setPushActive(await ensurePushSubscription());
     } catch (error) {
-      toast.error(t("notifications.enableFailed", { error: error instanceof Error ? error.message : String(error) }));
+      toast.error(t("notifications.enableFailed", { error: errorText(error) }));
     } finally {
       setSupport(getNotificationSupport());
       setBusy(false);
     }
   };
 
+  // With push, the server sends a real push; otherwise this tab shows one itself.
   const sendTest = async () => {
     try {
-      const res = await fetch("/api/notifications/test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ deviceId: getNotificationDeviceId(), clientId: notificationClientId }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (pushActive) {
+        const res = await fetch("/api/notifications/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deviceId: getNotificationDeviceId() }),
+        });
+        if (!res.ok) {
+          const body: unknown = await res.json().catch(() => null);
+          throw new Error(isRecord(body) && typeof body.error === "string" ? body.error : `HTTP ${res.status}`);
+        }
+      } else if (!(await showSystemNotification(renderNotification({ type: "test", sessionId: "", sessionName: "omp web" }, t)))) {
+        throw new Error(t("notifications.statusPermission"));
+      }
       toast.success(t("notifications.testSent"));
     } catch (error) {
-      toast.error(t("notifications.testFailed"), error instanceof Error ? error.message : String(error));
+      toast.error(t("notifications.testFailed"), errorText(error));
     }
   };
 
   let status: string | null = null;
   if (support && support !== "push" && support !== "no-push") status = t(NOTIFICATION_STATUS_KEYS[support]);
-  else if (support && prefs.enabled) status = t(pushActive ? "notifications.statusPush" : "notifications.statusInPage");
+  else if (support && prefs.enabled) {
+    if (Notification.permission !== "granted") status = t("notifications.statusPermission");
+    else status = t(pushActive ? "notifications.statusPush" : "notifications.statusInPage");
+  }
 
   return (
     <>

@@ -20,7 +20,7 @@ import { PRESET_FULL } from "./tool-presets";
 import { comparableProjectPath } from "./comparable-path";
 import { samePath } from "./paths";
 import { isRecord } from "./type-guards";
-import { createNotificationDetector } from "./notification-events";
+import { BLOCKING_UI_METHODS, createNotificationDetector } from "./notification-events";
 import { publishNotification } from "./notification-hub";
 import { parseSkillDiagnosticsSnapshot, type SkillDiagnosticsSnapshot } from "./skill-diagnostics";
 import { isReservedLaunchArg, loadProjectRegistry } from "./project-registry";
@@ -109,10 +109,6 @@ export class WebRpcError extends Error {
     this.code = code;
   }
 }
-
-// Extension UI methods that stay pending until the client answers (replayed to
-// newly-attached SSE listeners so dialogs survive reconnects).
-const PENDING_UI_METHODS = new Set(["select", "confirm", "input", "editor", "ask", "open_url"]);
 
 /** Shape check for an ask-dialog `answers` payload; omp validates the content. */
 function isAskAnswers(value: unknown): boolean {
@@ -865,8 +861,9 @@ export class AgentSessionWrapper {
       }
     }
 
-    const notification = this.detectNotification(event, { sessionId: this._sessionId, sessionName: this.notificationSessionName() });
-    if (notification) publishNotification(notification);
+    for (const notification of this.detectNotification(event, { sessionId: this._sessionId, sessionName: this.notificationSessionName() })) {
+      publishNotification(notification);
+    }
     this.emit(event);
     notifyRunningChange({ refreshSessionList });
   }
@@ -907,7 +904,9 @@ export class AgentSessionWrapper {
       this.proc.sendFrame({ type: "extension_ui_response", id, confirmed: true });
       return true;
     }
-    if (PENDING_UI_METHODS.has(method)) {
+    // Blocking dialogs stay pending until the client answers (replayed to
+    // newly-attached SSE listeners so dialogs survive reconnects).
+    if (BLOCKING_UI_METHODS.has(method)) {
       this.forgetPendingUiRequest(id);
       const timeout = typeof event.timeout === "number" ? event.timeout : undefined;
       if (timeout && timeout > 0) {

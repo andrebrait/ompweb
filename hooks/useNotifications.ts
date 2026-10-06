@@ -1,7 +1,7 @@
 import { createElement, useEffect, useRef, useSyncExternalStore } from "react";
 import { toast } from "@/components/ui/toast";
 import { translate } from "@/lib/i18n";
-import { DEFAULT_NOTIFICATION_PREFS, renderNotification, type NotificationEvent } from "@/lib/notification-events";
+import { DEFAULT_NOTIFICATION_PREFS, renderNotification, type NotificationEvent, type RenderedNotification } from "@/lib/notification-events";
 import {
   ensurePushSubscription,
   getNotificationDeviceId,
@@ -9,7 +9,6 @@ import {
   NOTIFICATION_MESSAGE_EVENT,
   notificationClientId,
   OPEN_SESSION_EVENT,
-  registerNotificationWorker,
   showSystemNotification,
   subscribeNotificationPrefs,
   syncNotificationDevice,
@@ -17,6 +16,9 @@ import {
 } from "@/lib/notification-client";
 
 const PRESENCE_INTERVAL_MS = 30_000;
+/** Without input for this long a visible tab no longer counts as the user being there. */
+const IDLE_AFTER_MS = 3 * 60_000;
+const ACTIVITY_EVENTS = ["pointerdown", "keydown", "wheel", "touchstart", "focus"] as const;
 
 /** Current per-device notification prefs (re-renders on change). */
 export function useNotificationPrefs() {
@@ -25,10 +27,13 @@ export function useNotificationPrefs() {
 
 /**
  * App-level notification wiring, mounted once in AppShell:
- * - tells the server which session this tab shows and whether it is visible;
+ * - tells the server which session this tab shows and whether the user is here;
  * - shows toasts / system notifications the server routes to this tab;
  * - opens the session when a notification is clicked;
  * - keeps the server's copy of this device's prefs and push subscription current.
+ *
+ * `sessionId` is the session whose chat is on screen (null while Settings or
+ * another view covers it).
  */
 export function useNotifications({ sessionId, locale, onOpenSession }: { sessionId: string | null; locale: string; onOpenSession: (sessionId: string) => void }) {
   const openRef = useRef(onOpenSession);
@@ -36,9 +41,13 @@ export function useNotifications({ sessionId, locale, onOpenSession }: { session
     openRef.current = onOpenSession;
   }, [onOpenSession]);
 
-  // Presence: every change of visibility or session, plus a keep-alive.
+  // Presence: visible and recently used. Reported on every change, plus a keep-alive.
   useEffect(() => {
-    const report = (visible = document.visibilityState === "visible") => {
+    let lastInput = Date.now();
+    let reported: boolean | null = null;
+    const present = () => document.visibilityState === "visible" && Date.now() - lastInput < IDLE_AFTER_MS;
+    const report = (visible = present()) => {
+      reported = visible;
       const body = JSON.stringify({ clientId: notificationClientId, deviceId: getNotificationDeviceId(), visible, sessionId });
       if (!visible && navigator.sendBeacon) {
         navigator.sendBeacon("/api/notifications/presence", new Blob([body], { type: "application/json" }));
@@ -46,16 +55,23 @@ export function useNotifications({ sessionId, locale, onOpenSession }: { session
       }
       void fetch("/api/notifications/presence", { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true }).catch(() => {});
     };
+    const onActivity = () => {
+      lastInput = Date.now();
+      if (reported === false && present()) report();
+    };
     const onVisibility = () => report();
     const onPageHide = () => report(false);
     report();
     const timer = setInterval(() => {
-      if (document.visibilityState === "visible") report();
+      // Keep-alive while present; one report when the user goes idle.
+      if (present() || reported) report();
     }, PRESENCE_INTERVAL_MS);
+    for (const name of ACTIVITY_EVENTS) window.addEventListener(name, onActivity, { passive: true, capture: true });
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("pagehide", onPageHide);
     return () => {
       clearInterval(timer);
+      for (const name of ACTIVITY_EVENTS) window.removeEventListener(name, onActivity, { capture: true });
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("pagehide", onPageHide);
     };
@@ -63,31 +79,21 @@ export function useNotifications({ sessionId, locale, onOpenSession }: { session
 
   // Pushes are written in the device's language.
   useEffect(() => {
-    if (getNotificationPrefs().locale !== locale) void updateNotificationPrefs({ locale }).catch(() => {});
+    const prefs = getNotificationPrefs();
+    if (prefs.enabled && prefs.locale !== locale) void updateNotificationPrefs({ locale }).catch(() => {});
   }, [locale]);
 
-  // Startup sync: the server may have lost its store, or the browser its subscription.
+  // Startup sync for enabled devices: the server may have lost its store, or the browser its subscription.
   useEffect(() => {
+    if (!getNotificationPrefs().enabled) return;
     void (async () => {
-      if (getNotificationPrefs().enabled) {
-        await registerNotificationWorker();
-        if (await ensurePushSubscription().catch(() => false)) return;
-      }
-      await syncNotificationDevice();
+      if (!(await ensurePushSubscription().catch(() => false))) await syncNotificationDevice();
     })().catch(() => {});
   }, []);
 
   // Delivery to this tab and notification clicks.
   useEffect(() => {
-    const onMessage = (raw: Event) => {
-      if (!(raw instanceof CustomEvent)) return;
-      // Sent by SessionSidebar from our own SSE stream.
-      const { kind, event }: { kind: "toast" | "os"; event: NotificationEvent } = raw.detail;
-      const rendered = renderNotification(event, translate);
-      if (kind === "os") {
-        void showSystemNotification(rendered);
-        return;
-      }
+    const showToast = (rendered: RenderedNotification, type: NotificationEvent["type"]) => {
       const description = createElement(
         "span",
         null,
@@ -107,8 +113,22 @@ export function useNotifications({ sessionId, locale, onOpenSession }: { session
             )
           : null,
       );
-      const show = event.type === "error" ? toast.error : toast.info;
+      const show = type === "error" ? toast.error : toast.info;
       show(rendered.title, description, { id: rendered.tag });
+    };
+    const onMessage = (raw: Event) => {
+      if (!(raw instanceof CustomEvent)) return;
+      // Sent by SessionSidebar from our own SSE stream.
+      const { kind, event }: { kind: "toast" | "os"; event: NotificationEvent } = raw.detail;
+      const rendered = renderNotification(event, translate);
+      if (kind === "toast") {
+        showToast(rendered, event.type);
+        return;
+      }
+      // Permission withdrawn or never granted: the toast is the only way left to tell the user.
+      void showSystemNotification(rendered).then((shown) => {
+        if (!shown) showToast(rendered, event.type);
+      });
     };
     const onOpen = (raw: Event) => {
       if (raw instanceof CustomEvent && typeof raw.detail === "string" && raw.detail) openRef.current(raw.detail);

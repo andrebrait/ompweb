@@ -31,10 +31,14 @@ self.addEventListener("notificationclick", (event) => {
       const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       const client = windows.find((candidate) => candidate.focused) || windows.find((candidate) => candidate.visibilityState === "visible") || windows[0];
       if (client) {
-        await client.focus();
-        // The page selects the session in place, keeping its live state.
-        if (sessionId) client.postMessage({ type: "omp-open-session", sessionId });
-        return;
+        try {
+          await client.focus();
+          // The page selects the session in place, keeping its live state.
+          if (sessionId) client.postMessage({ type: "omp-open-session", sessionId });
+          return;
+        } catch {
+          // focus() can be refused; open a window instead.
+        }
       }
       await self.clients.openWindow(url);
     })(),

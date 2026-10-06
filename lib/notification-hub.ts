@@ -6,12 +6,14 @@ import ja from "./i18n/locales/ja.json";
 import zhCN from "./i18n/locales/zh-CN.json";
 import { getAgentDir } from "./omp/paths";
 import {
+  isValidNotificationId,
   parseNotificationPrefs,
   renderNotification,
   type NotificationEvent,
   type NotificationPrefs,
   type RenderedNotification,
 } from "./notification-events";
+import { isRecord } from "./type-guards";
 
 /**
  * Server side of notifications: presence of open tabs, per-device preferences
@@ -23,17 +25,17 @@ import {
 export const PRESENCE_TTL_MS = 60_000;
 const MAX_DEVICES = 50;
 const PUSH_TTL_SECONDS = 3600;
+const PUSH_TIMEOUT_MS = 10_000;
 // Apple's push service rejects VAPID subjects it cannot resolve (e.g. localhost mail).
 const VAPID_SUBJECT = "https://github.com/kahme247/ompweb";
 
-export interface NotificationClient {
+/** What a tab last reported. Written only by presence reports, pruned by TTL. */
+export interface NotificationPresence {
   clientId: string;
   deviceId: string;
   visible: boolean;
   sessionId: string | null;
   lastSeen: number;
-  /** Set while the tab holds its notification SSE stream. */
-  send?: (message: NotificationMessage) => void;
 }
 
 export interface NotificationDevice {
@@ -45,6 +47,8 @@ export interface NotificationDevice {
 
 export type NotificationMessage = { kind: "toast" | "os"; event: NotificationEvent };
 
+type Send = (message: NotificationMessage) => void;
+
 export type Delivery =
   | { kind: "toast" | "os"; clientId: string }
   | { kind: "push"; deviceId: string };
@@ -55,9 +59,9 @@ interface StoreFile {
 }
 
 interface HubState {
-  clients: Map<string, NotificationClient>;
-  /** Open SSE streams per client: a remount or reconnect can overlap the old stream's close. */
-  streams: Map<string, Set<(message: NotificationMessage) => void>>;
+  presence: Map<string, NotificationPresence>;
+  /** Open SSE streams per tab. Independent of presence: streams reconnect, overlap, and close while the tab stays put. */
+  streams: Map<string, Set<Send>>;
   store: StoreFile | null;
 }
 
@@ -66,27 +70,26 @@ declare global {
 }
 
 function hub(): HubState {
-  return (globalThis.__ompNotificationHub ??= { clients: new Map(), streams: new Map(), store: null });
+  return (globalThis.__ompNotificationHub ??= { presence: new Map(), streams: new Map(), store: null });
 }
 
-const ID_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
-
-export function isValidNotificationId(value: unknown): value is string {
-  return typeof value === "string" && ID_PATTERN.test(value);
-}
+// p256dh is an uncompressed P-256 point (65 bytes), auth a 16-byte secret; both base64url.
+const P256DH_PATTERN = /^[A-Za-z0-9_-]{86,88}={0,2}$/;
+const AUTH_PATTERN = /^[A-Za-z0-9_-]{21,24}={0,2}$/;
 
 /** Validate an untrusted PushSubscription JSON; only HTTPS push endpoints are accepted. */
 export function parsePushSubscription(value: unknown): PushSubscription | null {
-  if (!value || typeof value !== "object") return null;
-  const raw = value as Record<string, unknown>;
-  const keys = raw.keys && typeof raw.keys === "object" ? (raw.keys as Record<string, unknown>) : {};
-  if (typeof raw.endpoint !== "string" || typeof keys.p256dh !== "string" || typeof keys.auth !== "string") return null;
+  if (!isRecord(value) || !isRecord(value.keys)) return null;
+  const { endpoint } = value;
+  const { p256dh, auth } = value.keys;
+  if (typeof endpoint !== "string" || endpoint.length > 2048) return null;
+  if (typeof p256dh !== "string" || !P256DH_PATTERN.test(p256dh) || typeof auth !== "string" || !AUTH_PATTERN.test(auth)) return null;
   try {
-    if (new URL(raw.endpoint).protocol !== "https:") return null;
+    if (new URL(endpoint).protocol !== "https:") return null;
   } catch {
     return null;
   }
-  return { endpoint: raw.endpoint, keys: { p256dh: keys.p256dh, auth: keys.auth } };
+  return { endpoint, keys: { p256dh, auth } };
 }
 
 // ---------------------------------------------------------------- store
@@ -101,16 +104,18 @@ function loadStore(): StoreFile {
   let store: StoreFile = { devices: [] };
   try {
     if (existsSync(storePath())) {
-      const parsed = JSON.parse(readFileSync(storePath(), "utf8")) as Partial<StoreFile>;
-      const devices = Array.isArray(parsed.devices) ? parsed.devices : [];
-      store = {
-        vapid: parsed.vapid && typeof parsed.vapid.publicKey === "string" && typeof parsed.vapid.privateKey === "string" ? parsed.vapid : undefined,
-        devices: devices.flatMap((device) => {
-          if (!device || !isValidNotificationId(device.deviceId)) return [];
-          const subscription = parsePushSubscription(device.subscription) ?? undefined;
-          return [{ deviceId: device.deviceId, prefs: parseNotificationPrefs(device.prefs), subscription, updatedAt: Number(device.updatedAt) || 0 }];
-        }),
-      };
+      const parsed: unknown = JSON.parse(readFileSync(storePath(), "utf8"));
+      if (isRecord(parsed)) {
+        const { vapid } = parsed;
+        store = {
+          vapid: isRecord(vapid) && typeof vapid.publicKey === "string" && typeof vapid.privateKey === "string" ? { publicKey: vapid.publicKey, privateKey: vapid.privateKey } : undefined,
+          devices: (Array.isArray(parsed.devices) ? parsed.devices : []).flatMap((device: unknown) => {
+            if (!isRecord(device) || !isValidNotificationId(device.deviceId)) return [];
+            const subscription = parsePushSubscription(device.subscription) ?? undefined;
+            return [{ deviceId: device.deviceId, prefs: parseNotificationPrefs(device.prefs), subscription, updatedAt: Number(device.updatedAt) || 0 }];
+          }),
+        };
+      }
     }
   } catch {
     // A corrupt file only loses device prefs; tabs re-register on load.
@@ -153,22 +158,16 @@ export function getNotificationDevice(deviceId: string): NotificationDevice | un
   return loadStore().devices.find((device) => device.deviceId === deviceId);
 }
 
-/**
- * Store a device's prefs. `subscription`: a value replaces the stored one,
- * `null` removes it, `undefined` keeps it.
- */
-export function saveNotificationDevice(deviceId: string, prefs: NotificationPrefs, subscription: PushSubscription | null | undefined): NotificationDevice {
+/** Store a device's prefs, and its push subscription when given (otherwise the stored one is kept). */
+export function saveNotificationDevice(deviceId: string, prefs: NotificationPrefs, subscription?: PushSubscription): NotificationDevice {
   const store = loadStore();
   const existing = store.devices.find((device) => device.deviceId === deviceId);
-  const device: NotificationDevice = {
-    deviceId,
-    prefs,
-    subscription: subscription === undefined ? existing?.subscription : subscription ?? undefined,
-    updatedAt: Date.now(),
-  };
+  const device: NotificationDevice = { deviceId, prefs, subscription: subscription ?? existing?.subscription, updatedAt: Date.now() };
   // A push endpoint belongs to one browser; drop it from any other device id.
   const others = store.devices.filter((entry) => entry.deviceId !== deviceId && !(device.subscription && entry.subscription?.endpoint === device.subscription.endpoint));
-  store.devices = [device, ...others].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_DEVICES);
+  // Over the cap, forget devices that would never be notified before ones that would.
+  const useful = (entry: NotificationDevice) => (entry.prefs.enabled || entry.subscription ? 1 : 0);
+  store.devices = [device, ...others].sort((a, b) => useful(b) - useful(a) || b.updatedAt - a.updatedAt).slice(0, MAX_DEVICES);
   saveStore(store);
   return device;
 }
@@ -181,75 +180,55 @@ function dropSubscription(deviceId: string, endpoint: string): void {
   saveStore(store);
 }
 
-// ---------------------------------------------------------------- presence
+// ---------------------------------------------------------------- presence and streams
 
-function liveClients(now: number): NotificationClient[] {
-  const { clients } = hub();
-  for (const [id, client] of clients) {
-    if (!client.send && now - client.lastSeen > PRESENCE_TTL_MS) clients.delete(id);
+function livePresence(now: number): NotificationPresence[] {
+  const { presence } = hub();
+  for (const [id, entry] of presence) {
+    if (now - entry.lastSeen > PRESENCE_TTL_MS) presence.delete(id);
   }
-  return [...clients.values()];
+  return [...presence.values()];
 }
 
-export function reportPresence(report: { clientId: string; deviceId: string; visible: boolean; sessionId: string | null }): void {
-  const { clients } = hub();
-  const existing = clients.get(report.clientId);
-  clients.set(report.clientId, { ...existing, ...report, lastSeen: Date.now() });
+export function reportPresence(report: Omit<NotificationPresence, "lastSeen">): void {
+  hub().presence.set(report.clientId, { ...report, lastSeen: Date.now() });
 }
 
 /** Attach a tab's SSE stream. Returns the detach callback. */
-export function attachNotificationClient(clientId: string, deviceId: string, send: (message: NotificationMessage) => void): () => void {
-  const state = hub();
-  const streams = state.streams.get(clientId) ?? new Set();
-  streams.add(send);
-  state.streams.set(clientId, streams);
-  const existing = state.clients.get(clientId);
-  state.clients.set(clientId, {
-    clientId,
-    deviceId,
-    visible: existing?.visible ?? false,
-    sessionId: existing?.sessionId ?? null,
-    lastSeen: existing?.lastSeen ?? 0,
-    send: (message) => streams.forEach((stream) => stream(message)),
-  });
+export function attachNotificationClient(clientId: string, send: Send): () => void {
+  const { streams } = hub();
+  const own = streams.get(clientId) ?? new Set();
+  own.add(send);
+  streams.set(clientId, own);
   return () => {
-    streams.delete(send);
-    // The tab is gone once its last stream closes; its presence goes with it.
-    if (streams.size === 0 && state.streams.get(clientId) === streams) {
-      state.streams.delete(clientId);
-      state.clients.delete(clientId);
-    }
+    own.delete(send);
+    if (own.size === 0 && streams.get(clientId) === own) streams.delete(clientId);
   };
 }
 
 // ---------------------------------------------------------------- routing
 
-function isActive(client: NotificationClient, now: number): boolean {
-  return client.visible && now - client.lastSeen <= PRESENCE_TTL_MS;
-}
-
 /**
- * Decide where one event goes.
+ * Decide where one event goes. `reachable` holds the tabs with an open stream.
  * 1. A visible tab is showing the session: nothing, for every device.
- * 2. The user is active in some tab and the device prefers toasts: toast to
- *    that device's active tabs only (other devices stay quiet).
+ * 2. The user is active in some reachable tab and the device prefers toasts:
+ *    toast to that device's active tabs only (other devices stay quiet).
  * 3. Otherwise a system notification: push when the device has a
- *    subscription, else in-page on each of its connected tabs.
+ *    subscription, else in-page on each of its reachable tabs.
  */
-export function routeNotification(event: NotificationEvent, clients: NotificationClient[], devices: NotificationDevice[], now: number): Delivery[] {
+export function routeNotification(event: NotificationEvent, presence: NotificationPresence[], reachable: ReadonlySet<string>, devices: NotificationDevice[]): Delivery[] {
   if (event.type === "test") return [];
-  if (clients.some((client) => isActive(client, now) && client.sessionId === event.sessionId)) return [];
-  const anyActive = clients.some((client) => isActive(client, now));
+  if (presence.some((tab) => tab.visible && tab.sessionId === event.sessionId)) return [];
+  const active = presence.filter((tab) => tab.visible && reachable.has(tab.clientId));
   const deliveries: Delivery[] = [];
   for (const device of devices) {
     if (!device.prefs.enabled || !device.prefs.types[event.type]) continue;
-    const own = clients.filter((client) => client.deviceId === device.deviceId && client.send);
-    if (anyActive && device.prefs.whenActive === "toast") {
-      for (const client of own) if (isActive(client, now)) deliveries.push({ kind: "toast", clientId: client.clientId });
+    if (active.length > 0 && device.prefs.whenActive === "toast") {
+      for (const tab of active) if (tab.deviceId === device.deviceId) deliveries.push({ kind: "toast", clientId: tab.clientId });
     } else if (device.subscription) {
       deliveries.push({ kind: "push", deviceId: device.deviceId });
     } else {
-      for (const client of own) deliveries.push({ kind: "os", clientId: client.clientId });
+      for (const tab of presence) if (tab.deviceId === device.deviceId && reachable.has(tab.clientId)) deliveries.push({ kind: "os", clientId: tab.clientId });
     }
   }
   return deliveries;
@@ -265,53 +244,56 @@ function renderFor(event: NotificationEvent, locale: string): RenderedNotificati
   });
 }
 
-async function sendPush(device: NotificationDevice, event: NotificationEvent): Promise<void> {
+/** Never throws: a failed push must not break delivery to anyone else. */
+async function sendPush(device: NotificationDevice, event: NotificationEvent): Promise<{ ok: true } | { ok: false; error: string }> {
   const subscription = device.subscription;
-  if (!subscription) return;
-  const { publicKey, privateKey } = vapidKeys();
+  if (!subscription) return { ok: false, error: "no push subscription" };
   try {
+    const { publicKey, privateKey } = vapidKeys();
     await webpush.sendNotification(subscription, JSON.stringify(renderFor(event, device.prefs.locale)), {
       TTL: PUSH_TTL_SECONDS,
       urgency: event.type === "input" || event.type === "error" ? "high" : "normal",
+      timeout: PUSH_TIMEOUT_MS,
       vapidDetails: { subject: VAPID_SUBJECT, publicKey, privateKey },
     });
+    return { ok: true };
   } catch (error) {
     const status = error instanceof webpush.WebPushError ? error.statusCode : undefined;
-    // 404/410: the browser unsubscribed or the subscription expired.
-    if (status === 404 || status === 410) dropSubscription(device.deviceId, subscription.endpoint);
-    else console.warn("[notifications] push failed:", status ?? String(error));
-  }
-}
-
-function sendToClient(clientId: string, message: NotificationMessage): void {
-  try {
-    hub().clients.get(clientId)?.send?.(message);
-  } catch {
-    // A closing stream must not break delivery to the others.
+    try {
+      // 404/410: the browser unsubscribed or the subscription expired.
+      if (status === 404 || status === 410) dropSubscription(device.deviceId, subscription.endpoint);
+    } catch {
+      // A store write failure only delays the cleanup to the next push.
+    }
+    const message = status ? `push service answered ${status}` : String(error);
+    console.warn("[notifications] push failed:", message);
+    return { ok: false, error: message };
   }
 }
 
 export function publishNotification(event: NotificationEvent): void {
-  const now = Date.now();
+  const state = hub();
   const devices = loadStore().devices;
-  for (const delivery of routeNotification(event, liveClients(now), devices, now)) {
+  const reachable = new Set(state.streams.keys());
+  for (const delivery of routeNotification(event, livePresence(Date.now()), reachable, devices)) {
     if (delivery.kind === "push") {
       const device = devices.find((entry) => entry.deviceId === delivery.deviceId);
       if (device) void sendPush(device, event);
-    } else {
-      sendToClient(delivery.clientId, { kind: delivery.kind, event });
+      continue;
+    }
+    for (const send of state.streams.get(delivery.clientId) ?? []) {
+      try {
+        send({ kind: delivery.kind, event });
+      } catch {
+        // A closing stream must not break delivery to the others.
+      }
     }
   }
 }
 
-/** Settings "Send test notification": the requesting device's system path, ignoring presence. */
-export async function sendTestNotification(deviceId: string, clientId: string): Promise<"push" | "os"> {
-  const event: NotificationEvent = { type: "test", sessionId: "", sessionName: "omp web" };
+/** Settings "Send test notification" for a device with push: reports whether the push service accepted it. */
+export async function sendTestPush(deviceId: string): Promise<{ ok: true } | { ok: false; error: string }> {
   const device = getNotificationDevice(deviceId);
-  if (device?.subscription) {
-    await sendPush(device, event);
-    return "push";
-  }
-  sendToClient(clientId, { kind: "os", event });
-  return "os";
+  if (!device) return { ok: false, error: "unknown device" };
+  return sendPush(device, { type: "test", sessionId: "", sessionName: "omp web" });
 }

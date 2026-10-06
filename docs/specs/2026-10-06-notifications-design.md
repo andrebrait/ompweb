@@ -32,9 +32,11 @@ Rules:
 - Local slash commands (`prompt_result` with `agentInvoked: false`), aborted
   runs, `auto_retry_start` and `auto_retry_end {success: true}` never notify.
 - The `modelSwitch` reason is `retry_fallback_applied.reason` when present
-  (usage-aware fallback), else the `errorMessage` of the most recent
-  `auto_retry_start` in the same stretch (classifier refusals such as Fable
-  falling back to Opus, rate limits, provider failures), else omitted.
+  (usage-aware fallback). omp sends a reason-less fallback before the
+  `auto_retry_start` of the same failure, so the detector holds it and takes
+  that frame's `errorMessage` (classifier refusals such as Fable falling back
+  to Opus, rate limits, provider failures). A fallback still held at
+  `auto_retry_end`, `prompt_result` or `session_settled` is sent without one.
 - Every notification has tag `<sessionId>:<type>`, so a repeat replaces the
   previous one instead of stacking. Notifications are not retracted when they
   stop applying.
@@ -54,7 +56,7 @@ omp child ──frames──▶ AgentSessionWrapper.handleFrame (lib/rpc-manager
 
 Detection and routing run on the server, so sessions that are not open in any
 tab still notify. Toast and in-page messages ride the running-sessions SSE
-stream the sidebar already holds (`?clientId=&deviceId=`): browsers allow only
+stream the sidebar already holds (`?clientId=`): browsers allow only
 six HTTP/1.1 connections per host, so a tab must not open another stream.
 
 ### `NotificationEvent`
@@ -80,24 +82,31 @@ in the device's stored locale.
 Each page load generates a `clientId`; each browser profile keeps a `deviceId`
 in `localStorage`. A tab reports presence with
 `POST /api/notifications/presence {clientId, deviceId, visible, sessionId}` on
-mount, `visibilitychange`, session switch, `pagehide` (beacon, `visible:
-false`), and every 30 seconds while visible. A report expires 60 seconds after
-it was sent; a tab's entry is removed when its SSE stream closes. "Active"
-means visible with a fresh report.
+mount, `visibilitychange`, session switch, the first input after idling,
+`pagehide` (beacon, `visible: false`), and every 30 seconds while present.
+`visible` means the page is visible and had input (pointer, key, wheel, touch,
+focus) in the last 3 minutes. `sessionId` is null while full-page Settings
+hides the chat. A report expires 60 seconds after the server received it.
+
+Presence and SSE streams are tracked separately: streams reconnect and overlap
+while the tab stays where it is. A tab is "reachable" while it has an open
+stream, and "active" when its presence is visible and it is reachable.
 
 ### Routing (`routeNotification`)
 
 For each event:
 
-1. If an active tab is showing `event.sessionId`, drop the event for every
-   device, in every mode.
+1. If a visible tab is showing `event.sessionId`, drop the event for every
+   device, in every mode. This uses presence only, so a reconnecting stream
+   cannot leak a notification for the viewed session.
 2. For each device whose prefs enable notifications and the event's type:
    - if any tab (on any device) is active and the device has
      `whenActive: "toast"`, send `{kind: "toast"}` to that device's active
      tabs; a device with no active tab stays quiet;
    - otherwise send a system notification: Web Push when the device has a
-     subscription, else `{kind: "os"}` to each of its connected tabs, which
-     show it with `registration.showNotification`.
+     subscription, else `{kind: "os"}` to each of its reachable tabs, which
+     show it with `registration.showNotification` (or a toast when the
+     browser no longer allows notifications).
 
 The server decides before pushing, and the service worker always displays a
 push: iOS Safari revokes push permission for pushes that show nothing.
@@ -135,11 +144,11 @@ push: iOS Safari revokes push permission for pushes that show nothing.
 
 | Route | Method | Purpose |
 |---|---|---|
-| `/api/agent/running/events?clientId=&deviceId=` | GET | existing SSE stream, now also `{type: "notification", kind, event}` |
+| `/api/agent/running/events?clientId=` | GET | existing SSE stream, now also `{type: "notification", kind, event}` |
 | `/api/notifications/presence` | POST | presence report |
 | `/api/notifications/devices?deviceId=` | GET | VAPID public key, whether this device has a subscription |
-| `/api/notifications/devices` | PUT | `{deviceId, prefs, subscription?}`; `subscription: null` removes it |
-| `/api/notifications/test` | POST | `{deviceId, clientId}`: a system notification to this device, ignoring presence |
+| `/api/notifications/devices` | PUT | `{deviceId, prefs, subscription?}`; an omitted subscription keeps the stored one |
+| `/api/notifications/test` | POST | `{deviceId}`: a test push; 502 with the push service's answer when it fails |
 
 All routes sit behind the existing password gate and origin check.
 
@@ -157,7 +166,8 @@ A `SettingsTabs` category `notifications` (icon `Bell`). Contents:
   failed (on), Model switched automatically (off).
 - **When I'm using omp-web in another tab**: "Show an in-app toast" (default)
   or "Always send a system notification".
-- **Send test notification**.
+- **Send test notification**: a real push for subscribed devices, else a
+  local notification from the page.
 
 ```ts
 interface NotificationPrefs {
@@ -168,8 +178,10 @@ interface NotificationPrefs {
 }
 ```
 
-Prefs live in `localStorage` and are sent to the server on every change and
-on app load. Strings are in `lib/i18n` (English, Japanese, Simplified Chinese).
+Prefs live in `localStorage` and are sent to the server on every change, and
+on app load for enabled devices. Other tabs pick changes up through the
+`storage` event. Strings are in `lib/i18n` (English, Japanese, Simplified
+Chinese).
 
 ## In-app toast
 

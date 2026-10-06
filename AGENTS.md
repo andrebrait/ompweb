@@ -67,7 +67,7 @@ app/api/
   agent/running/events/route.ts   GET SSE stream of currently-running session ids (+ this tab's notifications)
   notifications/devices/route.ts  GET VAPID key + subscribed | PUT { deviceId, prefs, subscription? }
   notifications/presence/route.ts POST { clientId, deviceId, visible, sessionId }
-  notifications/test/route.ts     POST send a test notification to this device
+  notifications/test/route.ts     POST { deviceId } send a test push (502 on push-service refusal)
   auth/**                         provider list, login/logout, API keys (via RPC)
   cwd/validate/route.ts           POST validate/select a cwd
   default-cwd/route.ts            POST create ~/omp-cwd-YYYYMMDD
@@ -598,21 +598,35 @@ during the wait.
   fires on `session_settled` (not `prompt_result`), so background work started
   by the prompt is done too; a failed or aborted last prompt suppresses it.
   Auto-approved tool confirmations return before the hook and never notify.
-- Presence: each tab reports `{clientId, deviceId, visible, sessionId}` to
-  `/api/notifications/presence` (on visibility/session change, every 30 s while
-  visible; expires after 60 s). `clientId` is per page load, `deviceId` is per
-  browser (`localStorage`). Routing (`routeNotification`, unit-tested): a visible
-  tab on the session drops the event everywhere; else if any tab is active,
-  `whenActive: "toast"` devices get a toast on their active tabs only; else push
-  (subscribed devices) or in-page `showNotification` (connected tabs).
+  omp sends `retry_fallback_applied` before the `auto_retry_start` of the same
+  failure, so the detector holds a reason-less fallback until that frame.
+- Presence and streams are separate on purpose. Presence: each tab reports
+  `{clientId, deviceId, visible, sessionId}` to `/api/notifications/presence`
+  (visibility/session change, input after idling, every 30 s while present;
+  expires 60 s after receipt). `visible` means visible AND input within 3 min.
+  `sessionId` is null while full-page Settings hides the chat. Streams: the
+  tab's open SSE connections (`attachNotificationClient`), which reconnect and
+  overlap independently of presence. `clientId` is per page load, `deviceId`
+  per browser (`localStorage`).
+- Routing (`routeNotification`, unit-tested): a visible tab on the session
+  drops the event everywhere (presence only, so a reconnecting stream cannot
+  leak it); else if a visible tab with an open stream exists, `whenActive:
+  "toast"` devices get a toast on their active tabs only; else push (subscribed
+  devices) or in-page `showNotification` (tabs with an open stream).
 - The server decides before pushing: iOS revokes push permission for pushes
   that display nothing, so `public/sw.js` always shows what it receives.
-- Notifications ride the sidebar's `/api/agent/running/events` stream
-  (`?clientId&deviceId`), not a new SSE connection: browsers allow six HTTP/1.1
-  connections per host. `SessionSidebar` re-dispatches them as a window event.
+- Notifications ride the sidebar's `/api/agent/running/events?clientId=` stream,
+  not a new SSE connection: browsers allow six HTTP/1.1 connections per host.
+  `SessionSidebar` re-dispatches them as a window event. The sidebar unmounts
+  while Settings is open, so that tab gets no toasts then; it also stops
+  counting as active, so other devices are not silenced.
 - Prefs and push subscriptions are per device, in `localStorage` and mirrored to
   `~/.omp/agent/omp-web/notifications.json` (mode 0600; also holds the VAPID
-  private key). Push text is rendered server-side in the device's locale.
+  private key). Push text is rendered server-side in the device's locale. Only
+  enabled devices sync on load.
+- The Settings test button pushes through the server for subscribed devices
+  (502 with the push service's answer on failure) and shows a local
+  notification otherwise.
 - `/sw.js` and `/badge-96.png` are exempt from the password gate (`proxy.ts`):
   browsers re-fetch the worker for updates without the session cookie.
 

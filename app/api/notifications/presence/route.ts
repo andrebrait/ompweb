@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { isValidNotificationId, reportPresence } from "@/lib/notification-hub";
+import { isValidNotificationId } from "@/lib/notification-events";
+import { reportPresence } from "@/lib/notification-hub";
 import { isRecord } from "@/lib/type-guards";
 
 export const dynamic = "force-dynamic";

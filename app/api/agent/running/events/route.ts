@@ -1,5 +1,6 @@
 import { getExitedRpcSessions, getRunningRpcSessions, subscribeRunningSessions } from "@/lib/rpc-manager";
-import { attachNotificationClient, isValidNotificationId } from "@/lib/notification-hub";
+import { isValidNotificationId } from "@/lib/notification-events";
+import { attachNotificationClient } from "@/lib/notification-hub";
 import { subscribeSessionFileChanges } from "@/lib/session-watcher";
 
 export const dynamic = "force-dynamic";
@@ -7,12 +8,10 @@ export const dynamic = "force-dynamic";
 // GET /api/agent/running/events - SSE stream of the set of currently-running
 // session ids. Also carries refresh hints when a live session's file metadata
 // changes, so the sidebar can show a newly-started session immediately, and
-// this tab's notifications when `clientId`/`deviceId` are given (one stream
-// per tab: browsers allow only six HTTP/1.1 connections per host).
+// this tab's notifications when `clientId` is given (one stream per tab:
+// browsers allow only six HTTP/1.1 connections per host).
 export async function GET(req: Request) {
-  const params = new URL(req.url).searchParams;
-  const clientId = params.get("clientId");
-  const deviceId = params.get("deviceId");
+  const clientId = new URL(req.url).searchParams.get("clientId");
   // Hoisted so the stream's cancel() (half-open disconnects that never fire
   // the abort signal) can release the heartbeat and the subscriber.
   let streamCleanup: (() => void) | null = null;
@@ -86,8 +85,8 @@ export async function GET(req: Request) {
         encode({ type: "sessions-changed", sessionIds, refreshSessionList: true });
       });
 
-      if (isValidNotificationId(clientId) && isValidNotificationId(deviceId)) {
-        detachNotifications = attachNotificationClient(clientId, deviceId, (message) => encode({ type: "notification", ...message }));
+      if (isValidNotificationId(clientId)) {
+        detachNotifications = attachNotificationClient(clientId, (message) => encode({ type: "notification", ...message }));
       }
 
       // Initial snapshot so the client renders the correct state immediately.

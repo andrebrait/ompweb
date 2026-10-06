@@ -5,6 +5,7 @@
  */
 import {
   DEFAULT_NOTIFICATION_PREFS,
+  isValidNotificationId,
   parseNotificationPrefs,
   type NotificationPrefs,
   type RenderedNotification,
@@ -13,8 +14,15 @@ import {
 const DEVICE_KEY = "omp-notify-device";
 const PREFS_KEY = "omp-notify-prefs";
 
+/** crypto.randomUUID exists only in secure contexts; plain-HTTP LAN origins still need ids. */
+function randomId(): string {
+  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `id${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+}
+
 /** One id per page load: a duplicated tab copies sessionStorage, so it cannot hold this. */
-export const notificationClientId = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `c${Date.now()}${Math.random().toString(36).slice(2)}`;
+export const notificationClientId = randomId();
 
 let deviceId: string | null = null;
 
@@ -22,20 +30,13 @@ let deviceId: string | null = null;
 export function getNotificationDeviceId(): string {
   if (deviceId) return deviceId;
   try {
-    deviceId = localStorage.getItem(DEVICE_KEY);
-    if (!deviceId || !/^[A-Za-z0-9_-]{8,64}$/.test(deviceId)) {
-      deviceId = crypto.randomUUID();
-      localStorage.setItem(DEVICE_KEY, deviceId);
-    }
+    const stored = localStorage.getItem(DEVICE_KEY);
+    deviceId = isValidNotificationId(stored) ? stored : randomId();
+    if (deviceId !== stored) localStorage.setItem(DEVICE_KEY, deviceId);
   } catch {
-    deviceId ??= crypto.randomUUID();
+    deviceId ??= randomId();
   }
   return deviceId;
-}
-
-/** Query string that attaches this tab to notification delivery on the running-sessions SSE stream. */
-export function notificationStreamQuery(): string {
-  return `clientId=${encodeURIComponent(notificationClientId)}&deviceId=${encodeURIComponent(getNotificationDeviceId())}`;
 }
 
 // ---------------------------------------------------------------- prefs store
@@ -55,12 +56,23 @@ export function getNotificationPrefs(): NotificationPrefs {
 }
 
 export function subscribeNotificationPrefs(listener: () => void): () => void {
+  // Another tab of this browser changed the prefs: drop the cached copy.
+  const onStorage = (event: StorageEvent) => {
+    if (event.key !== PREFS_KEY) return;
+    prefs = null;
+    listener();
+  };
   listeners.add(listener);
-  return () => listeners.delete(listener);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    listeners.delete(listener);
+    window.removeEventListener("storage", onStorage);
+  };
 }
 
 /** Save locally, then mirror to the server (which routes pushes while no tab is open). */
 export async function updateNotificationPrefs(patch: Partial<NotificationPrefs>): Promise<void> {
+  prefs = null; // merge into the latest stored copy, not a stale one from before another tab's change
   prefs = { ...getNotificationPrefs(), ...patch };
   try {
     localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
@@ -72,18 +84,18 @@ export async function updateNotificationPrefs(patch: Partial<NotificationPrefs>)
 }
 
 /**
- * Send prefs (and optionally a push subscription change) to the server.
+ * Send prefs (and optionally a new push subscription) to the server.
  * Returns whether the server holds a push subscription for this device.
  */
-export async function syncNotificationDevice(subscription?: PushSubscriptionJSON | null): Promise<boolean> {
+export async function syncNotificationDevice(subscription?: PushSubscriptionJSON): Promise<boolean> {
   const response = await fetch("/api/notifications/devices", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ deviceId: getNotificationDeviceId(), prefs: getNotificationPrefs(), ...(subscription !== undefined ? { subscription } : {}) }),
+    body: JSON.stringify({ deviceId: getNotificationDeviceId(), prefs: getNotificationPrefs(), subscription }),
   });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const body = (await response.json()) as { subscribed?: boolean };
-  return body.subscribed === true;
+  const body: unknown = await response.json();
+  return typeof body === "object" && body !== null && "subscribed" in body && body.subscribed === true;
 }
 
 // ---------------------------------------------------------------- support
@@ -107,10 +119,12 @@ export function getNotificationSupport(): NotificationSupport {
 
 // ---------------------------------------------------------------- service worker + push
 
+/** Registers the worker and resolves once one is active (subscribing needs an active worker). */
 export async function registerNotificationWorker(): Promise<ServiceWorkerRegistration | null> {
   if (!("serviceWorker" in navigator) || !window.isSecureContext) return null;
   try {
-    return await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+    await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+    return await navigator.serviceWorker.ready;
   } catch {
     return null;
   }
@@ -127,22 +141,33 @@ function sameKey(key: ArrayBuffer | null | undefined, expected: Uint8Array): boo
   return actual.length === expected.length && actual.every((byte, index) => byte === expected[index]);
 }
 
+let ensuring: Promise<boolean> | null = null;
+
 /**
- * Make sure this device has a push subscription for the server's VAPID key
- * and the server knows it. Needs notification permission already granted.
- * Returns whether push is active.
+ * Make sure this device has a working push subscription for the server's
+ * VAPID key and the server knows it. Needs notification permission already
+ * granted. Returns whether push is active. Single-flight: two overlapping runs
+ * would each replace the other's subscription and store a dead one.
  */
-export async function ensurePushSubscription(): Promise<boolean> {
+export function ensurePushSubscription(): Promise<boolean> {
+  ensuring ??= subscribeForPush().finally(() => {
+    ensuring = null;
+  });
+  return ensuring;
+}
+
+async function subscribeForPush(): Promise<boolean> {
   if (getNotificationSupport() !== "push" || Notification.permission !== "granted") return false;
   const registration = await registerNotificationWorker();
   if (!registration) return false;
   const response = await fetch(`/api/notifications/devices?deviceId=${encodeURIComponent(getNotificationDeviceId())}`);
   if (!response.ok) return false;
-  const { publicKey } = (await response.json()) as { publicKey: string };
+  const { publicKey, subscribed }: { publicKey: string; subscribed: boolean } = await response.json();
   const applicationServerKey = base64UrlToBytes(publicKey);
   let subscription = await registration.pushManager.getSubscription();
-  // A server that lost its keys signs with new ones; the old subscription would be rejected.
-  if (subscription && !sameKey(subscription.options.applicationServerKey, applicationServerKey)) {
+  // Replace a subscription signed for other server keys, or one the server
+  // dropped after the push service reported it gone (re-sending it would loop).
+  if (subscription && (!sameKey(subscription.options.applicationServerKey, applicationServerKey) || !subscribed)) {
     await subscription.unsubscribe().catch(() => false);
     subscription = null;
   }
@@ -150,9 +175,18 @@ export async function ensurePushSubscription(): Promise<boolean> {
   return syncNotificationDevice(subscription.toJSON());
 }
 
-/** Show a system notification the same way the service worker shows pushes. */
-export async function showSystemNotification(notification: RenderedNotification): Promise<void> {
-  if (!("Notification" in window) || Notification.permission !== "granted") return;
+/** Window event (detail: session id) asking the app to open a notification's session. */
+export const OPEN_SESSION_EVENT = "omp-open-session";
+
+/** Window event (detail: `{kind, event}` from the server) for a notification delivered to this tab. */
+export const NOTIFICATION_MESSAGE_EVENT = "omp-notification";
+
+/**
+ * Show a system notification the same way the service worker shows pushes.
+ * Returns false when the browser does not allow it, so the caller can fall back.
+ */
+export async function showSystemNotification(notification: RenderedNotification): Promise<boolean> {
+  if (!("Notification" in window) || Notification.permission !== "granted") return false;
   const options: NotificationOptions = {
     body: notification.body,
     icon: "/icon-192.png",
@@ -160,27 +194,21 @@ export async function showSystemNotification(notification: RenderedNotification)
     tag: notification.tag,
     data: { url: notification.url, sessionId: notification.sessionId },
   };
-  const registration = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : undefined;
-  if (registration) {
-    await registration.showNotification(notification.title, options);
-    return;
-  }
-  // No worker (registration failed or unsupported): Chrome on Android throws
-  // here, desktop browsers show it.
   try {
+    const registration = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : undefined;
+    if (registration) {
+      await registration.showNotification(notification.title, options);
+      return true;
+    }
+    // No worker: Chrome on Android throws here, desktop browsers show it.
     const fallback = new Notification(notification.title, options);
     fallback.onclick = () => {
       fallback.close();
       window.focus();
       window.dispatchEvent(new CustomEvent(OPEN_SESSION_EVENT, { detail: notification.sessionId }));
     };
+    return true;
   } catch {
-    // blocked: nothing else to do
+    return false;
   }
 }
-
-/** Window event (detail: session id) asking the app to open a notification's session. */
-export const OPEN_SESSION_EVENT = "omp-open-session";
-
-/** Window event (detail: `{kind, event}` from the server) for a notification delivered to this tab. */
-export const NOTIFICATION_MESSAGE_EVENT = "omp-notification";

@@ -1346,7 +1346,8 @@ export function AppShell({ appName }: { appName: string }) {
       .catch(() => toast.error(translate("notifications.sessionNotFound")));
   }, [handleSelectSession]);
 
-  useNotifications({ sessionId: selectedSession?.id ?? null, locale, onOpenSession: openSessionById });
+  // Full-page Settings hides the chat, so its session counts as not viewed.
+  useNotifications({ sessionId: settingsTab ? null : selectedSession?.id ?? null, locale, onOpenSession: openSessionById });
 
   const handleAutoName = useCallback(async () => {
     const sessionId = selectedSession?.id;
