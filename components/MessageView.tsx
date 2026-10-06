@@ -1143,7 +1143,7 @@ const ToolCallBlock = memo(function ToolCallBlock({
           />
         </CollapsibleTrigger>
         {resultMeta && <div className="activity-row-secondary">{resultMeta}</div>}
-        {result?.passiveContext && (
+        {result?.passiveContext && !expanded && (
           <div className="activity-row-secondary" title={result.passiveContext}>
             <span aria-hidden>↳ </span>{t("messageView.passiveContext", { text: result.passiveContext })}
           </div>
@@ -1216,6 +1216,11 @@ const ToolCallBlock = memo(function ToolCallBlock({
                 </>
               )
             ) : null}
+            {result?.passiveContext && (
+              <div className="tool-call-context">
+                <span aria-hidden>↳ </span>{t("messageView.passiveContext", { text: result.passiveContext })}
+              </div>
+            )}
           </div>
         )}
       </Collapsible>

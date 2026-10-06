@@ -561,13 +561,21 @@ test("passive tool context from a session file renders as one line on the batch'
     entry("a2", "d2", { role: "assistant", provider: "t", model: "m", content: [{ type: "text", text: "Done." }] }),
   ]);
   const toolResults = collectToolResults(messages);
-  // Expanded tool groups, so both cards of the two-call batch render.
   const html = (message) => renderToStaticMarkup(React.createElement(MessageView, { message, toolResults, toolCallsDefaultCollapsed: false }));
+  // Expanded tool group, collapsed cards: one truncating row on the last card, the full text on hover.
   const shown = html(messages[1]);
   assert.equal(shown.match(/Context:/g)?.length, 1);
-  assert.match(shown, /↳ <\/span>Context: Treat this result as authoritative\./);
+  assert.match(shown, /class="activity-row-secondary" title="Treat this result as authoritative\."><span aria-hidden="true">↳ <\/span>Context: Treat this result as authoritative\./);
   assert.ok(shown.indexOf(">read<") < shown.indexOf(">bash<"));
   assert.ok(shown.indexOf("Context:") > shown.indexOf(">bash<"), "the line sits on the last card (call-2)");
+  assert.doesNotMatch(shown, /tool-call-context/);
+  // An expanded card shows the full text as its own segment at the end of its details instead.
+  const single = { ...messages[1], content: [messages[1].content[1]] };
+  const view = render(React.createElement(MessageView, { message: single, toolResults }));
+  fireEvent.click(view.getByRole("button", { expanded: false }));
+  const segment = view.container.querySelector(".tool-call-details .tool-call-context");
+  assert.equal(segment?.textContent, "↳ Context: Treat this result as authoritative.");
+  assert.equal(view.container.querySelector(".activity-row-secondary[title]"), null, "no truncated row while expanded");
   // The marked message is no row of its own; the unmarked one still is.
   assert.equal(messages[4].customType, "passive-tool-context");
   assert.equal(html(messages[4]), "");
