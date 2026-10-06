@@ -20,6 +20,8 @@ import { PRESET_FULL } from "./tool-presets";
 import { comparableProjectPath } from "./comparable-path";
 import { samePath } from "./paths";
 import { isRecord } from "./type-guards";
+import { createNotificationDetector } from "./notification-events";
+import { publishNotification } from "./notification-hub";
 import { parseSkillDiagnosticsSnapshot, type SkillDiagnosticsSnapshot } from "./skill-diagnostics";
 import { isReservedLaunchArg, loadProjectRegistry } from "./project-registry";
 import type {
@@ -329,6 +331,7 @@ export class AgentSessionWrapper {
    * the same conversation moving to a sibling file, not a session switch. */
   private sessionMovePending = false;
   private unsubscribeFrames: (() => void) | null = null;
+  private readonly detectNotification = createNotificationDetector();
   private initPromise: Promise<void> | null = null;
   private restarting = false;
   private mcpListWaiter: { resolve: (text: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> } | null = null;
@@ -657,8 +660,15 @@ export class AgentSessionWrapper {
     });
     // Terminal agent_end so a client mid-stream stops spinning immediately
     // instead of waiting for the reconcile poll.
-    if (this.streaming || this.promptRunning) this.emit({ type: "agent_end", isTerminal: true, messages: [] });
+    if (this.streaming || this.promptRunning) {
+      this.emit({ type: "agent_end", isTerminal: true, messages: [] });
+      publishNotification({ type: "error", sessionId: this._sessionId, sessionName: this.notificationSessionName(), detail: detail || status });
+    }
     this.destroy();
+  }
+
+  private notificationSessionName(): string | null {
+    return this._sessionName || this.cwd.split(/[\\/]/).filter(Boolean).pop() || null;
   }
 
   private handleFrame(frame: RpcFrame): void {
@@ -855,6 +865,8 @@ export class AgentSessionWrapper {
       }
     }
 
+    const notification = this.detectNotification(event, { sessionId: this._sessionId, sessionName: this.notificationSessionName() });
+    if (notification) publishNotification(notification);
     this.emit(event);
     notifyRunningChange({ refreshSessionList });
   }

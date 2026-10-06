@@ -14,6 +14,7 @@ import { groupSessionsByProject, projectActivityCounts, sortManagedProjects } fr
 import { comparableProjectPath } from "@/lib/comparable-path";
 import { Archive, ArrowLeft, ArrowRight, Check, ChevronRight, FileUp, Plus, RefreshCw, Search, Settings2, SlidersHorizontal, X } from "lucide-react";
 import { publishSessionsChanged } from "@/lib/session-change-bus";
+import { NOTIFICATION_MESSAGE_EVENT, notificationStreamQuery } from "@/lib/notification-client";
 import {
   EMPTY_PROJECT_SET,
   INITIAL_RESTORE_MAX_ATTEMPTS,
@@ -276,8 +277,9 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
 
   useEffect(() => {
     // Live running status and session-list invalidations arrive via SSE; the
-    // sidebar never has to poll while an agent is working.
-    const source = new EventSource("/api/agent/running/events");
+    // sidebar never has to poll while an agent is working. The same stream
+    // delivers this tab's notifications (handled by useNotifications).
+    const source = new EventSource(`/api/agent/running/events?${notificationStreamQuery()}`);
 
     source.onmessage = (e) => {
       try {
@@ -307,6 +309,8 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
         } else if (data.type === "sessions-changed") {
           if (data.refreshSessionList) scheduleRefresh();
           publishSessionsChanged(data.sessionIds ?? []);
+        } else if (data.type === "notification") {
+          window.dispatchEvent(new CustomEvent(NOTIFICATION_MESSAGE_EVENT, { detail: data }));
         }
       } catch {
         // ignore malformed frames

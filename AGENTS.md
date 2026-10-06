@@ -64,7 +64,10 @@ app/api/
   agent/new/route.ts              POST { cwd, message, toolNames?, provider?, modelId? }
   agent/[id]/route.ts             GET state | POST any RPC command
   agent/[id]/events/route.ts      GET SSE stream
-  agent/running/events/route.ts   GET SSE stream of currently-running session ids
+  agent/running/events/route.ts   GET SSE stream of currently-running session ids (+ this tab's notifications)
+  notifications/devices/route.ts  GET VAPID key + subscribed | PUT { deviceId, prefs, subscription? }
+  notifications/presence/route.ts POST { clientId, deviceId, visible, sessionId }
+  notifications/test/route.ts     POST send a test notification to this device
   auth/**                         provider list, login/logout, API keys (via RPC)
   cwd/validate/route.ts           POST validate/select a cwd
   default-cwd/route.ts            POST create ~/omp-cwd-YYYYMMDD
@@ -104,6 +107,9 @@ lib/
   pi-types.ts          local structural types for agent/RPC objects
   project-ordering.ts  pure project sort/group/activity helpers (client + tests)
   project-registry.ts  on-disk managed-project registry (~/.omp/agent/projects.json)
+  notification-events.ts  shared: event/prefs types, frame→event detector, renderNotification()
+  notification-hub.ts  server: presence, device store + VAPID keys, routing, Web Push
+  notification-client.ts  browser: device id, prefs store, service worker + push subscription
   rpc-manager.ts       session registry + startRpcSession over RpcProcess
   session-reader.ts    session .jsonl parsing + path cache + buildSessionContext
   session-resume.ts    running-session list for auto-resume after a restart
@@ -144,6 +150,7 @@ components/
 hooks/
   useAgentSession.ts       messages + streaming + SSE + fork/navigate/reconciliation logic
   useAudio.ts              completion sound + browser AudioContext unlock
+  useNotifications.ts      presence reports, toast/system delivery, notification clicks
   useDragDrop.ts           shared drag/drop state
   useIsMobile.ts           responsive breakpoint hook
   usePrefersReducedMotion.ts OS reduce-motion preference (SMIL-safe)
@@ -582,6 +589,32 @@ during the wait.
 ### Completion sound
 - `hooks/useAudio.ts` stores the toggle in `localStorage` and reuses one `AudioContext`.
 - Browser autoplay policy means sound must be unlocked from a user gesture; `ChatInput` calls the unlock hook from interactive controls, and `ChatWindow` plays the tone from `onAgentEnd`.
+
+### Notifications (`lib/notification-*.ts`, `public/sw.js`, Settings → Notifications)
+- Detection runs on the server in `AgentSessionWrapper.handleFrame` (and
+  `handleProcessExit` for crashes), so sessions no tab watches still notify.
+  `createNotificationDetector()` only inspects top-level frames; subagent
+  activity is wrapped in `subagent_*` frames and never notifies. "Completed"
+  fires on `session_settled` (not `prompt_result`), so background work started
+  by the prompt is done too; a failed or aborted last prompt suppresses it.
+  Auto-approved tool confirmations return before the hook and never notify.
+- Presence: each tab reports `{clientId, deviceId, visible, sessionId}` to
+  `/api/notifications/presence` (on visibility/session change, every 30 s while
+  visible; expires after 60 s). `clientId` is per page load, `deviceId` is per
+  browser (`localStorage`). Routing (`routeNotification`, unit-tested): a visible
+  tab on the session drops the event everywhere; else if any tab is active,
+  `whenActive: "toast"` devices get a toast on their active tabs only; else push
+  (subscribed devices) or in-page `showNotification` (connected tabs).
+- The server decides before pushing: iOS revokes push permission for pushes
+  that display nothing, so `public/sw.js` always shows what it receives.
+- Notifications ride the sidebar's `/api/agent/running/events` stream
+  (`?clientId&deviceId`), not a new SSE connection: browsers allow six HTTP/1.1
+  connections per host. `SessionSidebar` re-dispatches them as a window event.
+- Prefs and push subscriptions are per device, in `localStorage` and mirrored to
+  `~/.omp/agent/omp-web/notifications.json` (mode 0600; also holds the VAPID
+  private key). Push text is rendered server-side in the device's locale.
+- `/sw.js` and `/badge-96.png` are exempt from the password gate (`proxy.ts`):
+  browsers re-fetch the worker for updates without the session cookie.
 
 ## omp Session File Format (v3)
 

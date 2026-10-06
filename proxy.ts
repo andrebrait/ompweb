@@ -29,4 +29,6 @@ export function proxy(request: NextRequest) {
 // session exists; these and the ordinary browser icons are public assets,
 // not workspace data. /api/manifest stays authenticated: its link includes
 // credentials and its embedded installation icons need no separate request.
-export const config = { matcher: "/((?!_next/static|_next/image|favicon\\.ico|icon\\.svg|icon\\.png|icon-192\\.png).*)" };
+// The service worker script holds no data either, and the browser re-fetches
+// it for update checks even after the sign-in cookie expired.
+export const config = { matcher: "/((?!_next/static|_next/image|favicon\\.ico|icon\\.svg|icon\\.png|icon-192\\.png|badge-96\\.png|sw\\.js).*)" };

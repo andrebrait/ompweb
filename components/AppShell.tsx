@@ -33,7 +33,7 @@ import { buildAtMentionText, buildFileAtMentionsText, buildFileLineMentionText }
 import { getInitialNavigation } from "@/lib/initial-navigation";
 import { comparableProjectPath } from "@/lib/comparable-path";
 import { clearDraft } from "@/lib/draft-store";
-import { showCompletionNotification } from "@/lib/browser-notifications";
+import { useNotifications } from "@/hooks/useNotifications";
 import {
   APP_UPDATE_COMPLETED_RELOAD_MS,
   APP_UPDATE_POLL_MS,
@@ -1330,28 +1330,23 @@ export function AppShell({ appName }: { appName: string }) {
   const handleAgentEnd = useCallback(() => {
     setRefreshKey((k) => k + 1);
     setExplorerRefreshKey((k) => k + 1);
-    if (document.visibilityState !== "hidden" || !("Notification" in window)) return;
+  }, []);
 
-    const targetSession = selectedSession;
-    const notify = () => {
-      showCompletionNotification(
-        targetSession?.name ?? translate("appShell.sessionComplete"),
-        translate("appShell.taskFinished"),
-        () => {
-          window.focus();
-          if (targetSession) handleSelectSession(targetSession);
-        },
-      );
-    };
-    if (Notification.permission === "granted") notify();
-    else if (Notification.permission === "default") {
-      void Notification.requestPermission().then((permission) => { if (permission === "granted") notify(); });
-    } else {
-      // "denied": the OS blocks notifications, so surface the completion as an
-      // in-app toast instead of leaving background completions silent.
-      toast.info(targetSession?.name ?? translate("appShell.sessionComplete"), translate("appShell.taskFinished"));
-    }
-  }, [handleSelectSession, selectedSession]);
+  // Notification clicks name a session id; the session list carries its cwd
+  // and project, which selecting needs.
+  const openSessionById = useCallback((sessionId: string) => {
+    window.focus();
+    void fetch("/api/sessions")
+      .then((r) => (r.ok ? (r.json() as Promise<{ sessions: SessionInfo[] }>) : null))
+      .then((d) => {
+        const session = d?.sessions.find((s) => s.id === sessionId);
+        if (session) handleSelectSession(session);
+        else toast.error(translate("notifications.sessionNotFound"));
+      })
+      .catch(() => toast.error(translate("notifications.sessionNotFound")));
+  }, [handleSelectSession]);
+
+  useNotifications({ sessionId: selectedSession?.id ?? null, locale, onOpenSession: openSessionById });
 
   const handleAutoName = useCallback(async () => {
     const sessionId = selectedSession?.id;
