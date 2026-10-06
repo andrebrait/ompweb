@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { LogOut } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { formatApiError } from "@/lib/i18n/api-error";
-import { summarizeProviderAccounts } from "@/lib/provider-accounts";
+import { planForStoredAccount, summarizeProviderAccounts } from "@/lib/provider-accounts";
 import { useProviderUsage } from "./AppShell-provider-usage";
 import { ConfirmDialog } from "./ui/field";
 
@@ -75,8 +75,7 @@ export function ProviderAccounts({ providerId, enabled, onChanged }: { providerI
   if (!enabled) return null;
   const loading = stored === null || (!stored.supported && usageLoading);
   const rows = stored?.supported
-    // omp suffixes the org (`email (org)`); usage reports the bare email.
-    ? stored.accounts.map((a) => ({ key: String(a.credentialId), label: a.label, title: a.detail, plan: usageAccounts.find((u) => u.label && (a.label === u.label || a.label.startsWith(`${u.label} (`)))?.plan, account: a }))
+    ? stored.accounts.map((a) => ({ key: String(a.credentialId), label: a.label, title: a.detail, plan: planForStoredAccount(a.label, stored.accounts.map((b) => b.label), usageAccounts), account: a }))
     : usageAccounts.map((u) => ({ key: u.key, label: u.label ?? t("modelsConfig.accountNumber", { index: u.index ?? 1 }), title: u.label, plan: u.plan, account: null }));
   if (!loading && rows.length === 0 && !error) return null;
 
