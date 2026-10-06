@@ -1644,7 +1644,6 @@
   "modelsConfig.accountsRotationHint": "omp manages account selection and rotation.",
   "modelsConfig.accountActive": "active",
   "modelsConfig.accountApiKey": "API key",
-  "modelsConfig.accountsLogoutUnsupported": "This omp version cannot disconnect accounts from omp-web. Update omp, or run `omp` in a terminal and use /logout.",
   "modelsConfig.disconnectAccount": "Disconnect {label}",
   "modelsConfig.disconnectAccountTitle": "Disconnect account?",
   "modelsConfig.disconnectAccountBody": "omp will delete the stored credential for {label}. Other accounts for this provider stay connected."

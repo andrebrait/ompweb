@@ -1607,7 +1607,6 @@
   "modelsConfig.accountsRotationHint": "账户的选择和轮换由 omp 管理。",
   "modelsConfig.accountActive": "使用中",
   "modelsConfig.accountApiKey": "API 密钥",
-  "modelsConfig.accountsLogoutUnsupported": "此版本的 omp 无法从 omp-web 断开账户。请更新 omp，或在终端运行 `omp` 并使用 /logout。",
   "modelsConfig.disconnectAccount": "断开 {label}",
   "modelsConfig.disconnectAccountTitle": "断开账户？",
   "modelsConfig.disconnectAccountBody": "omp 将删除 {label} 的已存储凭据。此提供商的其他账户保持连接。"

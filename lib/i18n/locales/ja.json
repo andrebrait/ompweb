@@ -1607,7 +1607,6 @@
   "modelsConfig.accountsRotationHint": "アカウントの選択とローテーションは omp が管理します。",
   "modelsConfig.accountActive": "使用中",
   "modelsConfig.accountApiKey": "APIキー",
-  "modelsConfig.accountsLogoutUnsupported": "この omp のバージョンでは omp-web からアカウントを切断できません。omp を更新するか、ターミナルで `omp` を実行して /logout を使ってください。",
   "modelsConfig.disconnectAccount": "{label} を切断",
   "modelsConfig.disconnectAccountTitle": "アカウントを切断しますか？",
   "modelsConfig.disconnectAccountBody": "omp は {label} の保存済み資格情報を削除します。このプロバイダーの他のアカウントは接続されたままです。"

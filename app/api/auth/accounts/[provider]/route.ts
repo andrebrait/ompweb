@@ -5,7 +5,7 @@ import { runUtilityCommand } from "@/lib/omp/rpc-utility";
 export const dynamic = "force-dynamic";
 
 /** Entry of omp's `get_logout_accounts` response. Labels never carry a raw key. */
-export interface OmpProviderAccount {
+interface OmpProviderAccount {
   credentialId: number;
   label: string;
   detail: string;
@@ -46,18 +46,15 @@ export async function GET(_req: Request, { params }: { params: Promise<{ provide
 /** Remove one stored credential (`?credentialId=`); omp picks the next account. */
 export async function DELETE(req: Request, { params }: { params: Promise<{ provider: string }> }) {
   const raw = new URL(req.url).searchParams.get("credentialId") ?? "";
-  if (!/^\d+$/.test(raw)) {
+  const credentialId = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(credentialId)) {
     return NextResponse.json({ error: "credentialId must be an integer" }, { status: 400 });
   }
-  const credentialId = Number(raw);
   const { provider } = await params;
   try {
-    const { remainingSource } = await runUtilityCommand<{ remainingSource?: string }>(
-      { type: "logout", providerId: provider, credentialId },
-      60_000,
-    );
+    await runUtilityCommand({ type: "logout", providerId: provider, credentialId }, 60_000);
     invalidateModelsCache();
-    return NextResponse.json({ remainingSource: remainingSource ?? null });
+    return NextResponse.json({ ok: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes(UNSUPPORTED)) {

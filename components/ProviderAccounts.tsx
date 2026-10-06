@@ -45,7 +45,11 @@ export function ProviderAccounts({ providerId, enabled, onChanged }: { providerI
         if (d.error) setError(d.error);
         setStored({ supported: d.supported === true, accounts: d.accounts ?? [] });
       })
-      .catch(() => { if (!controller.signal.aborted) setStored({ supported: false, accounts: [] }); });
+      .catch((e: unknown) => {
+        if (controller.signal.aborted) return;
+        setError(e instanceof Error ? e.message : String(e));
+        setStored({ supported: false, accounts: [] });
+      });
     return () => controller.abort();
   }, [enabled, providerId, version]);
 
@@ -57,6 +61,8 @@ export function ProviderAccounts({ providerId, enabled, onChanged }: { providerI
       const d = await res.json().catch(() => ({})) as { error?: string; code?: string };
       if (!res.ok) throw new Error(d.error || d.code ? formatApiError(d) : `HTTP ${res.status}`);
       setConfirm(null);
+      // Drop the row now; the refetch only reconciles which account is active.
+      setStored((s) => s && { ...s, accounts: s.accounts.filter((a) => a.credentialId !== account.credentialId) });
       setVersion((v) => v + 1);
       onChanged();
     } catch (e) {
@@ -114,7 +120,7 @@ export function ProviderAccounts({ providerId, enabled, onChanged }: { providerI
         <p style={{ margin: 0, fontSize: 11, color: "var(--text-dim)", lineHeight: 1.5 }}>{t("modelsConfig.accountsRotationHint")}</p>
       )}
       {stored && !stored.supported && !error && (
-        <p style={{ margin: 0, fontSize: 11, color: "var(--text-dim)", lineHeight: 1.5 }}>{t("modelsConfig.accountsLogoutUnsupported")}</p>
+        <p style={{ margin: 0, fontSize: 11, color: "var(--text-dim)", lineHeight: 1.5 }}>{t("errors.logout_unsupported")}</p>
       )}
       <ConfirmDialog
         open={confirm !== null}
