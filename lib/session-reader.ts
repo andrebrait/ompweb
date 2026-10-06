@@ -467,7 +467,7 @@ function toDisplayEntries(entries: SessionEntry[], options: ResolveBlobOptions):
       entry.type === "message" &&
       ((entry.message as { role?: string } | null | undefined)?.role === "toolResult")
     ) {
-      // Caller omits these images anyway — share the entry without blob work.
+      // Caller turns these images into media URLs — share the entry without blob work.
       out[i] = entry;
       continue;
     }

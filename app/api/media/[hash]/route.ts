@@ -4,7 +4,8 @@ import { createThumbnail, existingThumbnail, imageMimeType, mediaFilePath } from
 export const dynamic = "force-dynamic";
 
 function image(body: Buffer, type: string): Response {
-  return new Response(new Uint8Array(body), {
+  // A view, not a copy: these buffers come from readFile/sharp, never a SharedArrayBuffer.
+  return new Response(new Uint8Array(body.buffer as ArrayBuffer, body.byteOffset, body.byteLength), {
     headers: {
       "Content-Type": type,
       // Content-addressed: the bytes behind a hash never change.

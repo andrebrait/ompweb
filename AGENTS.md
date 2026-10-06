@@ -252,9 +252,12 @@ wait for that commit:
   and live frames (`AgentSessionWrapper.emit`, which also feeds the replay
   snapshot) replace each image with `{type:"image", mimeType, url:"/api/media/<sha256>"}`.
   User-message and custom-message images stay inline.
-- The hash is omp's blob address (sha256 of the bytes): blob refs map directly,
-  inline images are hashed and copied to `<omp-web dir>/media/` until omp has
-  the blob, when the media route deletes the copy.
+- The hash is omp's blob address (sha256 of the bytes): blob refs map directly
+  (a missing blob becomes the `[image unavailable …]` text), inline images are
+  hashed and copied to `<omp-web dir>/media/`. omp writes blobs in place, so the
+  route serves the copy until the blob has the copy's size. A daily sweep (run
+  on the next media write) deletes copies omp now holds and files older than
+  30 days.
 - `ToolCallBlock` shows `?thumb=1` (480px WebP made once with `sharp` and cached
   next to the copies; full image if sharp is unavailable) and opens the full
   image in the lightbox. The route serves only PNG/JPEG/GIF/WebP by magic bytes.

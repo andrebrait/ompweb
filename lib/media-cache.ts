@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { getBlobsDir, getDiagnosticsDir } from "./omp/paths";
 import { isRecord } from "./type-guards";
@@ -16,22 +16,62 @@ const HASH_RE = /^[a-f0-9]{64}$/;
 const BLOB_PREFIX = "blob:sha256:";
 /** Twice the 240px tool-result preview, for high-density screens. */
 const THUMB_PX = 480;
+const SWEEP_EVERY_MS = 24 * 60 * 60 * 1000;
+const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+declare global {
+  var __ompWebMediaSweptAt: number | undefined;
+}
 
 function mediaDir(): string {
   return path.join(getDiagnosticsDir(), "media");
 }
 
+function fileSize(file: string): number | undefined {
+  return statSync(file, { throwIfNoEntry: false })?.size;
+}
+
 function writeAtomic(file: string, data: Buffer): void {
+  sweepMediaCache();
   mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(tmp, data);
-  renameSync(tmp, file);
+  try {
+    writeFileSync(tmp, data);
+    renameSync(tmp, file);
+  } catch (error) {
+    rmSync(tmp, { force: true });
+    throw error;
+  }
+}
+
+/** Daily: drop copies omp now holds as complete blobs, and anything older than 30 days (previews regenerate on demand). */
+function sweepMediaCache(): void {
+  const now = Date.now();
+  if (now - (globalThis.__ompWebMediaSweptAt ?? 0) < SWEEP_EVERY_MS) return;
+  globalThis.__ompWebMediaSweptAt = now;
+  let names: string[];
+  try {
+    names = readdirSync(mediaDir());
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const file = path.join(mediaDir(), name);
+    try {
+      const stat = statSync(file);
+      const hasBlob = HASH_RE.test(name) && fileSize(path.join(getBlobsDir(), name)) === stat.size;
+      if (hasBlob || now - stat.mtimeMs > MAX_AGE_MS) unlinkSync(file);
+    } catch {
+      // Removed concurrently or unreadable: the next sweep retries.
+    }
+  }
 }
 
 // Live tool output resends the full accumulated result on every update; this
-// keeps one screenshot from being decoded and hashed once per frame.
+// keeps one screenshot from being decoded and hashed once per frame. Kept tiny
+// because each key is a whole base64 image.
 const recentHashes = new Map<string, string>();
-const RECENT_MAX = 32;
+const RECENT_MAX = 4;
 
 /** Store a base64 image under its content address and return the hash. */
 export function storeInlineImage(base64: string): string {
@@ -62,6 +102,9 @@ function imageBlockAsUrl(block: unknown): unknown {
   if (data.startsWith(BLOB_PREFIX)) {
     hash = data.slice(BLOB_PREFIX.length);
     if (!HASH_RE.test(hash)) return block;
+    if (!existsSync(path.join(getBlobsDir(), hash)) && !existsSync(path.join(mediaDir(), hash))) {
+      return { type: "text", text: `[image unavailable: blob ${hash.slice(0, 12)}… not found]` };
+    }
   } else {
     try {
       hash = storeInlineImage(data);
@@ -108,18 +151,19 @@ export function eventWithToolResultImageUrls<E extends { type: string; [key: str
   }
 }
 
-/** File holding a stored image: omp's blob first, else omp-web's copy (removed once omp has the blob). */
+/**
+ * File holding a stored image: omp's blob, else omp-web's copy. omp writes
+ * blobs in place, so a blob that differs in size from our copy is still being
+ * written and the copy is served instead.
+ */
 export function mediaFilePath(hash: string): string | null {
   if (!HASH_RE.test(hash)) return null;
   const blob = path.join(getBlobsDir(), hash);
   const copy = path.join(mediaDir(), hash);
-  if (existsSync(blob)) {
-    if (existsSync(copy)) {
-      try { unlinkSync(copy); } catch { /* another request removed it */ }
-    }
-    return blob;
-  }
-  return existsSync(copy) ? copy : null;
+  const blobSize = fileSize(blob);
+  const copySize = fileSize(copy);
+  if (blobSize !== undefined && (copySize === undefined || blobSize === copySize)) return blob;
+  return copySize === undefined ? null : copy;
 }
 
 /** Raster image type from magic bytes; null for anything else (the blob store also holds non-images). */
@@ -139,18 +183,24 @@ export function existingThumbnail(hash: string): string | null {
 
 /** Generate and cache a small WebP preview; null when sharp is unavailable or fails. */
 export async function createThumbnail(hash: string, image: Buffer): Promise<Buffer | null> {
+  let thumb: Buffer;
   try {
     // Dynamic on purpose: sharp's native binary is platform-specific and may be
     // missing, and this module is also loaded by the session reader and RPC
     // manager, which must not fail or load libvips just to rewrite URLs.
     const { default: sharp } = await import("sharp");
-    const thumb = await sharp(image)
+    thumb = await sharp(image)
+      .rotate() // apply EXIF orientation; WebP output drops the tag
       .resize(THUMB_PX, THUMB_PX, { fit: "inside", withoutEnlargement: true })
       .webp({ quality: 80 })
       .toBuffer();
-    writeAtomic(path.join(mediaDir(), `${hash}.thumb.webp`), thumb);
-    return thumb;
   } catch {
     return null;
   }
+  try {
+    writeAtomic(path.join(mediaDir(), `${hash}.thumb.webp`), thumb);
+  } catch {
+    // Not cached this time; the preview is still served.
+  }
+  return thumb;
 }
