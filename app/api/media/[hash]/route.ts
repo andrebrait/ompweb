@@ -15,16 +15,27 @@ function image(body: Buffer, type: string): Response {
   });
 }
 
+async function readIfPresent(file: string): Promise<Buffer | null> {
+  try {
+    return await readFile(file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 /** GET /api/media/<sha256>[?thumb=1] — a tool-result image, or its small WebP preview. */
 export async function GET(req: Request, { params }: { params: Promise<{ hash: string }> }) {
   const { hash } = await params;
   const thumb = new URL(req.url).searchParams.has("thumb");
   const cached = thumb ? existingThumbnail(hash) : null;
-  if (cached) return image(await readFile(cached), "image/webp");
+  const cachedBytes = cached ? await readIfPresent(cached) : null;
+  if (cachedBytes) return image(cachedBytes, "image/webp");
 
   const file = mediaFilePath(hash);
-  if (!file) return new Response("Not found", { status: 404 });
-  const bytes = await readFile(file);
+  // The daily sweep or omp can remove a file between the lookup and the read.
+  const bytes = file ? await readIfPresent(file) : null;
+  if (!bytes) return new Response("Not found", { status: 404 });
   const type = imageMimeType(bytes);
   if (!type) return new Response("Not an image", { status: 415 });
   if (thumb) {

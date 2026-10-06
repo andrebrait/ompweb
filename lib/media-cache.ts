@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { getBlobsDir, getDiagnosticsDir } from "./omp/paths";
@@ -34,7 +34,7 @@ function fileSize(file: string): number | undefined {
 function writeAtomic(file: string, data: Buffer): void {
   sweepMediaCache();
   mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  const tmp = `${file}.${randomUUID()}.tmp`;
   try {
     writeFileSync(tmp, data);
     renameSync(tmp, file);
@@ -80,7 +80,8 @@ export function storeInlineImage(base64: string): string {
   const bytes = Buffer.from(base64, "base64");
   const hash = createHash("sha256").update(bytes).digest("hex");
   const copy = path.join(mediaDir(), hash);
-  if (!existsSync(path.join(getBlobsDir(), hash)) && !existsSync(copy)) writeAtomic(copy, bytes);
+  // omp writes blobs in place: keep our own copy unless its blob is already complete.
+  if (fileSize(path.join(getBlobsDir(), hash)) !== bytes.length && fileSize(copy) !== bytes.length) writeAtomic(copy, bytes);
   recentHashes.set(base64, hash);
   if (recentHashes.size > RECENT_MAX) recentHashes.delete(recentHashes.keys().next().value!);
   return hash;
