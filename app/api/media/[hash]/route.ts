@@ -32,9 +32,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ hash: st
   const cachedBytes = cached ? await readIfPresent(cached) : null;
   if (cachedBytes) return image(cachedBytes, "image/webp");
 
-  const file = mediaFilePath(hash);
-  // The daily sweep or omp can remove a file between the lookup and the read.
-  const bytes = file ? await readIfPresent(file) : null;
+  // The sweep can delete our copy between lookup and read once omp's blob is
+  // complete; one more lookup then finds the blob.
+  let bytes: Buffer | null = null;
+  for (let attempt = 0; attempt < 2 && !bytes; attempt++) {
+    const file = mediaFilePath(hash);
+    if (!file) break;
+    bytes = await readIfPresent(file);
+  }
   if (!bytes) return new Response("Not found", { status: 404 });
   const type = imageMimeType(bytes);
   if (!type) return new Response("Not an image", { status: 415 });
