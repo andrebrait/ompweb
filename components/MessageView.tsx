@@ -10,6 +10,7 @@ import { ClickableImage } from "./ImageLightbox";
 import { translate, useI18n, type Locale } from "@/lib/i18n";
 import { parseCompactionSummary } from "@/lib/compaction-summary";
 import { isEmptyThinkingBlock } from "@/lib/message-display";
+import { isPassiveToolContext } from "@/lib/chat-transcript-plan";
 import { Tooltip, Collapsible, CollapsibleTrigger } from "./ui/primitives";
 import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import { formatCompactNumber } from "@/lib/format";
@@ -257,7 +258,7 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
   }
   if (message.role === "custom") {
     const custom = message as CustomMessage;
-    if (custom.customType === "xdev-mount-notice") {
+    if (custom.customType === "xdev-mount-notice" || isPassiveToolContext(custom)) {
       return null;
     }
     if (custom.customType === "compaction") {
@@ -1142,6 +1143,11 @@ const ToolCallBlock = memo(function ToolCallBlock({
           />
         </CollapsibleTrigger>
         {resultMeta && <div className="activity-row-secondary">{resultMeta}</div>}
+        {result?.passiveContext && (
+          <div className="activity-row-secondary" title={result.passiveContext}>
+            <span aria-hidden>↳ </span>{t("messageView.passiveContext", { text: result.passiveContext })}
+          </div>
+        )}
         {expanded && (
           <div className={`tool-call-details${isError ? " tool-call-details-error" : ""}`}>
             <div className="tool-call-command">

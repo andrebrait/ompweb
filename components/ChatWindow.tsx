@@ -5,7 +5,7 @@ import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type
 import { ArrowDown, ChevronDown, ChevronUp, Layers, Paperclip, Square } from "lucide-react";
 import type { AgentMessage, AssistantContentBlock, AssistantMessage, BashExecutionMessage, ExtensionUiRequest, SessionInfo, SessionTreeNode, ToolCallContent, ToolResultMessage } from "@/lib/types";
 import { translate, useI18n } from "@/lib/i18n";
-import { isGroupAnchor, planTranscriptRows, type ActivityPiece, type TranscriptRow } from "@/lib/chat-transcript-plan";
+import { collectToolResults, isGroupAnchor, planTranscriptRows, type ActivityPiece, type TranscriptRow } from "@/lib/chat-transcript-plan";
 import { resolveForkTargets } from "@/lib/chat-fork";
 import { MessageView } from "./MessageView";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
@@ -858,14 +858,13 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
     return history.reverse();
   }, [messages]);
   const conversationMeta = useMemo(() => {
-    const toolResultsMap = new Map<string, ToolResultMessage>();
+    const toolResultsMap = collectToolResults(messages);
     let lastAnchorIdx = -1;
     let hasCompaction = false;
     const visibleRefIndexByMessage = new Map<number, number>();
     let refIdx = 0;
 
     messages.forEach((message, index) => {
-      if (message.role === "toolResult") toolResultsMap.set((message as ToolResultMessage).toolCallId, message as ToolResultMessage);
       if (message.role === "custom" && message.customType === "compaction") hasCompaction = true;
       if (isGroupAnchor(message)) lastAnchorIdx = index;
       if (message.role === "user" || message.role === "assistant") visibleRefIndexByMessage.set(index, refIdx++);
