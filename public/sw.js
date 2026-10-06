@@ -33,11 +33,17 @@ self.addEventListener("notificationclick", (event) => {
       if (client) {
         try {
           await client.focus();
-          // The page selects the session in place, keeping its live state.
-          if (sessionId) client.postMessage({ type: "omp-open-session", sessionId });
+          // The app selects the session in place, keeping its live state. Any
+          // other page (the sign-in screen after the cookie expired) loads the
+          // session URL, which the sign-in screen carries through as `next`.
+          if (new URL(client.url).pathname === "/") {
+            if (sessionId) client.postMessage({ type: "omp-open-session", sessionId });
+          } else {
+            await client.navigate(url);
+          }
           return;
         } catch {
-          // focus() can be refused; open a window instead.
+          // focus() or navigate() can be refused; open a window instead.
         }
       }
       await self.clients.openWindow(url);

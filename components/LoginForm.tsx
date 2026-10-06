@@ -26,7 +26,9 @@ export function LoginForm() {
       }
       // Full reload so the new auth cookie is picked up by middleware
       // and server components — SPA navigation alone may keep stale state.
-      window.location.replace("/");
+      // `next` (set by proxy.ts) may only point back into the app root.
+      const next = new URLSearchParams(window.location.search).get("next");
+      window.location.replace(next?.startsWith("/?") ? next : "/");
     } catch {
       setError(t("login.connectionFailed"));
     } finally {

@@ -1333,17 +1333,25 @@ export function AppShell({ appName }: { appName: string }) {
   }, []);
 
   // Notification clicks name a session id; the session list carries its cwd
-  // and project, which selecting needs.
+  // and project, which selecting needs. When the list cannot be read (the
+  // sign-in expired), load the session URL: sign-in carries it through.
   const openSessionById = useCallback((sessionId: string) => {
     window.focus();
+    // A full load (not router navigation) so an expired sign-in reaches proxy.ts and the login page.
+    const sessionUrl = new URL(`/?session=${encodeURIComponent(sessionId)}`, window.location.origin).href;
     void fetch("/api/sessions")
-      .then((r) => (r.ok ? (r.json() as Promise<{ sessions: SessionInfo[] }>) : null))
-      .then((d) => {
-        const session = d?.sessions.find((s) => s.id === sessionId);
-        if (session) handleSelectSession(session);
-        else toast.error(translate("notifications.sessionNotFound"));
+      .then((r) => {
+        if (!r.ok) {
+          window.location.assign(sessionUrl);
+          return;
+        }
+        return (r.json() as Promise<{ sessions: SessionInfo[] }>).then((d) => {
+          const session = d.sessions.find((s) => s.id === sessionId);
+          if (session) handleSelectSession(session);
+          else toast.error(translate("notifications.sessionNotFound"));
+        });
       })
-      .catch(() => toast.error(translate("notifications.sessionNotFound")));
+      .catch(() => window.location.assign(sessionUrl));
   }, [handleSelectSession]);
 
   // Full-page Settings hides the chat, so its session counts as not viewed.

@@ -560,6 +560,7 @@ function NotificationSettingsPanel() {
 
   // With push, the server sends a real push; otherwise this tab shows one itself.
   const sendTest = async () => {
+    const testNotification = renderNotification({ type: "test", sessionId: "", sessionName: "omp web" }, t);
     try {
       if (pushActive) {
         const res = await fetch("/api/notifications/test", {
@@ -571,8 +572,10 @@ function NotificationSettingsPanel() {
           const body: unknown = await res.json().catch(() => null);
           throw new Error(isRecord(body) && typeof body.error === "string" ? body.error : `HTTP ${res.status}`);
         }
-      } else if (!(await showSystemNotification(renderNotification({ type: "test", sessionId: "", sessionName: "omp web" }, t)))) {
-        throw new Error(t("notifications.statusPermission"));
+      } else if (!(await showSystemNotification(testNotification))) {
+        // No system notifications here (plain HTTP, permission missing): in-app toasts are what this browser gets.
+        toast.info(testNotification.title, testNotification.body);
+        return;
       }
       toast.success(t("notifications.testSent"));
     } catch (error) {

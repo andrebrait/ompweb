@@ -328,6 +328,8 @@ export class AgentSessionWrapper {
   private sessionMovePending = false;
   private unsubscribeFrames: (() => void) | null = null;
   private readonly detectNotification = createNotificationDetector();
+  /** Agent activity since the last `session_settled`: background work may still run after the turn ended. */
+  private unsettled = false;
   private initPromise: Promise<void> | null = null;
   private restarting = false;
   private mcpListWaiter: { resolve: (text: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> } | null = null;
@@ -656,8 +658,8 @@ export class AgentSessionWrapper {
     });
     // Terminal agent_end so a client mid-stream stops spinning immediately
     // instead of waiting for the reconcile poll.
-    if (this.streaming || this.promptRunning) {
-      this.emit({ type: "agent_end", isTerminal: true, messages: [] });
+    if (this.streaming || this.promptRunning) this.emit({ type: "agent_end", isTerminal: true, messages: [] });
+    if (this.streaming || this.promptRunning || this.unsettled) {
       publishNotification({ type: "error", sessionId: this._sessionId, sessionName: this.notificationSessionName(), detail: detail || status });
     }
     this.destroy();
@@ -687,6 +689,7 @@ export class AgentSessionWrapper {
         break;
       }
       case "agent_start":
+        this.unsettled = true;
         this.promptRunning = true;
         this.streaming = true;
         this.awaitingAgentStart = false;
@@ -718,6 +721,9 @@ export class AgentSessionWrapper {
         } else {
           this.continuationGraceUntil = Date.now() + NON_TERMINAL_CONTINUATION_GRACE_MS;
         }
+        break;
+      case "session_settled":
+        this.unsettled = false;
         break;
       case "prompt_result":
         // Local-only prompt (builtin/extension slash command) — no agent run.

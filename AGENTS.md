@@ -622,13 +622,20 @@ during the wait.
   counting as active, so other devices are not silenced.
 - Prefs and push subscriptions are per device, in `localStorage` and mirrored to
   `~/.omp/agent/omp-web/notifications.json` (mode 0600; also holds the VAPID
-  private key). Push text is rendered server-side in the device's locale. Only
-  enabled devices sync on load.
+  private key). The server reads that file on every use, never caching it: an
+  installed server and `npm run dev` can share the agent dir. Push text is
+  rendered server-side in the device's locale. Only enabled devices sync on load.
+- A crash notifies "Run failed" while a run is live or while background work
+  started by it has not settled yet (`unsettled`, cleared by `session_settled`).
 - The Settings test button pushes through the server for subscribed devices
   (502 with the push service's answer on failure) and shows a local
-  notification otherwise.
+  notification otherwise, or a toast where none are allowed.
 - `/sw.js` and `/badge-96.png` are exempt from the password gate (`proxy.ts`):
   browsers re-fetch the worker for updates without the session cookie.
+- Notification clicks survive an expired sign-in: `proxy.ts` sends `/?session=…`
+  to `/login?next=/?session=…`, and `LoginForm` returns there (only `/?…`
+  targets are accepted). The worker navigates non-app windows to the session
+  URL; the app falls back to that URL when `/api/sessions` cannot be read.
 
 ## omp Session File Format (v3)
 

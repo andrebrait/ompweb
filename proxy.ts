@@ -22,7 +22,10 @@ export function proxy(request: NextRequest) {
   if (pathname.startsWith("/api/")) {
     return NextResponse.json({ error: "Password required", code: "password_required" }, { status: 401 });
   }
-  return NextResponse.redirect(new URL("/login", request.url));
+  const login = new URL("/login", request.url);
+  // Keep a deep link to a session (e.g. a notification click) across sign-in.
+  if (pathname === "/" && request.nextUrl.search) login.searchParams.set("next", `/${request.nextUrl.search}`);
+  return NextResponse.redirect(login);
 }
 
 // The sign-in screen still needs its Next.js JavaScript and CSS before a

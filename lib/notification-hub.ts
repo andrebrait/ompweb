@@ -62,7 +62,6 @@ interface HubState {
   presence: Map<string, NotificationPresence>;
   /** Open SSE streams per tab. Independent of presence: streams reconnect, overlap, and close while the tab stays put. */
   streams: Map<string, Set<Send>>;
-  store: StoreFile | null;
 }
 
 declare global {
@@ -70,7 +69,7 @@ declare global {
 }
 
 function hub(): HubState {
-  return (globalThis.__ompNotificationHub ??= { presence: new Map(), streams: new Map(), store: null });
+  return (globalThis.__ompNotificationHub ??= { presence: new Map(), streams: new Map() });
 }
 
 // p256dh is an uncompressed P-256 point (65 bytes), auth a 16-byte secret; both base64url.
@@ -98,9 +97,13 @@ function storePath(): string {
   return resolve(getAgentDir(), "omp-web", "notifications.json");
 }
 
+/**
+ * Read from disk on every use, never cached: an installed server and a dev
+ * server can share the agent directory, and each must see the other's devices
+ * and keys. ponytail: read-modify-write without a lock; two instances saving in
+ * the same millisecond can lose one update (the tab re-syncs on its next load).
+ */
 function loadStore(): StoreFile {
-  const state = hub();
-  if (state.store) return state.store;
   let store: StoreFile = { devices: [] };
   try {
     if (existsSync(storePath())) {
@@ -120,7 +123,6 @@ function loadStore(): StoreFile {
   } catch {
     // A corrupt file only loses device prefs; tabs re-register on load.
   }
-  state.store = store;
   return store;
 }
 

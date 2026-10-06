@@ -117,7 +117,10 @@ push: iOS Safari revokes push permission for pushes that show nothing.
 - `~/.omp/agent/omp-web/notifications.json` (mode 0600, atomic temp-file +
   rename writes) holds the VAPID key pair, generated on first use, and up to
   50 devices `{deviceId, prefs, subscription?, updatedAt}`. A push endpoint
-  belongs to one device; saving it removes it from any other.
+  belongs to one device; saving it removes it from any other. Over the cap,
+  devices that are neither enabled nor subscribed are dropped first. The file
+  is read on every use, so omp-web instances sharing the agent directory see
+  each other's devices and keys.
 - VAPID subject: `https://github.com/kahme247/ompweb` (Apple rejects subjects it
   cannot resolve, such as `mailto:…@localhost`).
 - Only HTTPS push endpoints are accepted.
@@ -133,12 +136,16 @@ push: iOS Safari revokes push permission for pushes that show nothing.
 - Registered at `/sw.js`, scope `/`. No caching.
 - `push`: `showNotification(title, {body, icon: "/icon-192.png", badge:
   "/badge-96.png", tag, renotify, data: {url, sessionId}})`.
-- `notificationclick`: focus an existing app window and `postMessage({type:
-  "omp-open-session", sessionId})` to it, so the app selects the session in
-  place; with no window, `clients.openWindow(url)`.
+- `notificationclick`: focus an existing window. An app window (`/`) gets
+  `postMessage({type: "omp-open-session", sessionId})` and selects the session
+  in place; any other window (the sign-in page) navigates to the session URL;
+  with no window, `clients.openWindow(url)`.
 - `/sw.js` and `/badge-96.png` are exempt from the password gate in
   `proxy.ts`: browsers re-fetch the worker for update checks without the
   sign-in cookie.
+- Session links survive sign-in: `proxy.ts` redirects `/?session=…` without a
+  valid cookie to `/login?next=/?session=…`, and the sign-in form returns to
+  `next` when it starts with `/?`.
 
 ### HTTP API
 
