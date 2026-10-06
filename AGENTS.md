@@ -630,7 +630,7 @@ during the wait.
   `~/.omp/agent/omp-web/notifications.json` (mode 0600; also holds the VAPID
   private key). The server reads that file on every use, never caching it: an
   installed server and `npm run dev` can share the agent dir. Push text is
-  rendered server-side in the device's locale. Only enabled devices sync on load.
+  rendered server-side in the device's locale. Browsers with saved settings (enabled or not) sync on load; never-configured browsers do not.
 - A crash notifies "Run failed" while a run is live or while background work
   started by it has not settled yet (`unsettled`, cleared by `session_settled`).
 - The Settings test button pushes through the server for subscribed devices

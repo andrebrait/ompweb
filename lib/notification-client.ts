@@ -55,6 +55,15 @@ export function getNotificationPrefs(): NotificationPrefs {
   return prefs;
 }
 
+/** Whether this browser ever saved notification settings (never-enabled browsers stay off the server). */
+export function hasStoredNotificationPrefs(): boolean {
+  try {
+    return localStorage.getItem(PREFS_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
 export function subscribeNotificationPrefs(listener: () => void): () => void {
   // Another tab of this browser changed the prefs: drop the cached copy.
   const onStorage = (event: StorageEvent) => {

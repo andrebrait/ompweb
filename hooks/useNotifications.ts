@@ -6,6 +6,7 @@ import {
   ensurePushSubscription,
   getNotificationDeviceId,
   getNotificationPrefs,
+  hasStoredNotificationPrefs,
   NOTIFICATION_MESSAGE_EVENT,
   notificationClientId,
   OPEN_SESSION_EVENT,
@@ -86,11 +87,15 @@ export function useNotifications({ sessionId, locale, onOpenSession }: { session
     if (prefs.enabled && prefs.locale !== locale) void updateNotificationPrefs({ locale }).catch(() => {});
   }, [locale]);
 
-  // Startup sync for enabled devices: the server may have lost its store, or the browser its subscription.
+  // Startup sync for any browser with saved settings: the server may have lost
+  // its store, missed a save (including turning notifications off), or the
+  // browser its subscription. Browsers that never opened the setting stay off
+  // the server's device list.
   useEffect(() => {
-    if (!getNotificationPrefs().enabled) return;
+    if (!hasStoredNotificationPrefs()) return;
     void (async () => {
-      if (!(await ensurePushSubscription().catch(() => false))) await syncNotificationDevice();
+      const pushActive = getNotificationPrefs().enabled && (await ensurePushSubscription().catch(() => false));
+      if (!pushActive) await syncNotificationDevice();
     })().catch(() => {});
   }, []);
 
