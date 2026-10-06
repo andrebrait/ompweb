@@ -32,6 +32,7 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 ### Fixes & Improvements
 
+- Show images from tool results again after reopening or reloading a session. Since tool-result images were dropped from the initial history load, screenshots and image reads showed only `[1 tool result image omitted from initial history payload …]`, with a wrong byte count. Expanding the tool row now shows a small preview; click it for the full image. Previews are 480px WebP files generated once and kept in omp-web's data folder, and live tool output also arrives as a link instead of inline base64, so many large screenshots no longer slow the chat down or fill browser memory.
 - Balance the composer icons on phones and narrow toolbars with a slightly smaller effort-level icon and a larger Slow-mode snail, while keeping menu icon sizes unchanged.
 - Keep the model picker on the left and reasoning effort, Fast, Slow, microphone, and Send/Stop controls in a right-aligned composer group, including wrapped mobile rows.
 - The Provider Usage panel now shows each account's email instead of omp's redacted form (`an*`); accounts without an email show as **Account N**. Only the email, plan and limits reach the browser.
