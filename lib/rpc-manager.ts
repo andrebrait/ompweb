@@ -330,6 +330,8 @@ export class AgentSessionWrapper {
   private readonly detectNotification = createNotificationDetector();
   /** Agent activity since the last `session_settled`: background work may still run after the turn ended. */
   private unsettled = false;
+  /** Ids this conversation had before omp moved it to a new file. */
+  private readonly movedFromIds: string[] = [];
   private initPromise: Promise<void> | null = null;
   private restarting = false;
   private mcpListWaiter: { resolve: (text: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> } | null = null;
@@ -564,6 +566,8 @@ export class AgentSessionWrapper {
     if (moved) {
       this.sessionMovePending = false;
       if (oldId !== this._sessionId) {
+        // Tabs still showing the old id are still viewing this conversation.
+        this.movedFromIds.push(oldId);
         // Keep the old id routable: other tabs still address it, and a fresh
         // `--resume` of the old file would fork again (its owner lives on).
         this.onIdentityChangeCallback?.(oldId, this._sessionId, { keepOldId: true });
@@ -660,13 +664,19 @@ export class AgentSessionWrapper {
     // instead of waiting for the reconcile poll.
     if (this.streaming || this.promptRunning) this.emit({ type: "agent_end", isTerminal: true, messages: [] });
     if (this.streaming || this.promptRunning || this.unsettled) {
-      publishNotification({ type: "error", sessionId: this._sessionId, sessionName: this.notificationSessionName(), detail: detail || status });
+      this.publishNotifications({ type: "process_exit", detail: detail || status });
     }
     this.destroy();
   }
 
-  private notificationSessionName(): string | null {
-    return this._sessionName || this.cwd.split(/[\\/]/).filter(Boolean).pop() || null;
+  private publishNotifications(frame: Record<string, unknown>): void {
+    const session = {
+      sessionId: this._sessionId,
+      sessionName: this._sessionName || this.cwd.split(/[\\/]/).filter(Boolean).pop() || null,
+    };
+    for (const notification of this.detectNotification(frame, session)) {
+      publishNotification(this.movedFromIds.length ? { ...notification, aliases: this.movedFromIds } : notification);
+    }
   }
 
   private handleFrame(frame: RpcFrame): void {
@@ -779,7 +789,9 @@ export class AgentSessionWrapper {
           this.promptRunning = false;
           this.awaitingAgentStart = false;
           this.awaitingAgentStartDeadline = 0;
-          this.emit({ type: "prompt_error", errorMessage: detail, error: event.error, command: event.command });
+          const promptError = { type: "prompt_error", errorMessage: detail, error: event.error, command: event.command };
+          this.publishNotifications(promptError);
+          this.emit(promptError);
           notifyRunningChange();
           return;
         }
@@ -867,9 +879,7 @@ export class AgentSessionWrapper {
       }
     }
 
-    for (const notification of this.detectNotification(event, { sessionId: this._sessionId, sessionName: this.notificationSessionName() })) {
-      publishNotification(notification);
-    }
+    this.publishNotifications(event);
     this.emit(event);
     notifyRunningChange({ refreshSessionList });
   }

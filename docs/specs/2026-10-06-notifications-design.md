@@ -16,7 +16,7 @@ notification is shown for a session the user is currently viewing.
 |---|---|---|
 | `completed` | `session_settled`, unless the last `prompt_result` of that stretch had `status` `error` or `aborted` | "Task finished." |
 | `input` | `extension_ui_request` with `method` `select`, `confirm`, `input`, `editor`, `ask` or `open_url` that omp-web does not auto-answer | "Waiting for your answer: <title or first question>" |
-| `error` | `prompt_result` with `agentInvoked: true` and `status: "error"`, or omp child exit while the session was running | "Run failed: <error.message>" |
+| `error` | `prompt_result` with `agentInvoked: true` and `status: "error"`, an asynchronous prompt failure (`response` with `success: false`), or omp child exit while a run or its background work is in progress; one notification per run | "Run failed: <error.message>" |
 | `modelSwitch` | `retry_fallback_applied {from, to, reason?}`, or `notice` with `source` `prewalk` or `plan-yolo` | "Switched <from> → <to>: <reason>", or the notice text |
 
 The title is the session name, falling back to the cwd's last path segment.
@@ -98,7 +98,9 @@ For each event:
 
 1. If a visible tab is showing `event.sessionId`, drop the event for every
    device, in every mode. This uses presence only, so a reconnecting stream
-   cannot leak a notification for the viewed session.
+   cannot leak a notification for the viewed session. A session omp moved to a
+   new file carries its earlier ids as `aliases`, and tabs showing any of them
+   count as viewing it.
 2. For each device whose prefs enable notifications and the event's type:
    - if any tab (on any device) is active and the device has
      `whenActive: "toast"`, send `{kind: "toast"}` to that device's active

@@ -220,7 +220,8 @@ export function attachNotificationClient(clientId: string, send: Send): () => vo
  */
 export function routeNotification(event: NotificationEvent, presence: NotificationPresence[], reachable: ReadonlySet<string>, devices: NotificationDevice[]): Delivery[] {
   if (event.type === "test") return [];
-  if (presence.some((tab) => tab.visible && tab.sessionId === event.sessionId)) return [];
+  const viewedAs = new Set([event.sessionId, ...(event.aliases ?? [])]);
+  if (presence.some((tab) => tab.visible && tab.sessionId !== null && viewedAs.has(tab.sessionId))) return [];
   const active = presence.filter((tab) => tab.visible && reachable.has(tab.clientId));
   const deliveries: Delivery[] = [];
   for (const device of devices) {

@@ -17,6 +17,8 @@ export interface NotificationEvent {
   detail?: string;
   from?: string;
   to?: string;
+  /** Earlier ids of this conversation (omp moved it to a new file); tabs may still show one. */
+  aliases?: string[];
 }
 
 export interface NotificationPrefs {
@@ -135,6 +137,8 @@ type Detect = (frame: Record<string, unknown>, session: { sessionId: string; ses
 export function createNotificationDetector(): Detect {
   let lastOutcome: string | null = null;
   let heldFallback: NotificationEvent | null = null;
+  /** omp-web already reported this run's failure (from a failed `response`); its `prompt_result` must not repeat it. */
+  let failureReported = false;
 
   const releaseFallback = (detail?: string): NotificationEvent[] => {
     const held = heldFallback;
@@ -145,6 +149,19 @@ export function createNotificationDetector(): Detect {
   return (frame, { sessionId, sessionName }) => {
     const base = { sessionId, sessionName };
     switch (frame.type) {
+      case "agent_start":
+        failureReported = false;
+        return [];
+      // omp-web's own frames: an async prompt failure (`response` with
+      // success: false) and the omp child exiting mid-run.
+      case "prompt_error":
+      case "process_exit": {
+        const events = releaseFallback();
+        lastOutcome = "error";
+        if (failureReported) return events;
+        failureReported = true;
+        return [...events, { ...base, type: "error", detail: str(frame.errorMessage) ?? str(frame.detail) }];
+      }
       case "auto_retry_start":
         return releaseFallback(str(frame.errorMessage));
       case "retry_fallback_applied": {
@@ -168,7 +185,8 @@ export function createNotificationDetector(): Detect {
         const events = releaseFallback();
         if (frame.agentInvoked !== true) return events;
         lastOutcome = str(frame.status) ?? null;
-        if (lastOutcome !== "error") return events;
+        if (lastOutcome !== "error" || failureReported) return events;
+        failureReported = true;
         return [...events, { ...base, type: "error", detail: isRecord(frame.error) ? str(frame.error.message) : undefined }];
       }
       case "auto_retry_end":
@@ -177,6 +195,7 @@ export function createNotificationDetector(): Detect {
         const events = releaseFallback();
         const outcome = lastOutcome;
         lastOutcome = null;
+        failureReported = false;
         if (outcome === "error" || outcome === "aborted") return events;
         return [...events, { ...base, type: "completed" }];
       }

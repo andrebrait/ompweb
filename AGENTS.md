@@ -600,6 +600,10 @@ during the wait.
   Auto-approved tool confirmations return before the hook and never notify.
   omp sends `retry_fallback_applied` before the `auto_retry_start` of the same
   failure, so the detector holds a reason-less fallback until that frame.
+  Failures also arrive as omp-web's own `prompt_error` (failed `response`) and
+  `process_exit` frames; the detector reports one failure per run.
+- A session omp moved to a new file keeps its old ids as `aliases` on the
+  event, so a tab still showing an old id counts as viewing it.
 - Presence and streams are separate on purpose. Presence: each tab reports
   `{clientId, deviceId, visible, sessionId}` to `/api/notifications/presence`
   (visibility/session change, input after idling, every 30 s while present;
