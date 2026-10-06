@@ -19,6 +19,8 @@ const PRESENCE_INTERVAL_MS = 30_000;
 /** Without input for this long a visible tab no longer counts as the user being there. */
 const IDLE_AFTER_MS = 3 * 60_000;
 const ACTIVITY_EVENTS = ["pointerdown", "keydown", "wheel", "touchstart", "focus"] as const;
+/** Orders this page's presence reports; it outlives effect re-runs, so a session switch never restarts it. */
+let presenceSeq = 0;
 
 /** Current per-device notification prefs (re-renders on change). */
 export function useNotificationPrefs() {
@@ -48,7 +50,8 @@ export function useNotifications({ sessionId, locale, onOpenSession }: { session
     const present = () => document.visibilityState === "visible" && Date.now() - lastInput < IDLE_AFTER_MS;
     const report = (visible = present()) => {
       reported = visible;
-      const body = JSON.stringify({ clientId: notificationClientId, deviceId: getNotificationDeviceId(), visible, sessionId });
+      presenceSeq += 1;
+      const body = JSON.stringify({ clientId: notificationClientId, deviceId: getNotificationDeviceId(), visible, sessionId, seq: presenceSeq });
       if (!visible && navigator.sendBeacon) {
         navigator.sendBeacon("/api/notifications/presence", new Blob([body], { type: "application/json" }));
         return;

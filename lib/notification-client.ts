@@ -83,19 +83,27 @@ export async function updateNotificationPrefs(patch: Partial<NotificationPrefs>)
   await syncNotificationDevice();
 }
 
+let syncQueue: Promise<unknown> = Promise.resolve();
+
 /**
  * Send prefs (and optionally a new push subscription) to the server.
  * Returns whether the server holds a push subscription for this device.
+ * Requests run one at a time and read the prefs when they start, so a slow
+ * older request can never land after a newer one with stale prefs.
  */
-export async function syncNotificationDevice(subscription?: PushSubscriptionJSON): Promise<boolean> {
-  const response = await fetch("/api/notifications/devices", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ deviceId: getNotificationDeviceId(), prefs: getNotificationPrefs(), subscription }),
+export function syncNotificationDevice(subscription?: PushSubscriptionJSON): Promise<boolean> {
+  const request = syncQueue.catch(() => {}).then(async () => {
+    const response = await fetch("/api/notifications/devices", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceId: getNotificationDeviceId(), prefs: getNotificationPrefs(), subscription }),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const body: unknown = await response.json();
+    return typeof body === "object" && body !== null && "subscribed" in body && body.subscribed === true;
   });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const body: unknown = await response.json();
-  return typeof body === "object" && body !== null && "subscribed" in body && body.subscribed === true;
+  syncQueue = request;
+  return request;
 }
 
 // ---------------------------------------------------------------- support

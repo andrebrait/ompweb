@@ -35,6 +35,8 @@ export interface NotificationPresence {
   deviceId: string;
   visible: boolean;
   sessionId: string | null;
+  /** Per-tab report counter: requests can arrive out of order, and only the newest counts. */
+  seq: number;
   lastSeen: number;
 }
 
@@ -193,7 +195,10 @@ function livePresence(now: number): NotificationPresence[] {
 }
 
 export function reportPresence(report: Omit<NotificationPresence, "lastSeen">): void {
-  hub().presence.set(report.clientId, { ...report, lastSeen: Date.now() });
+  const { presence } = hub();
+  const current = presence.get(report.clientId);
+  if (current && current.seq > report.seq) return;
+  presence.set(report.clientId, { ...report, lastSeen: Date.now() });
 }
 
 /** Attach a tab's SSE stream. Returns the detach callback. */

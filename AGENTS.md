@@ -66,7 +66,7 @@ app/api/
   agent/[id]/events/route.ts      GET SSE stream
   agent/running/events/route.ts   GET SSE stream of currently-running session ids (+ this tab's notifications)
   notifications/devices/route.ts  GET VAPID key + subscribed | PUT { deviceId, prefs, subscription? }
-  notifications/presence/route.ts POST { clientId, deviceId, visible, sessionId }
+  notifications/presence/route.ts POST { clientId, deviceId, visible, sessionId, seq }
   notifications/test/route.ts     POST { deviceId } send a test push (502 on push-service refusal)
   auth/**                         provider list, login/logout, API keys (via RPC)
   cwd/validate/route.ts           POST validate/select a cwd
@@ -611,7 +611,9 @@ during the wait.
   `sessionId` is null while full-page Settings hides the chat. Streams: the
   tab's open SSE connections (`attachNotificationClient`), which reconnect and
   overlap independently of presence. `clientId` is per page load, `deviceId`
-  per browser (`localStorage`).
+  per browser (`localStorage`). Reports carry a per-page `seq`; the server
+  drops one older than the stored report (requests can arrive out of order).
+  Prefs PUTs run one at a time and read the prefs when sent, for the same reason.
 - Routing (`routeNotification`, unit-tested): a visible tab on the session
   drops the event everywhere (presence only, so a reconnecting stream cannot
   leak it); else if a visible tab with an open stream exists, `whenActive:

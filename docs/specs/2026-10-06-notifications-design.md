@@ -81,12 +81,15 @@ in the device's stored locale.
 
 Each page load generates a `clientId`; each browser profile keeps a `deviceId`
 in `localStorage`. A tab reports presence with
-`POST /api/notifications/presence {clientId, deviceId, visible, sessionId}` on
+`POST /api/notifications/presence {clientId, deviceId, visible, sessionId, seq}` on
 mount, `visibilitychange`, session switch, the first input after idling,
 `pagehide` (beacon, `visible: false`), and every 30 seconds while present.
 `visible` means the page is visible and had input (pointer, key, wheel, touch,
 focus) in the last 3 minutes. `sessionId` is null while full-page Settings
 hides the chat. A report expires 60 seconds after the server received it.
+`seq` increases with every report from the page; the server ignores a report
+older than the one it holds, since requests can arrive out of order. Device
+PUTs run one at a time and read the current prefs when sent.
 
 Presence and SSE streams are tracked separately: streams reconnect and overlap
 while the tab stays where it is. A tab is "reachable" while it has an open
