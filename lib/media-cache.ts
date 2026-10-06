@@ -68,10 +68,11 @@ function sweepMediaCache(): void {
 }
 
 // Live tool output resends the full accumulated result on every update; this
-// keeps one screenshot from being decoded and hashed once per frame. Kept tiny
-// because each key is a whole base64 image.
+// keeps one screenshot from being decoded and hashed once per frame. Each key
+// is a whole base64 image, so the memo is capped by size.
 const recentHashes = new Map<string, string>();
-const RECENT_MAX = 4;
+const RECENT_MAX_CHARS = 16 * 1024 * 1024;
+let recentChars = 0;
 
 /** Store a base64 image under its content address and return the hash. */
 export function storeInlineImage(base64: string): string {
@@ -82,8 +83,15 @@ export function storeInlineImage(base64: string): string {
   const copy = path.join(mediaDir(), hash);
   // omp writes blobs in place: keep our own copy unless its blob is already complete.
   if (fileSize(path.join(getBlobsDir(), hash)) !== bytes.length && fileSize(copy) !== bytes.length) writeAtomic(copy, bytes);
-  recentHashes.set(base64, hash);
-  if (recentHashes.size > RECENT_MAX) recentHashes.delete(recentHashes.keys().next().value!);
+  if (base64.length <= RECENT_MAX_CHARS) {
+    recentHashes.set(base64, hash);
+    recentChars += base64.length;
+    while (recentChars > RECENT_MAX_CHARS) {
+      const oldest = recentHashes.keys().next().value!;
+      recentChars -= oldest.length;
+      recentHashes.delete(oldest);
+    }
+  }
   return hash;
 }
 

@@ -3,13 +3,13 @@ import { createThumbnail, existingThumbnail, imageMimeType, mediaFilePath } from
 
 export const dynamic = "force-dynamic";
 
-function image(body: Buffer, type: string): Response {
+function image(body: Buffer, type: string, immutable = true): Response {
   // A view, not a copy: these buffers come from readFile/sharp, never a SharedArrayBuffer.
   return new Response(new Uint8Array(body.buffer as ArrayBuffer, body.byteOffset, body.byteLength), {
     headers: {
       "Content-Type": type,
       // Content-addressed: the bytes behind a hash never change.
-      "Cache-Control": "private, max-age=31536000, immutable",
+      "Cache-Control": immutable ? "private, max-age=31536000, immutable" : "private, no-cache",
       "X-Content-Type-Options": "nosniff",
     },
   });
@@ -41,6 +41,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ hash: st
   if (thumb) {
     const preview = await createThumbnail(hash, bytes);
     if (preview) return image(preview, "image/webp");
+    // Full image standing in for a preview: not cached, so a later preview can replace it.
+    return image(bytes, type, false);
   }
   return image(bytes, type);
 }
