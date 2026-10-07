@@ -104,5 +104,14 @@ test("new entries are unread until marked; a re-announced id keeps its read stat
     ["Update available", true],
     ["Task finished", true],
   ]);
+
+  // Leaving the Notifications tab calls markAllRead; with nothing unread it
+  // must not wake every subscriber (AppShell, the right panel).
+  toastHistory.markAllRead();
+  let notified = 0;
+  const unsubscribe = toastHistory.subscribe(() => { notified++; });
+  toastHistory.markAllRead();
+  assert.equal(notified, 0);
+  unsubscribe();
   toastHistory.clear();
 });

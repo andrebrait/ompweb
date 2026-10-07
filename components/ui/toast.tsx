@@ -96,6 +96,12 @@ export function useToastHistory(): ToastHistoryEntry[] {
   return useSyncExternalStore(toastHistory.subscribe, toastHistory.get, toastHistory.get);
 }
 
+const unreadCount = () => history.reduce((count, entry) => count + (entry.read ? 0 : 1), 0);
+/** Unread entry count. A primitive snapshot, so callers re-render only when the count changes. */
+export function useUnreadToastCount(): number {
+  return useSyncExternalStore(toastHistory.subscribe, unreadCount, unreadCount);
+}
+
 function add(kind: ToastKind, title: React.ReactNode, description?: React.ReactNode, options?: ToastOptions) {
   const timeout = resolveToastTimeout(kind, options);
   const id = manager.add({

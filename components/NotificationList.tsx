@@ -1,7 +1,6 @@
 "use client";
 
 import { BellOff, X } from "lucide-react";
-import { useRef } from "react";
 import { useI18n } from "@/lib/i18n";
 import { ClampedDescription, descriptionBaseStyle, dismissButtonStyle, KindIcon, toastHistory, useToastHistory } from "./ui/toast";
 
@@ -9,8 +8,6 @@ import { ClampedDescription, descriptionBaseStyle, dismissButtonStyle, KindIcon,
 export function NotificationList() {
   const { t, locale } = useI18n();
   const entries = useToastHistory();
-  // Dismissing unmounts the focused button; keep keyboard focus in the list.
-  const listRef = useRef<HTMLDivElement>(null);
   if (entries.length === 0) {
     return (
       <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 24, textAlign: "center" }}>
@@ -20,7 +17,7 @@ export function NotificationList() {
     );
   }
   return (
-    <div ref={listRef} tabIndex={-1} style={{ flex: 1, minHeight: 0, overflowY: "auto", outline: "none" }}>
+    <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
       <ul style={{ listStyle: "none", margin: 0, padding: 4 }}>
         {entries.map((entry) => (
           <li key={entry.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: 8, borderRadius: "var(--radius-control)", background: entry.read ? undefined : "var(--bg-subtle)" }}>
@@ -43,9 +40,12 @@ export function NotificationList() {
             </div>
             <button
               type="button"
-              onClick={() => {
+              onClick={(event) => {
+                // Dismissing unmounts this button (and the list, if it was the
+                // last entry); keep keyboard focus in the always-mounted tab panel.
+                const panel = event.currentTarget.closest<HTMLElement>('[role="tabpanel"]');
                 toastHistory.remove(entry.id);
-                listRef.current?.focus();
+                panel?.focus();
               }}
               aria-label={t("appShell.notificationDismiss")}
               title={t("appShell.notificationDismiss")}

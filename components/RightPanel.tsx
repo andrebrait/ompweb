@@ -23,7 +23,7 @@ import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
 import { GitChangesPanel } from "./GitChangesPanel";
 import { FileViewer } from "./FileViewer";
 import { NotificationList } from "./NotificationList";
-import { toastHistory, useToastHistory } from "./ui/toast";
+import { toastHistory, useUnreadToastCount } from "./ui/toast";
 import { useI18n } from "@/lib/i18n";
 import { getFileName } from "@/lib/file-paths";
 
@@ -128,8 +128,7 @@ export const RightPanel = memo(function RightPanel({
   const { t } = useI18n();
   const activeFileTab = fileTabs.find((tab) => tab.id === activeFileTabId) ?? null;
   const gitBadge = explorerIsRepo ? explorerGitCount : 0;
-  const notifications = useToastHistory();
-  const unreadNotifications = notifications.filter((entry) => !entry.read).length;
+  const unreadNotifications = useUnreadToastCount();
   const [visitedViews, setVisitedViews] = useState<Set<RightPanelView>>(() => new Set(["explorer"]));
   useEffect(() => {
     setVisitedViews((previous) => {
@@ -273,15 +272,17 @@ export const RightPanel = memo(function RightPanel({
             </div>
             )
           ) : rightView === "notifications" ? (
-            notifications.length > 0 && (
             <div style={{ display: "flex", alignItems: "center", flexShrink: 0, padding: "0 2px" }} role="toolbar" aria-label={t("appShell.notifications")}>
+              {/* aria-disabled (not disabled) keeps the button focusable after use. */}
               <button
                 onClick={toastHistory.markAllRead}
-                disabled={unreadNotifications === 0}
+                aria-disabled={unreadNotifications === 0}
                 title={t("appShell.notificationsMarkRead")}
                 aria-label={t("appShell.notificationsMarkRead")}
                 className="ui-focus-ring"
                 style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, padding: 0, background: "none", border: "none", borderRadius: "var(--radius-control)", color: "var(--text-dim)", cursor: unreadNotifications === 0 ? "default" : "pointer", opacity: unreadNotifications === 0 ? 0.5 : 1 }}
+                onMouseEnter={(e) => { if (unreadNotifications === 0) return; e.currentTarget.style.color = "var(--text-muted)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-dim)"; e.currentTarget.style.background = "none"; }}
               >
                 <CheckCheck size={13} strokeWidth={2} aria-hidden="true" />
               </button>
@@ -291,11 +292,12 @@ export const RightPanel = memo(function RightPanel({
                 aria-label={t("appShell.notificationsClear")}
                 className="ui-focus-ring"
                 style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, padding: 0, background: "none", border: "none", borderRadius: "var(--radius-control)", color: "var(--text-dim)", cursor: "pointer" }}
+                onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text-muted)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-dim)"; e.currentTarget.style.background = "none"; }}
               >
                 <Trash2 size={13} strokeWidth={2} aria-hidden="true" />
               </button>
             </div>
-            )
           ) : activeFileTab && (
             <div style={{ display: "flex", alignItems: "center", flexShrink: 0, padding: "0 2px" }} role="toolbar" aria-label={activeFileTab.filePath}>
               <button
@@ -460,7 +462,7 @@ export const RightPanel = memo(function RightPanel({
             </div>
           ))}
         </div>
-        <div id="workspace-file-panel-notifications" role="tabpanel" aria-label={t("appShell.notifications")} style={{ display: rightView === "notifications" ? "flex" : "none", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
+        <div id="workspace-file-panel-notifications" role="tabpanel" tabIndex={-1} aria-label={t("appShell.notifications")} style={{ display: rightView === "notifications" ? "flex" : "none", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden", outline: "none" }}>
           {visitedViews.has("notifications") && <NotificationList />}
         </div>
         {/* Keep open viewers mounted so switching tabs preserves scroll and preview state. */}

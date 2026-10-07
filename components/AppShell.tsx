@@ -11,7 +11,7 @@ import { isMacPlatform, navigateShortcutHint, NAVIGATION_HISTORY_MAX_ENTRIES } f
 import { useMobileSidebarGestures } from "@/hooks/useMobileSidebarGestures";
 import { SessionSidebar } from "./SessionSidebar";
 import { ToastProvider } from "./ui/toast";
-import { toast, toastHistory, useToastHistory } from "./ui/toast";
+import { toast, toastHistory, useUnreadToastCount } from "./ui/toast";
 import { ConfirmDialog } from "./ui/field";
 import { ChatWindow } from "./ChatWindow";
 import { type Tab } from "./TabBar";
@@ -981,7 +981,7 @@ export function AppShell({ appName }: { appName: string }) {
   }, [isCompactOverlay]);
   const [rightPanelHasOpened, setRightPanelHasOpened] = useState(false);
   const [rightView, setRightView] = useState<RightPanelView>("explorer");
-  const unreadNotifications = useToastHistory().filter((entry) => !entry.read).length;
+  const unreadNotifications = useUnreadToastCount();
   // Unread entries stay highlighted while the Notifications tab is shown and
   // become read once the user leaves it (switches tab or closes the panel).
   const viewingNotifications = rightPanelOpen && rightView === "notifications" && !settingsTab;
@@ -990,6 +990,10 @@ export function AppShell({ appName }: { appName: string }) {
     if (wasViewingNotificationsRef.current && !viewingNotifications) toastHistory.markAllRead();
     wasViewingNotificationsRef.current = viewingNotifications;
   }, [viewingNotifications]);
+  const opensNotifications = unreadNotifications > 0 && !viewingNotifications;
+  const panelOpenerLabel = opensNotifications
+    ? t("appShell.showNotifications", { count: unreadNotifications })
+    : rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel");
   // User-chosen pixel width (null = fluid 42% default), persisted.
   const [rightPanelWidth, setRightPanelWidth] = useState<number | null>(null);
   const [rightPanelResizing, setRightPanelResizing] = useState(false);
@@ -2341,7 +2345,7 @@ export function AppShell({ appName }: { appName: string }) {
               className="shell-toolbar-btn shell-panel-opener ui-focus-ring"
               onClick={() => {
                 // Unread notifications turn the panel toggle into their shortcut.
-                if (unreadNotifications > 0 && !viewingNotifications) {
+                if (opensNotifications) {
                   setRightView("notifications");
                   setRightPanelOpen(true);
                 } else {
@@ -2351,9 +2355,8 @@ export function AppShell({ appName }: { appName: string }) {
               aria-expanded={rightPanelOpen}
               aria-controls="workspace-file-panel"
               aria-pressed={rightPanelOpen}
-              title={unreadNotifications > 0 && !viewingNotifications ? t("appShell.showNotifications", { count: unreadNotifications }) : rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
-              aria-label={unreadNotifications > 0 && !viewingNotifications ? t("appShell.showNotifications", { count: unreadNotifications }) : rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
-              style={{ position: "relative" }}
+              title={panelOpenerLabel}
+              aria-label={panelOpenerLabel}
             >
               <PanelRight size={16} strokeWidth={1.8} aria-hidden="true" />
               {unreadNotifications > 0 && (
