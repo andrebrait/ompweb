@@ -166,9 +166,10 @@ export function isPassiveToolContext(message: AgentMessage): boolean {
 const PASSIVE_TOOL_CONTEXT_MAX = 2000;
 
 /**
- * One display line, as omp's terminal shows it: no ANSI, control, zero-width or
- * bidi-override characters, whitespace collapsed, trimmed. Tolerates malformed
- * content from imported or hand-edited session files.
+ * Display text: no ANSI, control, zero-width or bidi-override characters.
+ * Line breaks and indentation survive (rule reminders carry paragraphs and code
+ * blocks); trailing spaces, blank-line runs and outer blank lines are dropped.
+ * Tolerates malformed content from imported or hand-edited session files.
  */
 export function sanitizePassiveToolContext(content: unknown): string {
   const text = typeof content === "string"
@@ -178,8 +179,9 @@ export function sanitizePassiveToolContext(content: unknown): string {
       : "";
   return stripAnsi(text)
     .replace(/[\x00-\x08\x0B-\x1F\x7F-\x9F\u200B-\u200F\u202A-\u202E\u2066-\u2069]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
+    .replace(/[^\S\n]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/^\n+|\s+$/g, "")
     .slice(0, PASSIVE_TOOL_CONTEXT_MAX);
 }
 

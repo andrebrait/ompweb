@@ -3879,6 +3879,7 @@ html[data-touch-targets="accessible"] .right-panel-toolbar {
   padding: 6px 8px;
   border-top: 1px solid var(--border);
   color: var(--text-dim);
+  white-space: pre-wrap;
   font-size: 11px;
   line-height: 1.4;
   overflow-wrap: anywhere;

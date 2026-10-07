@@ -539,7 +539,7 @@ test("developer reminders show their wrapper attributes, start collapsed, and to
   assert.doesNotMatch(view.container.textContent, /One-line wrappers/);
 });
 
-test("passive tool context from a session file renders as one line on the batch's last tool card", () => {
+test("passive tool context from a session file renders on the batch's last tool card", () => {
   const at = "2026-01-01T00:00:00.000Z";
   const entry = (id, parentId, message) => ({ type: "message", id, parentId, timestamp: at, message });
   const { messages } = buildSessionContext([
@@ -565,7 +565,7 @@ test("passive tool context from a session file renders as one line on the batch'
   // Expanded tool group, collapsed cards: one truncating row on the last card, the full text on hover.
   const shown = html(messages[1]);
   assert.equal(shown.match(/Context:/g)?.length, 1);
-  assert.match(shown, /class="activity-row-secondary" title="Treat this result as authoritative\."><span aria-hidden="true">↳ <\/span>Context: Treat this result as authoritative\./);
+  assert.match(shown, /class="activity-row-secondary" title="Treat\tthis result\nas authoritative\."><span aria-hidden="true">↳ <\/span>Context: Treat\tthis result\nas authoritative\./);
   assert.ok(shown.indexOf(">read<") < shown.indexOf(">bash<"));
   assert.ok(shown.indexOf("Context:") > shown.indexOf(">bash<"), "the line sits on the last card (call-2)");
   assert.doesNotMatch(shown, /tool-call-context/);
@@ -574,7 +574,7 @@ test("passive tool context from a session file renders as one line on the batch'
   const view = render(React.createElement(MessageView, { message: single, toolResults }));
   fireEvent.click(view.getByRole("button", { expanded: false }));
   const segment = view.container.querySelector(".tool-call-details .tool-call-context");
-  assert.equal(segment?.textContent, "↳ Context: Treat this result as authoritative.");
+  assert.equal(segment?.textContent, "↳ Context: Treat\tthis result\nas authoritative.");
   assert.equal(view.container.querySelector(".activity-row-secondary[title]"), null, "no truncated row while expanded");
   // The marked message is no row of its own; the unmarked one still is.
   assert.equal(messages[4].customType, "passive-tool-context");
