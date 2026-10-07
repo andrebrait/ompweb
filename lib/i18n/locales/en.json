@@ -303,7 +303,6 @@
   "notifications.modelSwitchBodyNoDetail": "Switched {from} → {to}.",
   "notifications.testBody": "Notifications are working.",
   "notifications.untitledSession": "omp session",
-  "notifications.open": "Open",
   "notifications.sessionNotFound": "That session is no longer available.",
   "notifications.title": "Notifications",
   "notifications.subtitle": "Get notified about sessions you are not looking at. These settings apply to this browser only.",

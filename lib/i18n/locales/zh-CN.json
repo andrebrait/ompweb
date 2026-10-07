@@ -290,7 +290,6 @@
   "notifications.modelSwitchBodyNoDetail": "已切换 {from} → {to}。",
   "notifications.testBody": "通知工作正常。",
   "notifications.untitledSession": "omp 会话",
-  "notifications.open": "打开",
   "notifications.sessionNotFound": "该会话已不可用。",
   "notifications.title": "通知",
   "notifications.subtitle": "为你当前未查看的会话发送通知。这些设置仅适用于此浏览器。",

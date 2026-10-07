@@ -171,6 +171,14 @@ function Toaster() {
               manager.close(t.id);
               onClick();
             } : undefined}
+            // The card is focusable (base-ui gives it tabIndex 0): Enter on it
+            // runs the action, which has no separate button.
+            onKeyDown={t.data?.onClick ? (event) => {
+              if (event.key !== "Enter" || event.target !== event.currentTarget) return;
+              event.preventDefault();
+              manager.close(t.id);
+              t.data?.onClick?.();
+            } : undefined}
             style={{
               pointerEvents: "auto",
               cursor: t.data?.onClick ? "pointer" : undefined,

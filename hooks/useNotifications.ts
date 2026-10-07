@@ -1,4 +1,4 @@
-import { createElement, useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { toast } from "@/components/ui/toast";
 import { translate } from "@/lib/i18n";
 import { DEFAULT_NOTIFICATION_PREFS, renderNotification, type NotificationEvent, type RenderedNotification } from "@/lib/notification-events";
@@ -101,31 +101,11 @@ export function useNotifications({ sessionId, locale, onOpenSession }: { session
 
   // Delivery to this tab and notification clicks.
   useEffect(() => {
+    // The whole card opens the session (click, tap, or Enter on the focused card); no separate Open link.
     const showToast = (rendered: RenderedNotification, type: NotificationEvent["type"]) => {
       const target = rendered.sessionId;
-      const open = target ? () => openRef.current(target) : undefined;
-      const description = createElement(
-        "span",
-        null,
-        rendered.body,
-        open
-          ? createElement(
-              "button",
-              {
-                type: "button",
-                className: "notification-toast-open",
-                // The Open button stays as the keyboard and screen-reader path; a click anywhere on the card does the same.
-                onClick: () => {
-                  toast.close(rendered.tag);
-                  open();
-                },
-              },
-              translate("notifications.open"),
-            )
-          : null,
-      );
       const show = type === "error" ? toast.error : toast.info;
-      show(rendered.title, description, { id: rendered.tag, onClick: open });
+      show(rendered.title, rendered.body, { id: rendered.tag, onClick: target ? () => openRef.current(target) : undefined });
     };
     const onMessage = (raw: Event) => {
       if (!(raw instanceof CustomEvent)) return;

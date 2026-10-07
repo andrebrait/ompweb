@@ -41,6 +41,15 @@ test("clicking anywhere on a toast card runs its action and closes it", () => {
   assert.equal(card()?.hasAttribute("data-ending-style") ?? true, true);
 });
 
+test("Enter on the focused card runs its action; Enter inside it does not", () => {
+  const { opened, card } = show(React.createElement("button", { type: "button" }, "inner"));
+  const press = (target) => act(() => { target.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
+  press(card().querySelector("button:not(.toast-close-button)"));
+  assert.equal(opened.length, 0);
+  press(card());
+  assert.equal(opened.length, 1);
+});
+
 test("buttons, links, expandable text, drags and text selection do not trigger the card action", () => {
   let pressed = 0;
   const { opened, card } = show(React.createElement("span", null,
@@ -85,10 +94,12 @@ test("a session notification toast opens its session from a card click; one with
     return Array.from(document.querySelectorAll(".toast-card")).find((card) => card.querySelector(".display-serif")?.textContent === sessionName);
   };
   const withSession = deliver("s1", "Fix bug");
+  // The card is the only way in: no separate Open link.
+  assert.equal(withSession.querySelectorAll("button:not(.toast-close-button), a").length, 0);
   act(() => withSession.querySelector(".display-serif").click());
   assert.deepEqual(sessions, ["s1"]);
   const withoutSession = deliver("", "No session");
-  assert.equal(withoutSession.querySelector(".notification-toast-open"), null);
+  assert.equal(withoutSession.style.cursor, "");
   act(() => withoutSession.querySelector(".display-serif").click());
   assert.deepEqual(sessions, ["s1"]);
 });

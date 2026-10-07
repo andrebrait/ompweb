@@ -689,8 +689,9 @@ motion: --dur-fast (150ms) --dur-med (220ms) --dur-slow (320ms) --ease-out-warm
 `components/ui/` holds the shared primitives (built on `@base-ui/react`):
 `primitives.tsx` (Dialog/Tooltip/Collapsible), `field.tsx` (form fields +
 ConfirmDialog), `toast.tsx` (`toast.success/error/info`, mounted in AppShell;
-the `onClick` option makes the whole card a click target outside its
-buttons, links and expandable text, ignoring drags and text selection).
+the `onClick` option makes the whole card the action: a click outside its
+buttons, links and expandable text, ignoring drags and text selection, or Enter
+on the focused card. There is no separate action button).
 Icons come from `lucide-react` — do not add new inline SVGs. The command
 palette (`components/CommandPalette.tsx`, ⌘K/Ctrl+K) is built on `cmdk`.
 

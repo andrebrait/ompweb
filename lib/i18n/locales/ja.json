@@ -290,7 +290,6 @@
   "notifications.modelSwitchBodyNoDetail": "{from} → {to} に切り替えました。",
   "notifications.testBody": "通知は正常に動作しています。",
   "notifications.untitledSession": "omp セッション",
-  "notifications.open": "開く",
   "notifications.sessionNotFound": "そのセッションはもう利用できません。",
   "notifications.title": "通知",
   "notifications.subtitle": "表示していないセッションについて通知します。この設定はこのブラウザーにのみ適用されます。",
