@@ -1604,6 +1604,9 @@ pre, code {
   .sidebar-project-worktree button {
     min-height: 40px;
   }
+  .sidebar-project-worktree-toggle {
+    min-height: 32px;
+  }
   .session-item-row {
     min-height: 44px;
   }

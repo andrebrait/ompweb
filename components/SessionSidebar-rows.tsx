@@ -142,33 +142,47 @@ function ProjectRow({
     : tree;
   const showWorktree = Boolean(worktreeBranch && worktreeToggleRef);
   const isMobile = useIsMobile();
-  const headerRef = useRef<HTMLDivElement>(null);
+  const identityRowRef = useRef<HTMLDivElement>(null);
   const labelTextRef = useRef<HTMLSpanElement>(null);
   const worktreeTextRef = useRef<HTMLSpanElement>(null);
-  const [headerWidth, setHeaderWidth] = useState(0);
+  // Bumped when the row's width or the loaded fonts change: either can change the fit.
+  const [layoutEpoch, setLayoutEpoch] = useState(0);
   // Desktop keeps the worktree selector beside the name, truncating the branch
   // before the name. main/master never truncate inline: when either label
   // would be cut off, the selector moves to its own line (always on mobile).
   const [worktreeOverflows, setWorktreeOverflows] = useState(false);
   const worktreeStacked = showWorktree && (isMobile || worktreeOverflows);
   useEffect(() => {
-    const header = headerRef.current;
-    if (!header || !showWorktree) return;
-    const observer = new ResizeObserver(([entry]) => setHeaderWidth(Math.round(entry.contentRect.width)));
-    observer.observe(header);
-    return () => observer.disconnect();
+    const row = identityRowRef.current;
+    if (!row || !showWorktree) return;
+    let width = -1;
+    let live = true;
+    const bump = () => setLayoutEpoch((epoch) => epoch + 1);
+    const observer = new ResizeObserver(([entry]) => {
+      // Ignore height-only changes: stacking itself changes the row's height.
+      const next = Math.round(entry.contentRect.width);
+      if (next === width) return;
+      width = next;
+      bump();
+    });
+    observer.observe(row);
+    void document.fonts?.ready.then(() => { if (live) bump(); });
+    return () => {
+      live = false;
+      observer.disconnect();
+    };
   }, [showWorktree]);
   // Return to the inline layout whenever the fit may have changed, then
   // re-measure it below; both run before paint, so the swap never flickers.
   useLayoutEffect(() => {
     setWorktreeOverflows(false);
-  }, [label, worktreeBranch, headerWidth, aliasEditing, hasActivity, isMobile]);
+  }, [label, worktreeBranch, layoutEpoch, aliasEditing, hasActivity, isMobile, showWorktree]);
   useLayoutEffect(() => {
     const text = worktreeTextRef.current;
     const labelText = labelTextRef.current;
     if (worktreeOverflows || !text || !/^(main|master)$/.test(worktreeBranch ?? "")) return;
     if (text.scrollWidth > text.clientWidth || (labelText && labelText.scrollWidth > labelText.clientWidth)) setWorktreeOverflows(true);
-  }, [label, worktreeBranch, headerWidth, aliasEditing, hasActivity, isMobile, worktreeOverflows]);
+  }, [label, worktreeBranch, layoutEpoch, aliasEditing, hasActivity, isMobile, showWorktree, worktreeOverflows]);
 
   return (
     <section className="sidebar-project" data-active={isActive ? "true" : "false"} style={{ marginBottom: 12 }}>
@@ -188,7 +202,6 @@ function ProjectRow({
         }}
       />
       <div
-        ref={headerRef}
         className="sidebar-project-header"
         draggable={!aliasEditing}
         onDragStart={(event) => { event.dataTransfer.setData("text/plain", project.path); event.dataTransfer.effectAllowed = "move"; onDragPathChange(project.path); }}
@@ -218,11 +231,7 @@ function ProjectRow({
           ...(isDragTarget ? { outline: "1px solid var(--accent)", outlineOffset: -1 } : {}),
         }}
       >
-        <div
-          className="sidebar-project-identity-row"
-          data-worktree-layout={worktreeStacked ? "stacked" : "inline"}
-          style={{ flex: 1, minWidth: 0, alignSelf: "stretch", display: "flex", flexWrap: worktreeStacked ? "wrap" : "nowrap", alignItems: "center", alignContent: "center", columnGap: SIDEBAR_STATUS_GAP, padding: worktreeStacked ? "4px 0" : 0 }}
-        >
+        <div ref={identityRowRef} style={{ flex: 1, minWidth: 0, alignSelf: "stretch", display: "flex", flexWrap: worktreeStacked ? "wrap" : "nowrap", alignItems: "center", alignContent: "center", columnGap: SIDEBAR_STATUS_GAP, padding: worktreeStacked ? "4px 0" : 0 }}>
           {aliasEditing ? (
             <div
               className="sidebar-project-identity"
@@ -285,6 +294,8 @@ function ProjectRow({
               style={{
                 flex: "0 1 auto",
                 minWidth: 0,
+                // Keep the activity indicator on the name's line when stacked.
+                maxWidth: hasActivity ? `calc(100% - ${SIDEBAR_STATUS_SLOT + SIDEBAR_STATUS_GAP}px)` : undefined,
                 minHeight: 26,
                 alignSelf: "stretch",
                 display: "flex",
@@ -330,7 +341,7 @@ function ProjectRow({
                 data-running={(activity?.running ?? 0) > 0 ? "true" : "false"}
                 role="status"
                 aria-live="polite"
-                style={{ order: worktreeStacked ? 0 : 2, display: "inline-flex", alignItems: "center", justifyContent: "center", width: SIDEBAR_STATUS_SLOT, height: SIDEBAR_STATUS_SLOT, flexShrink: 0, lineHeight: 0 }}
+                style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: SIDEBAR_STATUS_SLOT, height: SIDEBAR_STATUS_SLOT, flexShrink: 0, lineHeight: 0 }}
               >
                 {(activity?.exited ?? 0) > 0 ? (
                   <ExitedSessionIndicator title={t("projects.exited", { count: activity?.exited ?? 0 })} size={11} />
@@ -343,6 +354,8 @@ function ProjectRow({
                 )}
               </span>
             )}
+          {/* Zero-height flex line break: pushes the stacked selector below the name. */}
+          {worktreeStacked && <span aria-hidden="true" style={{ flexBasis: "100%", height: 0 }} />}
           {showWorktree && (
             <button
               type="button"
@@ -351,9 +364,9 @@ function ProjectRow({
               onClick={onToggleWorktrees}
               aria-expanded={worktreeOpen}
               aria-haspopup="menu"
+              aria-label={t("sessionSidebar.switchWorktreeTo", { path: worktreeBranch ?? "" })}
               title={t("sessionSidebar.switchWorktreeTo", { path: worktreeBranch ?? "" })}
               style={{
-                order: worktreeStacked ? 2 : 1,
                 display: "inline-flex",
                 alignItems: "center",
                 gap: worktreeStacked ? 4 : 3,
@@ -382,8 +395,6 @@ function ProjectRow({
               {worktreeStacked && <ChevronDown size={11} style={{ flexShrink: 0, opacity: 0.75 }} aria-hidden="true" />}
             </button>
           )}
-          {/* Zero-height flex line break: pushes the stacked selector below the name. */}
-          {worktreeStacked && <span aria-hidden="true" style={{ order: 1, flexBasis: "100%", height: 0 }} />}
         </div>
         <div
           className="sidebar-project-actions"
