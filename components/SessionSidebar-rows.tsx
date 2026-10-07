@@ -174,13 +174,15 @@ function ProjectRow({
   }, [showWorktree]);
   // Return to the inline layout whenever the fit may have changed, then
   // re-measure it below; both run before paint, so the swap never flickers.
+  // The rename field has no label to measure, so the layout holds while it is
+  // open and is re-measured once editing ends.
   useLayoutEffect(() => {
-    setWorktreeOverflows(false);
+    if (!aliasEditing) setWorktreeOverflows(false);
   }, [label, worktreeBranch, layoutEpoch, aliasEditing, hasActivity, isMobile, showWorktree]);
   useLayoutEffect(() => {
     const text = worktreeTextRef.current;
     const labelText = labelTextRef.current;
-    if (worktreeOverflows || !text || !/^(main|master)$/.test(worktreeBranch ?? "")) return;
+    if (aliasEditing || worktreeOverflows || !text || !/^(main|master)$/.test(worktreeBranch ?? "")) return;
     if (text.scrollWidth > text.clientWidth || (labelText && labelText.scrollWidth > labelText.clientWidth)) setWorktreeOverflows(true);
   }, [label, worktreeBranch, layoutEpoch, aliasEditing, hasActivity, isMobile, showWorktree, worktreeOverflows]);
 
