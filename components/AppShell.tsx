@@ -11,7 +11,7 @@ import { isMacPlatform, navigateShortcutHint, NAVIGATION_HISTORY_MAX_ENTRIES } f
 import { useMobileSidebarGestures } from "@/hooks/useMobileSidebarGestures";
 import { SessionSidebar } from "./SessionSidebar";
 import { ToastProvider } from "./ui/toast";
-import { toast } from "./ui/toast";
+import { toast, toastHistory } from "./ui/toast";
 import { ConfirmDialog } from "./ui/field";
 import { ChatWindow } from "./ChatWindow";
 import { type Tab } from "./TabBar";
@@ -22,6 +22,7 @@ import { LanguageSwitcher } from "./LanguageSwitcher";
 import { CommandPaletteMount } from "./CommandPaletteMount";
 import { Check, ChevronDown, Command, Ellipsis, Folder, History, Menu, PanelLeft, PanelRight, Terminal, Wand2, Zap } from "lucide-react";
 import { ThemeSwitcher } from "./ThemeSwitcher";
+import { NotificationCenter } from "./NotificationCenter";
 import { translate, useI18n } from "@/lib/i18n";
 import { formatApiError } from "@/lib/i18n/api-error";
 import { formatGenerationSpeed } from "@/lib/generation-speed";
@@ -1334,6 +1335,7 @@ export function AppShell({ appName }: { appName: string }) {
 
     const targetSession = selectedSession;
     const notify = () => {
+      toastHistory.record("info", targetSession?.name ?? translate("appShell.sessionComplete"), translate("appShell.taskFinished"));
       showCompletionNotification(
         targetSession?.name ?? translate("appShell.sessionComplete"),
         translate("appShell.taskFinished"),
@@ -1678,8 +1680,9 @@ export function AppShell({ appName }: { appName: string }) {
           + parseFloat(style.marginLeft) + parseFloat(style.marginRight);
       }, 0) + Math.max(0, children.length - 1) * parseFloat(contentStyle.columnGap);
       const leftNeed = controlsWidth
-        + (tools.firstElementChild?.getBoundingClientRect().width ?? 0)
-        + parseFloat(getComputedStyle(tools).columnGap)
+        // Buttons pinned outside the overflow menu (sidebar toggle, notification bell).
+        + Array.from(tools.children).reduce((width, child) => child === details ? width
+          : width + child.getBoundingClientRect().width + parseFloat(getComputedStyle(tools).columnGap), 0)
         + parseFloat(headerStyle.paddingLeft);
       const rightNeed = parseFloat(headerStyle.paddingRight) + right.offsetWidth;
       const required = leftNeed + parseFloat(headerStyle.columnGap) + rightNeed;
@@ -1993,6 +1996,7 @@ export function AppShell({ appName }: { appName: string }) {
             >
               {sidebarOpen ? <PanelLeft size={16} strokeWidth={1.8} aria-hidden="true" /> : <Menu size={16} strokeWidth={1.8} aria-hidden="true" />}
             </button>
+            <NotificationCenter />
             <details
               ref={mobileToolsRef}
               className="shell-topbar-overflow"

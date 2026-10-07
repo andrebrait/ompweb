@@ -27,7 +27,7 @@ interface ToastData {
 interface ToastOptions {
   /** Clamp the description to 2 lines; click the description to expand it. */
   clamp?: boolean;
-  /** Auto-dismiss timeout in ms. 0 = sticky until dismissed. Defaults to provider timeout (4000). */
+  /** Auto-dismiss timeout in ms. 0 = sticky until dismissed. Defaults to 6s (10s for errors). */
   timeout?: number;
   /** Alias for timeout, for clarity. */
   duration?: number;
@@ -39,19 +39,62 @@ interface ToastOptions {
 
 const manager = Toast.createToastManager<ToastData>();
 
+// Android's Toast (2s/3.5s) and Snackbar (1.5s/2.75s) defaults are too short to
+// read and act on. Material recommends 4-10s, and Windows/macOS banners use about 5s.
+const DEFAULT_TIMEOUT_MS = 6000;
+const ERROR_TIMEOUT_MS = 10000;
+
+export const TOAST_HISTORY_LIMIT = 100;
+
+export interface ToastHistoryEntry {
+  id: string;
+  kind: ToastKind;
+  title: React.ReactNode;
+  description?: React.ReactNode;
+  clamp?: boolean;
+  at: number;
+}
+
+let history: ToastHistoryEntry[] = [];
+const historyListeners = new Set<() => void>();
+function setHistory(next: ToastHistoryEntry[]) {
+  history = next;
+  for (const listener of historyListeners) listener();
+}
+
+let recordedCount = 0;
+
+/** Recent toasts and OS notifications, newest first, kept in memory for the notification center. */
+export const toastHistory = {
+  subscribe(listener: () => void) {
+    historyListeners.add(listener);
+    return () => { historyListeners.delete(listener); };
+  },
+  get: () => history,
+  /** Add an entry without showing a toast, e.g. for a notification already delivered by the OS. */
+  record(kind: ToastKind, title: React.ReactNode, description?: React.ReactNode, options?: { id?: string; clamp?: boolean }) {
+    const id = options?.id ?? `recorded-${++recordedCount}`;
+    // A reused id replaces its toast on screen, so it replaces its history entry too.
+    const entry: ToastHistoryEntry = { id, kind, title, description, clamp: options?.clamp, at: Date.now() };
+    setHistory([entry, ...history.filter((e) => e.id !== id)].slice(0, TOAST_HISTORY_LIMIT));
+  },
+  remove: (id: string) => setHistory(history.filter((entry) => entry.id !== id)),
+  clear: () => setHistory([]),
+};
+
 function add(kind: ToastKind, title: React.ReactNode, description?: React.ReactNode, options?: ToastOptions) {
-  const timeout = options?.timeout ?? options?.duration;
-  // Base UI ToastManager types don't expose per-toast timeout, but the runtime respects it.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (manager as any).add({
+  const timeout = options?.timeout ?? options?.duration ?? (kind === "error" ? ERROR_TIMEOUT_MS : DEFAULT_TIMEOUT_MS);
+  const id = manager.add({
     id: options?.id,
     title,
     description,
     type: kind,
     data: { kind, clamp: options?.clamp },
-    ...(timeout !== undefined ? { timeout } : {}),
+    timeout,
     ...(options?.onClose ? { onClose: options.onClose } : {}),
   });
+  toastHistory.record(kind, title, description, { id, clamp: options?.clamp });
+  return id;
 }
 export const toast = {
   success: (title: React.ReactNode, description?: React.ReactNode, options?: ToastOptions) =>
@@ -63,14 +106,14 @@ export const toast = {
   close: (id?: string) => manager.close(id),
 };
 
-function KindIcon({ kind }: { kind?: ToastKind }) {
+export function KindIcon({ kind }: { kind?: ToastKind }) {
   const common = { size: 13, strokeWidth: 2, style: { flexShrink: 0, marginTop: 2 } } as const;
   if (kind === "success") return <Check {...common} style={{ ...common.style, color: "var(--accent)" }} aria-hidden />;
   if (kind === "error") return <AlertCircle {...common} style={{ ...common.style, color: "var(--accent-strong)" }} aria-hidden />;
   return <Info {...common} style={{ ...common.style, color: "var(--text-muted)" }} aria-hidden />;
 }
 
-const descriptionBaseStyle = {
+export const descriptionBaseStyle = {
   fontSize: 12,
   color: "var(--text-muted)",
   lineHeight: 1.5,
@@ -113,6 +156,21 @@ export function ClampedDescription({ children }: { children: React.ReactNode }) 
     </span>
   );
 }
+
+export const dismissButtonStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 20,
+  height: 20,
+  padding: 0,
+  border: 0,
+  borderRadius: "var(--radius-control)",
+  background: "transparent",
+  color: "var(--text-dim)",
+  cursor: "pointer",
+  flexShrink: 0,
+} as const;
 
 function Toaster() {
   const { toasts } = Toast.useToastManager<ToastData>();
@@ -170,20 +228,7 @@ function Toaster() {
             <Toast.Close
               className="toast-close-button"
               aria-label="Dismiss"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                width: 20,
-                height: 20,
-                padding: 0,
-                border: 0,
-                borderRadius: "var(--radius-control)",
-                background: "transparent",
-                color: "var(--text-dim)",
-                cursor: "pointer",
-                flexShrink: 0,
-              }}
+              style={dismissButtonStyle}
             >
               <X size={12} strokeWidth={2} aria-hidden />
             </Toast.Close>
@@ -196,7 +241,7 @@ function Toaster() {
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
-    <Toast.Provider toastManager={manager} timeout={4000} limit={4}>
+    <Toast.Provider toastManager={manager} timeout={DEFAULT_TIMEOUT_MS} limit={4}>
       {children}
       <Toaster />
     </Toast.Provider>

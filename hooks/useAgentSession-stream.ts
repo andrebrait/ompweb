@@ -17,6 +17,7 @@ import type {
   SubagentProgress,
 } from "@/lib/subagent-types";
 import { translate } from "@/lib/i18n";
+import { toastHistory } from "@/components/ui/toast";
 import type { SessionStreamCursor } from "@/lib/session-sync";
 
 export interface SessionData {
@@ -329,6 +330,8 @@ export async function runHostTool(
     case "notify": {
       const title = str(args.title) ?? "OMP";
       const message = str(args.message) ?? "";
+      // Logged even when the OS blocks notifications, so the message is never lost.
+      toastHistory.record("info", title, message || undefined);
       if (typeof Notification !== "undefined") {
         try {
           if (Notification.permission === "granted") {
