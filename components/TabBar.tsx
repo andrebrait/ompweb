@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { Folder, GitBranch, X } from "lucide-react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Bell, Folder, GitBranch, X } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { getFileIcon } from "./FileIcons";
 
@@ -27,21 +27,115 @@ interface Props {
   onSelectGit?: () => void;
   /** Changed-file count badge on the Git tab. */
   gitBadge?: number;
+  /** Pinned Notifications tab rendered after Git. */
+  notificationsSelected?: boolean;
+  onSelectNotifications?: () => void;
+  /** Unread-notification count badge on the Notifications tab. */
+  notificationsBadge?: number;
 }
 
-export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, explorerSelected = false, onSelectExplorer, explorerBadge = 0, gitSelected = false, onSelectGit, gitBadge = 0 }: Props) {
+const badgeStyle = (color: string) => ({
+  display: "inline-flex",
+  alignItems: "center",
+  minWidth: 16,
+  height: 15,
+  padding: "0 4px",
+  borderRadius: 8,
+  background: `color-mix(in srgb, ${color} 18%, transparent)`,
+  color,
+  fontSize: 10,
+  fontWeight: 700,
+});
+
+/** Explorer / Git / Notifications: fixed tabs before the file tabs. */
+function PinnedTab({ id, panelId, label, title, icon, selected, badge, badgeColor, onSelect, onKeyDown }: {
+  id: string;
+  panelId: string;
+  label: string;
+  title: string;
+  icon: ReactNode;
+  selected: boolean;
+  badge: number;
+  badgeColor: string;
+  onSelect: () => void;
+  onKeyDown: (event: KeyboardEvent<HTMLElement>, id: string) => void;
+}) {
+  return (
+    <div
+      data-tab-id={id}
+      className="tabbar-tab ui-focus-ring"
+      onClick={onSelect}
+      role="tab"
+      tabIndex={selected ? 0 : -1}
+      aria-selected={selected}
+      aria-label={label}
+      aria-controls={panelId}
+      title={title}
+      onKeyDown={(event) => onKeyDown(event, id)}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        height: "var(--tab-height)",
+        paddingLeft: 12,
+        paddingRight: 10,
+        borderRight: "1px solid var(--border)",
+        background: selected ? "var(--bg)" : "var(--bg-panel)",
+        cursor: "pointer",
+        fontSize: "var(--text-sm)",
+        color: selected ? "var(--text)" : "var(--text-muted)",
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+        userSelect: "none",
+        position: "relative",
+        transition: `background var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm)`,
+      }}
+    >
+      {selected && (
+        <span
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: 2,
+            background: "var(--accent)",
+            borderTopLeftRadius: "var(--radius-control)",
+            borderTopRightRadius: "var(--radius-control)",
+          }}
+        />
+      )}
+      <span style={{ flexShrink: 0, opacity: selected ? 1 : 0.7, display: "flex", alignItems: "center", color: selected ? "var(--accent)" : undefined }}>
+        {icon}
+      </span>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", fontWeight: selected ? 500 : 400 }}>
+        {label}
+      </span>
+      {badge > 0 && (
+        <span aria-hidden="true" style={badgeStyle(badgeColor)}>
+          {badge > 99 ? "99+" : badge}
+        </span>
+      )}
+    </div>
+  );
+}
+
+export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, explorerSelected = false, onSelectExplorer, explorerBadge = 0, gitSelected = false, onSelectGit, gitBadge = 0, notificationsSelected = false, onSelectNotifications, notificationsBadge = 0 }: Props) {
   const { t } = useI18n();
   const [hoveredClose, setHoveredClose] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const orderedTabIds = [
     ...(onSelectExplorer ? ["explorer"] : []),
     ...(onSelectGit ? ["git"] : []),
+    ...(onSelectNotifications ? ["notifications"] : []),
     ...tabs.map((tab) => tab.id),
   ];
 
   const selectTabById = (id: string) => {
     if (id === "explorer") onSelectExplorer?.();
     else if (id === "git") onSelectGit?.();
+    else if (id === "notifications") onSelectNotifications?.();
     else {
       const tab = tabs.find((item) => item.id === id);
       if (tab) onSelectTab(tab.id);
@@ -114,150 +208,46 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, explorerSel
       }}
     >
       {onSelectExplorer && (
-        <div
-          data-tab-id="explorer"
-          className="tabbar-tab ui-focus-ring"
-          onClick={onSelectExplorer}
-          role="tab"
-          tabIndex={explorerSelected ? 0 : -1}
-          aria-selected={explorerSelected}
-          aria-label={t("sessionSidebar.explorer")}
-          aria-controls="workspace-file-panel-explorer"
+        <PinnedTab
+          id="explorer"
+          panelId="workspace-file-panel-explorer"
+          label={t("sessionSidebar.explorer")}
           title={explorerBadge > 0 ? t("sessionSidebar.explorerChanged", { count: explorerBadge }) : t("sessionSidebar.explorer")}
-          onKeyDown={(event) => handleTabKeyDown(event, "explorer")}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            height: "var(--tab-height)",
-            paddingLeft: 12,
-            paddingRight: 10,
-            borderRight: "1px solid var(--border)",
-            background: explorerSelected ? "var(--bg)" : "var(--bg-panel)",
-            cursor: "pointer",
-            fontSize: "var(--text-sm)",
-            color: explorerSelected ? "var(--text)" : "var(--text-muted)",
-            whiteSpace: "nowrap",
-            flexShrink: 0,
-            userSelect: "none",
-            position: "relative",
-            transition: `background var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm)`,
-          }}
-        >
-          {explorerSelected && (
-            <span
-              aria-hidden="true"
-              style={{
-                position: "absolute",
-                left: 0,
-                right: 0,
-                bottom: 0,
-                height: 2,
-                background: "var(--accent)",
-                borderTopLeftRadius: "var(--radius-control)",
-                borderTopRightRadius: "var(--radius-control)",
-              }}
-            />
-          )}
-          <span style={{ flexShrink: 0, opacity: explorerSelected ? 1 : 0.7, display: "flex", alignItems: "center", color: explorerSelected ? "var(--accent)" : undefined }}>
-            <Folder size={13} strokeWidth={2} aria-hidden="true" />
-          </span>
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis", fontWeight: explorerSelected ? 500 : 400 }}>
-            {t("sessionSidebar.explorer")}
-          </span>
-          {explorerBadge > 0 && (
-            <span
-              aria-hidden="true"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                minWidth: 16,
-                height: 15,
-                padding: "0 4px",
-                borderRadius: 8,
-                background: "color-mix(in srgb, var(--status-modified) 18%, transparent)",
-                color: "var(--status-modified)",
-                fontSize: 10,
-                fontWeight: 700,
-              }}
-            >
-              {explorerBadge > 99 ? "99+" : explorerBadge}
-            </span>
-          )}
-        </div>
+          icon={<Folder size={13} strokeWidth={2} aria-hidden="true" />}
+          selected={explorerSelected}
+          badge={explorerBadge}
+          badgeColor="var(--status-modified)"
+          onSelect={onSelectExplorer}
+          onKeyDown={handleTabKeyDown}
+        />
       )}
       {onSelectGit && (
-        <div
-          data-tab-id="git"
-          className="tabbar-tab ui-focus-ring"
-          onClick={onSelectGit}
-          role="tab"
-          tabIndex={gitSelected ? 0 : -1}
-          aria-selected={gitSelected}
-          aria-label={t("tabBar.git")}
-          aria-controls="workspace-file-panel-git"
+        <PinnedTab
+          id="git"
+          panelId="workspace-file-panel-git"
+          label={t("tabBar.git")}
           title={gitBadge > 0 ? t("sessionSidebar.explorerChanged", { count: gitBadge }) : t("tabBar.git")}
-          onKeyDown={(event) => handleTabKeyDown(event, "git")}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            height: "var(--tab-height)",
-            paddingLeft: 12,
-            paddingRight: 10,
-            borderRight: "1px solid var(--border)",
-            background: gitSelected ? "var(--bg)" : "var(--bg-panel)",
-            cursor: "pointer",
-            fontSize: "var(--text-sm)",
-            color: gitSelected ? "var(--text)" : "var(--text-muted)",
-            whiteSpace: "nowrap",
-            flexShrink: 0,
-            userSelect: "none",
-            position: "relative",
-            transition: `background var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm)`,
-          }}
-        >
-          {gitSelected && (
-            <span
-              aria-hidden="true"
-              style={{
-                position: "absolute",
-                left: 0,
-                right: 0,
-                bottom: 0,
-                height: 2,
-                background: "var(--accent)",
-                borderTopLeftRadius: "var(--radius-control)",
-                borderTopRightRadius: "var(--radius-control)",
-              }}
-            />
-          )}
-          <span style={{ flexShrink: 0, opacity: gitSelected ? 1 : 0.7, display: "flex", alignItems: "center", color: gitSelected ? "var(--accent)" : undefined }}>
-            <GitBranch size={13} strokeWidth={2} aria-hidden="true" />
-          </span>
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis", fontWeight: gitSelected ? 500 : 400 }}>
-            {t("tabBar.git")}
-          </span>
-          {gitBadge > 0 && (
-            <span
-              aria-hidden="true"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                minWidth: 16,
-                height: 15,
-                padding: "0 4px",
-                borderRadius: 8,
-                background: "color-mix(in srgb, var(--status-modified) 18%, transparent)",
-                color: "var(--status-modified)",
-                fontSize: 10,
-                fontWeight: 700,
-              }}
-            >
-              {gitBadge > 99 ? "99+" : gitBadge}
-            </span>
-          )}
-        </div>
+          icon={<GitBranch size={13} strokeWidth={2} aria-hidden="true" />}
+          selected={gitSelected}
+          badge={gitBadge}
+          badgeColor="var(--status-modified)"
+          onSelect={onSelectGit}
+          onKeyDown={handleTabKeyDown}
+        />
+      )}
+      {onSelectNotifications && (
+        <PinnedTab
+          id="notifications"
+          panelId="workspace-file-panel-notifications"
+          label={t("appShell.notifications")}
+          title={notificationsBadge > 0 ? t("appShell.notificationsUnreadCount", { count: notificationsBadge }) : t("appShell.notifications")}
+          icon={<Bell size={13} strokeWidth={2} aria-hidden="true" />}
+          selected={notificationsSelected}
+          badge={notificationsBadge}
+          badgeColor="var(--accent)"
+          onSelect={onSelectNotifications}
+          onKeyDown={handleTabKeyDown}
+        />
       )}
       {tabs.map((tab) => {
         const isActive = tab.id === activeTabId;

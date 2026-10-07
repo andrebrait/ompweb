@@ -129,7 +129,7 @@ components/
   CommandPalette.tsx  ⌘K/Ctrl+K palette (cmdk): session switch, new session, theme
   ImageLightbox.tsx   click-to-preview lightbox for chat images (ClickableImage)
   BranchNavigator.tsx in-session branch switcher
-  NotificationCenter.tsx top-bar bell: in-memory history of toasts + OS notifications (`toastHistory`)
+  NotificationList.tsx right-panel Notifications tab: in-memory history of toasts + OS notifications (`toastHistory`)
   ChatMinimap.tsx     scroll minimap alongside the message list
   MarkdownBody.tsx    markdown renderer
   ModelsConfig.tsx    modal for models/auth configuration
@@ -630,10 +630,11 @@ motion: --dur-fast (150ms) --dur-med (220ms) --dur-slow (320ms) --ease-out-warm
 `components/ui/` holds the shared primitives (built on `@base-ui/react`):
 `primitives.tsx` (Dialog/Tooltip/Collapsible), `field.tsx` (form fields +
 ConfirmDialog), `toast.tsx` (`toast.success/error/info`, mounted in AppShell;
-every toast also lands in `toastHistory`, the last 100 kept in memory for
-`NotificationCenter`; OS notifications call `toastHistory.record()` so they
-appear there too). The bell is pinned outside the top-bar overflow menu, so
-the compact-topbar measurement counts every `.shell-topbar-tools` child.
+every toast also lands in `toastHistory`, the last 100 kept in memory for the
+right panel's Notifications tab; OS notifications call `toastHistory.record()`
+so they appear there too). Unread entries badge the right-panel toggle, which
+then opens the Notifications tab; entries become read when the user leaves
+that tab or uses Mark all as read.
 Icons come from `lucide-react` — do not add new inline SVGs. The command
 palette (`components/CommandPalette.tsx`, ⌘K/Ctrl+K) is built on `cmdk`.
 

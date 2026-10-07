@@ -11,7 +11,7 @@ import { isMacPlatform, navigateShortcutHint, NAVIGATION_HISTORY_MAX_ENTRIES } f
 import { useMobileSidebarGestures } from "@/hooks/useMobileSidebarGestures";
 import { SessionSidebar } from "./SessionSidebar";
 import { ToastProvider } from "./ui/toast";
-import { toast, toastHistory } from "./ui/toast";
+import { toast, toastHistory, useToastHistory } from "./ui/toast";
 import { ConfirmDialog } from "./ui/field";
 import { ChatWindow } from "./ChatWindow";
 import { type Tab } from "./TabBar";
@@ -22,7 +22,6 @@ import { LanguageSwitcher } from "./LanguageSwitcher";
 import { CommandPaletteMount } from "./CommandPaletteMount";
 import { Check, ChevronDown, Command, Ellipsis, Folder, History, Menu, PanelLeft, PanelRight, Terminal, Wand2, Zap } from "lucide-react";
 import { ThemeSwitcher } from "./ThemeSwitcher";
-import { NotificationCenter } from "./NotificationCenter";
 import { translate, useI18n } from "@/lib/i18n";
 import { formatApiError } from "@/lib/i18n/api-error";
 import { formatGenerationSpeed } from "@/lib/generation-speed";
@@ -981,7 +980,16 @@ export function AppShell({ appName }: { appName: string }) {
     }
   }, [isCompactOverlay]);
   const [rightPanelHasOpened, setRightPanelHasOpened] = useState(false);
-  const [rightView, setRightView] = useState<"explorer" | "git" | "file">("explorer");
+  const [rightView, setRightView] = useState<RightPanelView>("explorer");
+  const unreadNotifications = useToastHistory().filter((entry) => !entry.read).length;
+  // Unread entries stay highlighted while the Notifications tab is shown and
+  // become read once the user leaves it (switches tab or closes the panel).
+  const viewingNotifications = rightPanelOpen && rightView === "notifications" && !settingsTab;
+  const wasViewingNotificationsRef = useRef(false);
+  useEffect(() => {
+    if (wasViewingNotificationsRef.current && !viewingNotifications) toastHistory.markAllRead();
+    wasViewingNotificationsRef.current = viewingNotifications;
+  }, [viewingNotifications]);
   // User-chosen pixel width (null = fluid 42% default), persisted.
   const [rightPanelWidth, setRightPanelWidth] = useState<number | null>(null);
   const [rightPanelResizing, setRightPanelResizing] = useState(false);
@@ -1681,11 +1689,9 @@ export function AppShell({ appName }: { appName: string }) {
         return width + child.getBoundingClientRect().width
           + parseFloat(style.marginLeft) + parseFloat(style.marginRight);
       }, 0) + Math.max(0, children.length - 1) * parseFloat(contentStyle.columnGap);
-      const toolsGap = parseFloat(getComputedStyle(tools).columnGap);
       const leftNeed = controlsWidth
-        // Buttons pinned outside the overflow menu (sidebar toggle, notification bell).
-        + Array.from(tools.children).reduce((width, child) => child === details ? width
-          : width + child.getBoundingClientRect().width + toolsGap, 0)
+        + (tools.firstElementChild?.getBoundingClientRect().width ?? 0)
+        + parseFloat(getComputedStyle(tools).columnGap)
         + parseFloat(headerStyle.paddingLeft);
       const rightNeed = parseFloat(headerStyle.paddingRight) + right.offsetWidth;
       const required = leftNeed + parseFloat(headerStyle.columnGap) + rightNeed;
@@ -1999,7 +2005,6 @@ export function AppShell({ appName }: { appName: string }) {
             >
               {sidebarOpen ? <PanelLeft size={16} strokeWidth={1.8} aria-hidden="true" /> : <Menu size={16} strokeWidth={1.8} aria-hidden="true" />}
             </button>
-            <NotificationCenter />
             <details
               ref={mobileToolsRef}
               className="shell-topbar-overflow"
@@ -2334,14 +2339,28 @@ export function AppShell({ appName }: { appName: string }) {
             <button
               type="button"
               className="shell-toolbar-btn shell-panel-opener ui-focus-ring"
-              onClick={() => setRightPanelOpen((open) => !open)}
+              onClick={() => {
+                // Unread notifications turn the panel toggle into their shortcut.
+                if (unreadNotifications > 0 && !viewingNotifications) {
+                  setRightView("notifications");
+                  setRightPanelOpen(true);
+                } else {
+                  setRightPanelOpen((open) => !open);
+                }
+              }}
               aria-expanded={rightPanelOpen}
               aria-controls="workspace-file-panel"
               aria-pressed={rightPanelOpen}
-              title={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
-              aria-label={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
+              title={unreadNotifications > 0 && !viewingNotifications ? t("appShell.showNotifications", { count: unreadNotifications }) : rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
+              aria-label={unreadNotifications > 0 && !viewingNotifications ? t("appShell.showNotifications", { count: unreadNotifications }) : rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
+              style={{ position: "relative" }}
             >
               <PanelRight size={16} strokeWidth={1.8} aria-hidden="true" />
+              {unreadNotifications > 0 && (
+                <span aria-hidden="true" className="panel-opener-badge">
+                  {unreadNotifications > 99 ? "99+" : unreadNotifications}
+                </span>
+              )}
             </button>
           </div>
 

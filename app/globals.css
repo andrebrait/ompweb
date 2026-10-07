@@ -3403,6 +3403,23 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
 .shell-toolbar-btn:active:not(:disabled) {
   transform: scale(0.96);
 }
+/* Unread-notification count on the right-panel toggle. */
+.panel-opener-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  pointer-events: none;
+}
 .right-panel-toolbar {
   --right-panel-close-width: 36px;
   position: relative;

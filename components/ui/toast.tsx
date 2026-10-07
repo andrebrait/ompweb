@@ -12,7 +12,7 @@
  */
 import { Toast } from "@base-ui/react/toast";
 import { AlertCircle, Check, Info, X } from "lucide-react";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type React from "react";
 
@@ -56,6 +56,7 @@ export interface ToastHistoryEntry {
   description?: React.ReactNode;
   clamp?: boolean;
   at: number;
+  read: boolean;
 }
 
 let history: ToastHistoryEntry[] = [];
@@ -77,13 +78,23 @@ export const toastHistory = {
   /** Add an entry without showing a toast, e.g. for a notification already delivered by the OS. */
   record(kind: ToastKind, title: React.ReactNode, description?: React.ReactNode, options?: { id?: string; clamp?: boolean }) {
     const id = options?.id ?? `recorded-${++recordedCount}`;
-    // A reused id replaces its toast on screen, so it replaces its history entry too.
-    const entry: ToastHistoryEntry = { id, kind, title, description, clamp: options?.clamp, at: Date.now() };
+    // A reused id replaces its toast on screen, so it replaces its history entry
+    // too. It keeps its read state: re-announcing the same notice (e.g. an
+    // update toast on every tab focus) must not re-badge it.
+    const read = history.some((e) => e.id === id && e.read);
+    const entry: ToastHistoryEntry = { id, kind, title, description, clamp: options?.clamp, at: Date.now(), read };
     setHistory([entry, ...history.filter((e) => e.id !== id)].slice(0, TOAST_HISTORY_LIMIT));
+  },
+  markAllRead: () => {
+    if (history.some((e) => !e.read)) setHistory(history.map((e) => e.read ? e : { ...e, read: true }));
   },
   remove: (id: string) => setHistory(history.filter((entry) => entry.id !== id)),
   clear: () => setHistory([]),
 };
+
+export function useToastHistory(): ToastHistoryEntry[] {
+  return useSyncExternalStore(toastHistory.subscribe, toastHistory.get, toastHistory.get);
+}
 
 function add(kind: ToastKind, title: React.ReactNode, description?: React.ReactNode, options?: ToastOptions) {
   const timeout = resolveToastTimeout(kind, options);

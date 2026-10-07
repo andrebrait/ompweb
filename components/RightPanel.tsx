@@ -3,6 +3,7 @@
 import { memo, useEffect, useState, type Ref, type RefObject } from "react";
 import {
   AtSign,
+  CheckCheck,
   ChevronsDownUp,
   Copy,
   Download,
@@ -13,6 +14,7 @@ import {
   LocateFixed,
   RefreshCw,
   Search,
+  Trash2,
   Upload,
   X,
 } from "lucide-react";
@@ -20,10 +22,12 @@ import { TabBar, type Tab } from "./TabBar";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
 import { GitChangesPanel } from "./GitChangesPanel";
 import { FileViewer } from "./FileViewer";
+import { NotificationList } from "./NotificationList";
+import { toastHistory, useToastHistory } from "./ui/toast";
 import { useI18n } from "@/lib/i18n";
 import { getFileName } from "@/lib/file-paths";
 
-export type RightPanelView = "explorer" | "git" | "file";
+export type RightPanelView = "explorer" | "git" | "notifications" | "file";
 
 interface Props {
   fileTabs: Tab[];
@@ -124,6 +128,8 @@ export const RightPanel = memo(function RightPanel({
   const { t } = useI18n();
   const activeFileTab = fileTabs.find((tab) => tab.id === activeFileTabId) ?? null;
   const gitBadge = explorerIsRepo ? explorerGitCount : 0;
+  const notifications = useToastHistory();
+  const unreadNotifications = notifications.filter((entry) => !entry.read).length;
   const [visitedViews, setVisitedViews] = useState<Set<RightPanelView>>(() => new Set(["explorer"]));
   useEffect(() => {
     setVisitedViews((previous) => {
@@ -198,6 +204,9 @@ export const RightPanel = memo(function RightPanel({
               gitSelected={rightView === "git"}
               onSelectGit={() => onSelectView("git")}
               gitBadge={gitBadge}
+              notificationsSelected={rightView === "notifications"}
+              onSelectNotifications={() => onSelectView("notifications")}
+              notificationsBadge={unreadNotifications}
             />
           </div>
           {rightView === "explorer" ? (
@@ -260,6 +269,30 @@ export const RightPanel = memo(function RightPanel({
                 onMouseLeave={(e) => { if (explorerRefreshing) return; e.currentTarget.style.color = "var(--text-dim)"; e.currentTarget.style.background = "none"; }}
               >
                 <RefreshCw size={13} strokeWidth={2} aria-hidden="true" className={explorerRefreshing ? "icon-spin" : undefined} />
+              </button>
+            </div>
+            )
+          ) : rightView === "notifications" ? (
+            notifications.length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", flexShrink: 0, padding: "0 2px" }} role="toolbar" aria-label={t("appShell.notifications")}>
+              <button
+                onClick={toastHistory.markAllRead}
+                disabled={unreadNotifications === 0}
+                title={t("appShell.notificationsMarkRead")}
+                aria-label={t("appShell.notificationsMarkRead")}
+                className="ui-focus-ring"
+                style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, padding: 0, background: "none", border: "none", borderRadius: "var(--radius-control)", color: "var(--text-dim)", cursor: unreadNotifications === 0 ? "default" : "pointer", opacity: unreadNotifications === 0 ? 0.5 : 1 }}
+              >
+                <CheckCheck size={13} strokeWidth={2} aria-hidden="true" />
+              </button>
+              <button
+                onClick={toastHistory.clear}
+                title={t("appShell.notificationsClear")}
+                aria-label={t("appShell.notificationsClear")}
+                className="ui-focus-ring"
+                style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, padding: 0, background: "none", border: "none", borderRadius: "var(--radius-control)", color: "var(--text-dim)", cursor: "pointer" }}
+              >
+                <Trash2 size={13} strokeWidth={2} aria-hidden="true" />
               </button>
             </div>
             )
@@ -426,6 +459,9 @@ export const RightPanel = memo(function RightPanel({
               <div style={{ color: "var(--text-dim)", fontSize: 11, lineHeight: 1.6, maxWidth: 260 }}>{t("sessionSidebar.selectProjectFirst")}</div>
             </div>
           ))}
+        </div>
+        <div id="workspace-file-panel-notifications" role="tabpanel" aria-label={t("appShell.notifications")} style={{ display: rightView === "notifications" ? "flex" : "none", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
+          {visitedViews.has("notifications") && <NotificationList />}
         </div>
         {/* Keep open viewers mounted so switching tabs preserves scroll and preview state. */}
         <div id="workspace-file-panel-file" role="tabpanel" aria-label={activeFileTab?.filePath ?? t("appShell.filePanel")} style={{ display: rightView === "file" ? "block" : "none", flex: 1, minHeight: 0, overflow: "hidden" }}>
