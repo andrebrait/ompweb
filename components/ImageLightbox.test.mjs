@@ -114,15 +114,20 @@ test("missing image sources render nothing", () => {
   assert.equal(renderToStaticMarkup(React.createElement(ClickableImage, { src: "" })), "");
 });
 
-test("the viewer opens big images fitted to the screen and keeps small ones at real size", () => {
+test("fitZoom fits big images to the viewport and keeps small ones at real size", () => {
   // 6000×4000 in a 366×700 phone viewport: limited by width.
   assert.equal(fitZoom({ width: 6000, height: 4000 }, { width: 366, height: 700 }), 0.061);
   // Limited by height on a wide desktop.
   assert.equal(fitZoom({ width: 1000, height: 2000 }, { width: 1800, height: 1000 }), 0.5);
   assert.equal(fitZoom({ width: 200, height: 100 }, { width: 1800, height: 1000 }), 1);
+  // Not yet laid out or no intrinsic size: real size rather than 0 or Infinity.
+  assert.equal(fitZoom({ width: 6000, height: 4000 }, { width: 0, height: 0 }), 1);
+  assert.equal(fitZoom({ width: 0, height: 0 }, { width: 366, height: 700 }), 1);
 });
 
-test("zoom steps go below 25% down to the fit, and never past 10% for images that fit higher", () => {
+test("stepZoom moves by ×1.25 down to min(fit, 10%) and up to 800%", () => {
+  assert.equal(stepZoom(1, 1, 1), 1.25);
+  assert.equal(stepZoom(1, -1, 1), 0.8);
   assert.equal(stepZoom(0.061 * 1.25, -1, 0.061), 0.061);
   assert.equal(stepZoom(0.061, -1, 0.061), 0.061, "cannot zoom out past the fitted size of a huge image");
   assert.equal(stepZoom(0.11, -1, 0.5), 0.1);

@@ -1431,6 +1431,12 @@ pre, code {
     padding: 12px;
   }
 }
+html[data-touch-targets="accessible"] .image-lightbox-stepper,
+html[data-touch-targets="accessible"] :is(.image-lightbox-stepper button, .image-lightbox-icon-button, .image-lightbox-zoom-value) {
+  min-width: 44px;
+  height: 44px;
+  line-height: 44px;
+}
 
 /* File viewer toolbar */
 .file-viewer-toolbar {
