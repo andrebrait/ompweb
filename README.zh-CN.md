@@ -90,6 +90,8 @@ ompweb --no-open                           # 不自动打开浏览器
 | `OMP_WEB_STT_KEY` | STT 接口对应的 API Key | _无_ |
 | `OMP_WEB_STT_MODEL` | STT 接口的模型名称 | _无_ |
 
+**`OMP_WEB_NAME` 与已安装应用。** 已安装应用（PWA）通常以安装时所在页面的名称命名。如果之后修改了 `OMP_WEB_NAME`，或在 `OMP_WEB_NAME` 为 `url`、`host` 或 `domain` 时通过其他地址访问 omp-web，操作系统可能也会重命名已安装的应用。建议将 `OMP_WEB_NAME` 留空，或设置一个无论通过哪个域名或地址访问都能识别这台 omp-web 服务器的名称。
+
 ## 本地开发
 
 ```bash

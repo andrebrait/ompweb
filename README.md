@@ -262,6 +262,8 @@ host (KDE Plasma, and most Wayland/X11 desktops).
 | `OMP_WEB_STT_KEY` | Optional API key for the STT endpoint | _None_ |
 | `OMP_WEB_STT_MODEL` | Optional model name for the STT endpoint | _None_ |
 
+**`OMP_WEB_NAME` and installed apps.** An installed app (PWA) is usually named after the page it was installed from. If you later change `OMP_WEB_NAME`, or reach omp-web through a different address while `OMP_WEB_NAME` is `url`, `host` or `domain`, your operating system may rename the installed app as well. Leave `OMP_WEB_NAME` empty, or set a name that identifies this omp-web server whatever domain name or address is used to reach it.
+
 ## Development
 
 ```bash
