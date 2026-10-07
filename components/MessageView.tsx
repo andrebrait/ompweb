@@ -1431,21 +1431,35 @@ function CompactionFileList({ title, files }: { title: string; files: string[] }
 function stripHiddenWrappers(text: string): string {
   let t = text.trim();
   t = t.replace(/^<!--[\s\S]*?-->\s*/, "").trim();
-  const outer = t.match(/^<([a-zA-Z0-9_-]+)(?:\s(?:[^>"]|"[^"]*")*)?>\s*([\s\S]*?)\s*<\/\1>\s*$/);
+  // No `\s*` around the lazy body: that pair backtracks super-quadratically on
+  // whitespace runs. Trim the capture instead.
+  const outer = t.match(/^<([a-zA-Z0-9_-]+)(?:\s(?:[^>"]|"[^"]*")*)?>([\s\S]*)<\/\1>$/);
   if (outer) return outer[2].trim();
   return t;
 }
 
-/** `<system-reminder reason="…" rule="…">` → tag + attributes of a leading wrapper. */
-function parseLeadingWrapper(text: string): { tag: string; attrs: [string, string][] } | null {
-  const match = text.trim().match(/^<([\w-]+)((?:\s+[\w-]+="[^"]*")*)\s*>/);
-  return match ? { tag: match[1], attrs: [...match[2].matchAll(/([\w-]+)="([^"]*)"/g)].map((attr) => [attr[1], attr[2]]) } : null;
+/**
+ * `<system-reminder reason="…" rule="…">body</system-reminder>` → tag, attributes
+ * and body. The closing tag is optional: the passive-context length cap can cut it.
+ */
+function parseLeadingWrapper(text: string): { tag: string; attrs: [string, string][]; body: string } | null {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^<([\w-]+)((?:\s+[\w-]+="[^"]*")*)\s*>/);
+  if (!match) return null;
+  const closing = `</${match[1]}>`;
+  const body = trimmed.slice(match[0].length);
+  return {
+    tag: match[1],
+    attrs: [...match[2].matchAll(/([\w-]+)="([^"]*)"/g)].map((attr) => [attr[1], attr[2]]),
+    body: (body.endsWith(closing) ? body.slice(0, -closing.length) : body).trim(),
+  };
 }
 
 /** "Context (rule_violation · ts-set-map · …): body" for a wrapped passive context, plain otherwise. */
 function contextLine(text: string, t: (key: string, params?: Record<string, string>) => string): string {
-  const label = parseLeadingWrapper(text)?.attrs.map(([, value]) => value).join(" · ");
-  const body = stripHiddenWrappers(text);
+  const wrapper = parseLeadingWrapper(text);
+  const label = wrapper?.attrs.map(([, value]) => value).filter(Boolean).join(" · ");
+  const body = wrapper ? wrapper.body : text;
   return label
     ? t("messageView.passiveContextLabeled", { label, text: body })
     : t("messageView.passiveContext", { text: body });

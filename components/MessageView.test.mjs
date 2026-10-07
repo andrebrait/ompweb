@@ -582,6 +582,11 @@ test("passive tool context from a session file renders on the batch's last tool 
   const labeled = renderToStaticMarkup(React.createElement(MessageView, { message: single, toolResults: wrapped }));
   assert.match(labeled, /↳ <\/span>Context \(rule_violation · ts-set-map\): Use a Record\.<\/div>/);
   assert.doesNotMatch(labeled, /system-reminder/);
+  // The length cap can cut the closing tag; the opening tag still never leaks.
+  wrapped.set("call-2", { ...toolResults.get("call-2"), passiveContext: '<system-reminder reason="" rule="ts-set-map">\nUse a Rec' });
+  const cut = renderToStaticMarkup(React.createElement(MessageView, { message: single, toolResults: wrapped }));
+  assert.match(cut, /↳ <\/span>Context \(ts-set-map\): Use a Rec<\/div>/);
+  assert.doesNotMatch(cut, /system-reminder/);
   // The marked message is no row of its own; the unmarked one still is.
   assert.equal(messages[4].customType, "passive-tool-context");
   assert.equal(html(messages[4]), "");
