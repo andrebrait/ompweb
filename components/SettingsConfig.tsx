@@ -602,11 +602,11 @@ function NotificationSettingsPanel() {
       </NativeSetting>
       {status && <Alert variant={support === "push" || support === "no-push" ? "info" : "warning"} description={status} />}
       {NOTIFICATION_TYPES.map((type) => (
-        <NativeSetting key={type} searchId={`notifications-${type}`} scope="UI" label={t(NOTIFICATION_TYPE_LABELS[type].label)} description={t(NOTIFICATION_TYPE_LABELS[type].desc)}>
+        <NativeSetting key={type} searchId={`notifications-${type}`} scope="UI" disabled={!prefs.enabled} label={t(NOTIFICATION_TYPE_LABELS[type].label)} description={t(NOTIFICATION_TYPE_LABELS[type].desc)}>
           <ToggleSwitch checked={prefs.types[type]} disabled={!prefs.enabled} onChange={(next) => save({ types: { ...prefs.types, [type]: next } })} />
         </NativeSetting>
       ))}
-      <NativeSetting searchId="notifications-when-active" scope="UI" label={t("notifications.whenActive")} description={t("notifications.whenActiveDesc")}>
+      <NativeSetting searchId="notifications-when-active" scope="UI" disabled={!prefs.enabled} label={t("notifications.whenActive")} description={t("notifications.whenActiveDesc")}>
         <select
           style={nativeSelectStyle}
           value={prefs.whenActive}
@@ -641,7 +641,8 @@ function NotificationSettingsPanel() {
   );
 }
 
-function NativeSetting({ label, description, scope, searchId, children }: { label: string; description: string; scope?: "UI" | "Native OMP" | "Workspace"; searchId?: string; children: ReactNode }) {
+/** `disabled` only dims the row; the child control must be disabled itself. */
+function NativeSetting({ label, description, scope, searchId, disabled, children }: { label: string; description: string; scope?: "UI" | "Native OMP" | "Workspace"; searchId?: string; disabled?: boolean; children: ReactNode }) {
   const { t } = useI18n();
   const ref = useRef<HTMLDivElement>(null);
   const highlightId = useContext(SettingsHighlightContext);
@@ -685,13 +686,14 @@ function NativeSetting({ label, description, scope, searchId, children }: { labe
         width: "100%",
         boxSizing: "border-box",
         marginBottom: 10,
-        transition: "box-shadow var(--dur-fast), border-color var(--dur-fast)",
+        opacity: disabled ? 0.5 : 1,
+        transition: "box-shadow var(--dur-fast), border-color var(--dur-fast), opacity var(--dur-fast)",
         ...(highlighted ? { borderColor: "var(--accent)", boxShadow: "0 0 0 2px var(--accent)" } : {}),
       }}
     >
       <div className="settings-card-text">
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-          <label id={labelId} htmlFor={settingId} className="settings-card-title" style={{ cursor: "pointer" }}>{label}</label>
+          <label id={labelId} htmlFor={settingId} className="settings-card-title" style={{ cursor: disabled ? "default" : "pointer" }}>{label}</label>
           {scope && (
             <span style={chipStyle}>
               {formatScope(scope)}
