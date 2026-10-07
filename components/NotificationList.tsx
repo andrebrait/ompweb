@@ -1,15 +1,14 @@
 "use client";
 
 import { BellOff, X } from "lucide-react";
-import { useRef, useState } from "react";
-import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
+import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { ClampedDescription, descriptionBaseStyle, dismissButtonStyle, KindIcon, toastHistory, useDragClickGuard, useToastHistory, type ToastHistoryEntry } from "./ui/toast";
+import { ClampedDescription, descriptionBaseStyle, dismissButtonStyle, DRAG_SLOP_PX, KindIcon, toastHistory, useDragClickGuard, useToastHistory, type ToastHistoryEntry } from "./ui/toast";
 
-/** Pointer travel that claims a sideways drag as a swipe. */
-const SWIPE_CLAIM_PX = 10;
-/** Sideways travel that dismisses on release; base-ui's toast swipe uses the same 40px. */
+/** Sideways travel that dismisses on release, the same distance as base-ui's toast swipe. */
 const SWIPE_DISMISS_PX = 40;
+/** Outlasts the 150ms exit transition; a timer, because a hidden panel cancels transitionend. */
+const EXIT_MS = 200;
 
 /** Notifications tab of the right panel: recent toasts and OS notifications, newest first. */
 export function NotificationList() {
@@ -40,18 +39,25 @@ export function NotificationList() {
  */
 function NotificationRow({ entry }: { entry: ToastHistoryEntry }) {
   const { t, locale } = useI18n();
-  const reducedMotion = usePrefersReducedMotion();
   const clickGuard = useDragClickGuard();
   const drag = useRef<{ id: number; x: number; y: number; claimed: boolean } | null>(null);
   const [offset, setOffset] = useState(0);
   const [leaving, setLeaving] = useState<-1 | 1 | null>(null);
   const [dragging, setDragging] = useState(false);
+  useEffect(() => {
+    if (!leaving) return;
+    const timer = setTimeout(() => toastHistory.remove(entry.id), EXIT_MS);
+    return () => clearTimeout(timer);
+  }, [leaving, entry.id]);
   return (
     <li
       data-swipe-dismiss
       onPointerDown={(event) => {
         clickGuard.onPointerDown(event);
-        if (drag.current || leaving || event.pointerType === "mouse" || event.button !== 0) return;
+        // A second finger never takes over a swipe in progress; any other
+        // leftover (a pen lifted outside the row) is simply replaced.
+        if (drag.current?.claimed || leaving || event.pointerType === "mouse" || event.button !== 0) return;
+        drag.current = null;
         if (event.target instanceof Element && event.target.closest("button, a, input, textarea, select")) return;
         drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, claimed: false };
       }}
@@ -63,7 +69,7 @@ function NotificationRow({ entry }: { entry: ToastHistoryEntry }) {
           // Claim only a clearly sideways drag. A vertical one is the list
           // scrolling: touch-action pan-y hands it to the browser, which
           // then cancels this pointer.
-          if (Math.abs(dx) < SWIPE_CLAIM_PX || Math.abs(dx) <= Math.abs(event.clientY - current.y)) return;
+          if (Math.abs(dx) < DRAG_SLOP_PX || Math.abs(dx) <= Math.abs(event.clientY - current.y)) return;
           current.claimed = true;
           setDragging(true);
           event.currentTarget.setPointerCapture(event.pointerId);
@@ -78,8 +84,7 @@ function NotificationRow({ entry }: { entry: ToastHistoryEntry }) {
         const dx = event.clientX - current.x;
         // Judge the whole movement, not its path: a curved thumb stroke still counts.
         if (current.claimed && Math.abs(dx) >= SWIPE_DISMISS_PX && Math.abs(dx) > Math.abs(event.clientY - current.y)) {
-          if (reducedMotion) toastHistory.remove(entry.id);
-          else setLeaving(dx > 0 ? 1 : -1);
+          setLeaving(dx > 0 ? 1 : -1);
         } else {
           setOffset(0);
         }
@@ -91,9 +96,6 @@ function NotificationRow({ entry }: { entry: ToastHistoryEntry }) {
         setOffset(0);
       }}
       onClickCapture={clickGuard.onClickCapture}
-      onTransitionEnd={(event) => {
-        if (leaving && event.target === event.currentTarget && event.propertyName === "transform") toastHistory.remove(entry.id);
-      }}
       style={{
         display: "flex",
         alignItems: "flex-start",

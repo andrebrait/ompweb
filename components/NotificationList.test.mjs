@@ -9,11 +9,7 @@ const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tryNat
 const { NotificationList } = await jiti.import("./NotificationList.tsx");
 const { toastHistory } = await jiti.import("./ui/toast.tsx");
 
-before(() => {
-  // Reduced motion removes a swiped row at once; jsdom fires no transitionend.
-  window.matchMedia = (query) => ({ matches: query.includes("reduce"), addEventListener() {}, removeEventListener() {} });
-  window.Element.prototype.setPointerCapture = () => {};
-});
+before(() => { window.Element.prototype.setPointerCapture = () => {}; });
 afterEach(() => { cleanup(); toastHistory.clear(); });
 
 function pointer(target, type, x, y, { pointerType = "touch", detail = 1 } = {}) {
@@ -21,33 +17,41 @@ function pointer(target, type, x, y, { pointerType = "touch", detail = 1 } = {})
   Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: pointerType } });
   act(() => { target.dispatchEvent(event); });
 }
-function drag(target, [x1, y1], [x2, y2], options) {
-  pointer(target, "pointerdown", x1, y1, options);
-  pointer(target, "pointermove", (x1 + x2) / 2, (y1 + y2) / 2, options);
-  pointer(target, "pointermove", x2, y2, options);
-  pointer(target, "pointerup", x2, y2, options);
+function drag(target, points, options) {
+  const [first, ...rest] = points;
+  pointer(target, "pointerdown", ...first, options);
+  for (const point of rest) pointer(target, "pointermove", ...point, options);
+  pointer(target, "pointerup", ...points.at(-1), options);
 }
 function mount() {
   act(() => { toastHistory.record("info", "Agent finished", "A long description", { id: "n1", clamp: true }); });
   const view = render(React.createElement(NotificationList));
-  return { view, description: () => view.container.querySelector("[aria-expanded]") };
+  return { row: () => view.container.querySelector("li"), description: () => view.container.querySelector("[aria-expanded]") };
 }
+const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 250)));
 
-test("a sideways touch swipe from anywhere on the row dismisses it, in either direction", () => {
-  for (const [from, to] of [[[100, 50], [160, 58]], [[200, 50], [140, 44]]]) {
-    const { description } = mount();
-    drag(description(), from, to);
+test("a sideways touch swipe from anywhere on the row slides it out, then removes it, in either direction", async () => {
+  for (const points of [[[100, 50], [130, 54], [160, 58]], [[200, 50], [170, 46], [140, 44]]]) {
+    const { row, description } = mount();
+    drag(description(), points);
+    assert.equal(row().style.opacity, "0", "the row slides out before it goes");
+    await settle();
     assert.equal(toastHistory.get().length, 0);
     cleanup();
   }
 });
 
-test("short, mostly vertical, and mouse drags keep the row", () => {
-  const { description } = mount();
-  drag(description(), [100, 50], [130, 52]);
-  drag(description(), [100, 50], [150, 120]);
-  drag(description(), [100, 50], [200, 52], { pointerType: "mouse" });
+test("short, mostly vertical, curved-into-vertical, mouse, and button-started drags keep the row", async () => {
+  const { row, description } = mount();
+  drag(description(), [[100, 50], [115, 51], [130, 52]]);
+  drag(description(), [[100, 50], [120, 85], [150, 120]]);
+  // Claimed sideways, then the thumb carries on mostly downward.
+  drag(description(), [[100, 50], [125, 52], [150, 120]]);
+  drag(description(), [[100, 50], [150, 51], [200, 52]], { pointerType: "mouse" });
+  drag(row().querySelector("button"), [[100, 50], [150, 51], [200, 52]]);
+  await settle();
   assert.equal(toastHistory.get().length, 1);
+  assert.equal(row().style.transform, "");
 });
 
 test("the click ending a drag is swallowed; taps and keyboard clicks still reach the row", () => {

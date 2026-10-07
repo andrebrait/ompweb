@@ -3261,11 +3261,6 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
   transform: translateX(calc(var(--toast-swipe-movement-x) - 110%));
   opacity: 0;
 }
-@media (prefers-reduced-motion: reduce) {
-  .toast-card[data-ending-style] {
-    transition: none;
-  }
-}
 .toast-card:hover {
   border-color: color-mix(in srgb, var(--accent) 30%, var(--border)) !important;
   box-shadow: var(--shadow-modal) !important;

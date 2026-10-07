@@ -24,7 +24,8 @@ export function useMobileSidebarGestures({ enabled, leftOpen, rightOpen, onLeftO
       const owner = rightOpen ? "workspace-file-panel" : leftOpen ? "workspace-sidebar" : null;
       const ownerElement = owner ? document.getElementById(owner) : null;
       for (const dialog of document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], dialog[open], [data-top-panel], [data-branch-panel]')) {
-        if (dialog.id === owner || dialog.closest('[inert], [hidden], [aria-hidden="true"]')) continue;
+        // A toast is a non-modal role="dialog"; it must not freeze drawer swipes while shown.
+        if (dialog.id === owner || dialog.closest('[inert], [hidden], [aria-hidden="true"], [data-swipe-dismiss]')) continue;
         if (dialog.getAttribute("role") === "listbox" && ownerElement?.contains(dialog)) continue;
         const style = getComputedStyle(dialog);
         if (style.display !== "none" && style.visibility !== "hidden") return true;

@@ -193,7 +193,7 @@ export const dismissButtonStyle = {
 } as const;
 
 /** Pointer travel beyond this is a drag, not a click (about the tap slop of mobile browsers). */
-const CLICK_SLOP_PX = 10;
+export const DRAG_SLOP_PX = 10;
 
 /**
  * Swallows the click that ends a drag. A swipe, or a mouse drag that selects
@@ -210,7 +210,7 @@ export function useDragClickGuard() {
       start.current = null;
       // detail 0: a keyboard-activated click, which has no pointer travel.
       if (!from || event.detail === 0) return;
-      if (Math.hypot(event.clientX - from.x, event.clientY - from.y) > CLICK_SLOP_PX) {
+      if (Math.hypot(event.clientX - from.x, event.clientY - from.y) > DRAG_SLOP_PX) {
         event.stopPropagation();
         event.preventDefault();
       }
