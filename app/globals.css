@@ -713,8 +713,8 @@ html, body {
 :root {
   --font-mono: "Symbols Nerd Font Mono", var(--font-noto-mono), 'JetBrains Mono', 'Fira Code', 'Consolas', ui-monospace, 'PingFang SC', 'Microsoft YaHei', monospace;
   /* Display serif for headings / session titles / modal titles / empty states.
-     Falls back to system serifs if the webfont fails. */
-  --font-serif: "Symbols Nerd Font Mono", var(--font-source-serif), var(--font-noto-serif), Georgia, 'Songti SC', 'SimSun', serif;
+     CJK uses the system's CJK serif; falls back to system serifs if the webfont fails. */
+  --font-serif: "Symbols Nerd Font Mono", var(--font-source-serif), Georgia, 'Songti SC', 'Noto Serif SC', 'Noto Serif CJK SC', 'Source Han Serif SC', 'SimSun', serif;
 }
 
 pre, code {
