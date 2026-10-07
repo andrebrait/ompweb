@@ -254,6 +254,7 @@ host (KDE Plasma, and most Wayland/X11 desktops).
 | `OMP_WEB_PASSWORD` | Optional password for web login | _None (auth disabled)_ |
 | `OMP_WEB_NO_OPEN` | Set to `1` to prevent auto-opening browser | `0` |
 | `OMP_WEB_DISABLE_AUTOUPDATE` | Set to `1` to disable update checks and in-app updates; restart after changing | `0` |
+| `OMP_WEB_NAME` | Name shown in browser tabs and installed-app names. `url`, `host` or `domain` (any case) uses the hostname the browser connected to, without port; localhost and IP addresses keep `omp web`. Any other value is used as-is. Restart after changing | `omp web` |
 | `OMP_WEB_OMP_BIN` | Path to `omp` binary if not on `PATH` | _auto-detected_ |
 | `OMP_WEB_DEV_ORIGIN` | Additional allowed hostname for the development server (no scheme or port); ignored in production | _None_ |
 | `PI_CODING_AGENT_DIR` | Custom omp agent directory | `~/.omp/agent` |
