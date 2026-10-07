@@ -339,7 +339,7 @@ export function AppShell({ appName }: { appName: string }) {
                 type="button"
                 onClick={() => {
                   setSettingsTab("system");
-                  toast.close("omp-update-available");
+                  toast.close(`omp-update-available:${version}`);
                 }}
                 style={{ padding: "3px 7px", border: "1px solid var(--accent-strong)", borderRadius: "var(--radius-control)", background: "var(--accent-strong)", color: "var(--on-accent)", cursor: "pointer", fontSize: 11, fontWeight: 600 }}
               >
@@ -347,7 +347,9 @@ export function AppShell({ appName }: { appName: string }) {
               </button>
             </div>
           </div>,
-          { id: "omp-update-available", timeout: 0, onClose: () => rememberDismissedVersion(DISMISSED_OMP_UPDATE_KEY, version) }
+          // Version in the id: re-announcing the same version keeps its
+          // notification-center read state; a newer version is a new notice.
+          { id: `omp-update-available:${version}`, timeout: 0, onClose: () => rememberDismissedVersion(DISMISSED_OMP_UPDATE_KEY, version) }
         );
       })
       .catch(() => {});
@@ -409,7 +411,7 @@ export function AppShell({ appName }: { appName: string }) {
                 type="button"
                 onClick={() => {
                   setSettingsTab("system");
-                  toast.close("app-update-available");
+                  toast.close(`app-update-available:${version}`);
                 }}
                 style={{ padding: "3px 7px", border: "1px solid var(--accent-strong)", borderRadius: "var(--radius-control)", background: "var(--accent-strong)", color: "var(--on-accent)", cursor: "pointer", fontSize: 11, fontWeight: 600 }}
               >
@@ -417,7 +419,7 @@ export function AppShell({ appName }: { appName: string }) {
               </button>
             </div>
           </div>,
-          { id: "app-update-available", timeout: 0, onClose: () => rememberDismissedVersion(DISMISSED_APP_UPDATE_KEY, version) }
+          { id: `app-update-available:${version}`, timeout: 0, onClose: () => rememberDismissedVersion(DISMISSED_APP_UPDATE_KEY, version) }
         );
       }
     }
