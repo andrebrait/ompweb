@@ -564,8 +564,8 @@ test("passive tool context from a session file renders on the batch's last tool 
   const html = (message) => renderToStaticMarkup(React.createElement(MessageView, { message, toolResults, toolCallsDefaultCollapsed: false }));
   // Expanded tool group, collapsed cards: one truncating row on the last card, the full text on hover.
   const shown = html(messages[1]);
-  assert.equal(shown.match(/Context:/g)?.length, 1);
-  assert.match(shown, /class="activity-row-secondary" title="Treat\tthis result\nas authoritative\."><span aria-hidden="true">↳ <\/span>Context: Treat\tthis result\nas authoritative\./);
+  assert.equal(shown.match(/>Context:/g)?.length, 1);
+  assert.match(shown, /class="activity-row-secondary" title="Context: Treat\tthis result\nas authoritative\."><span aria-hidden="true">↳ <\/span>Context: Treat\tthis result\nas authoritative\./);
   assert.ok(shown.indexOf(">read<") < shown.indexOf(">bash<"));
   assert.ok(shown.indexOf("Context:") > shown.indexOf(">bash<"), "the line sits on the last card (call-2)");
   assert.doesNotMatch(shown, /tool-call-context/);
@@ -576,6 +576,12 @@ test("passive tool context from a session file renders on the batch's last tool 
   const segment = view.container.querySelector(".tool-call-details .tool-call-context");
   assert.equal(segment?.textContent, "↳ Context: Treat\tthis result\nas authoritative.");
   assert.equal(view.container.querySelector(".activity-row-secondary[title]"), null, "no truncated row while expanded");
+  // A harness wrapper (omp's rule reminders) becomes a label instead of raw tag text.
+  const wrapped = new Map(toolResults);
+  wrapped.set("call-2", { ...toolResults.get("call-2"), passiveContext: '<system-reminder reason="rule_violation" rule="ts-set-map">\nUse a Record.\n</system-reminder>' });
+  const labeled = renderToStaticMarkup(React.createElement(MessageView, { message: single, toolResults: wrapped }));
+  assert.match(labeled, /↳ <\/span>Context \(rule_violation · ts-set-map\): Use a Record\.<\/div>/);
+  assert.doesNotMatch(labeled, /system-reminder/);
   // The marked message is no row of its own; the unmarked one still is.
   assert.equal(messages[4].customType, "passive-tool-context");
   assert.equal(html(messages[4]), "");

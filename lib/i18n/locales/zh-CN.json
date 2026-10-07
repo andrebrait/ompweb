@@ -796,6 +796,7 @@
   "messageView.extensionType": "扩展",
   "messageView.fileContext": "文件上下文：{parts}",
   "messageView.passiveContext": "上下文：{text}",
+  "messageView.passiveContextLabeled": "上下文（{label}）：{text}",
   "messageView.filesModifiedCount": "{count} 个已修改",
   "messageView.filesReadCount": "{count} 个已读取",
   "messageView.hiddenExtensionMessage": "隐藏的扩展消息",

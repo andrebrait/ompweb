@@ -1004,6 +1004,7 @@ const ToolCallBlock = memo(function ToolCallBlock({
             .map((b) => b.text)
             .join("\n"))
     : null;
+  const passiveContextText = result?.passiveContext ? contextLine(result.passiveContext, t) : null;
   const resultImages = result && Array.isArray(result.content)
     ? result.content.filter((b): b is ImageContent => b.type === "image")
     : [];
@@ -1143,9 +1144,9 @@ const ToolCallBlock = memo(function ToolCallBlock({
           />
         </CollapsibleTrigger>
         {resultMeta && <div className="activity-row-secondary">{resultMeta}</div>}
-        {result?.passiveContext && !expanded && (
-          <div className="activity-row-secondary" title={result.passiveContext}>
-            <span aria-hidden>↳ </span>{t("messageView.passiveContext", { text: result.passiveContext })}
+        {passiveContextText && !expanded && (
+          <div className="activity-row-secondary" title={passiveContextText}>
+            <span aria-hidden>↳ </span>{passiveContextText}
           </div>
         )}
         {expanded && (
@@ -1216,9 +1217,9 @@ const ToolCallBlock = memo(function ToolCallBlock({
                 </>
               )
             ) : null}
-            {result?.passiveContext && (
+            {passiveContextText && (
               <div className="tool-call-context">
-                <span aria-hidden>↳ </span>{t("messageView.passiveContext", { text: result.passiveContext })}
+                <span aria-hidden>↳ </span>{passiveContextText}
               </div>
             )}
           </div>
@@ -1433,6 +1434,21 @@ function stripHiddenWrappers(text: string): string {
   const outer = t.match(/^<([a-zA-Z0-9_-]+)(?:\s(?:[^>"]|"[^"]*")*)?>\s*([\s\S]*?)\s*<\/\1>\s*$/);
   if (outer) return outer[2].trim();
   return t;
+}
+
+/** `<system-reminder reason="…" rule="…">` → tag + attributes of a leading wrapper. */
+function parseLeadingWrapper(text: string): { tag: string; attrs: [string, string][] } | null {
+  const match = text.trim().match(/^<([\w-]+)((?:\s+[\w-]+="[^"]*")*)\s*>/);
+  return match ? { tag: match[1], attrs: [...match[2].matchAll(/([\w-]+)="([^"]*)"/g)].map((attr) => [attr[1], attr[2]]) } : null;
+}
+
+/** "Context (rule_violation · ts-set-map · …): body" for a wrapped passive context, plain otherwise. */
+function contextLine(text: string, t: (key: string, params?: Record<string, string>) => string): string {
+  const label = parseLeadingWrapper(text)?.attrs.map(([, value]) => value).join(" · ");
+  const body = stripHiddenWrappers(text);
+  return label
+    ? t("messageView.passiveContextLabeled", { label, text: body })
+    : t("messageView.passiveContext", { text: body });
 }
 
 function friendlyHiddenLabel(customType: string, t: (key: string) => string): string {
@@ -1668,11 +1684,11 @@ function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessag
   const isPlainText = message.customType === "async-result" || message.customType === "lsp-late-diagnostic";
   const displayText = ircEnvelope ? ircEnvelope.body : isPlainText || isDeveloper ? stripHiddenWrappers(text) : text;
   // `<system-reminder reason="…" rule="…">` → "system-reminder · reason=… · rule=…".
-  const wrapper = isDeveloper ? text.trim().match(/^<([\w-]+)((?:\s+[\w-]+="[^"]*")*)\s*>/) : null;
+  const wrapper = isDeveloper ? parseLeadingWrapper(text) : null;
   const firstLine = displayText.split("\n").find((line) => line.trim())?.trim() ?? "";
   const collapsedPreview = firstLine && firstLine !== displayText.trim() ? `${firstLine} …` : firstLine;
   const title = wrapper
-    ? [wrapper[1], ...[...wrapper[2].matchAll(/([\w-]+)="([^"]*)"/g)].map((attr) => `${attr[1]}=${attr[2]}`)].join(" · ")
+    ? [wrapper.tag, ...wrapper.attrs.map(([key, value]) => `${key}=${value}`)].join(" · ")
     : isIrc
     ? (ircEnvelope?.sender ?? formatCustomType(message.customType))
     : message.customType === "advisor"
