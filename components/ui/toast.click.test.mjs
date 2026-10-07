@@ -70,16 +70,19 @@ test("a session notification toast opens its session from a card click; one with
   const sessions = [];
   render(React.createElement(ToastProvider, null));
   renderHook(() => useNotifications({ sessionId: null, locale: "en", onOpenSession: (id) => sessions.push(id) }));
-  const deliver = (sessionId) => act(() => {
-    window.dispatchEvent(new window.CustomEvent(NOTIFICATION_MESSAGE_EVENT, { detail: { kind: "toast", event: { type: "completed", sessionId, sessionName: "Fix bug" } } }));
-  });
-  deliver("s1");
-  act(() => document.querySelector(".toast-card .display-serif").click());
+  // Toasts closed by earlier tests can still be leaving the shared manager, so
+  // each card is found by its own title (the session name).
+  const deliver = (sessionId, sessionName) => {
+    act(() => {
+      window.dispatchEvent(new window.CustomEvent(NOTIFICATION_MESSAGE_EVENT, { detail: { kind: "toast", event: { type: "completed", sessionId, sessionName } } }));
+    });
+    return Array.from(document.querySelectorAll(".toast-card")).find((card) => card.querySelector(".display-serif")?.textContent === sessionName);
+  };
+  const withSession = deliver("s1", "Fix bug");
+  act(() => withSession.querySelector(".display-serif").click());
   assert.deepEqual(sessions, ["s1"]);
-  act(() => toast.close());
-  deliver("");
-  const card = document.querySelector(".toast-card:not([data-ending-style])");
-  assert.equal(card.querySelector(".notification-toast-open"), null);
-  act(() => card.querySelector(".display-serif").click());
+  const withoutSession = deliver("", "No session");
+  assert.equal(withoutSession.querySelector(".notification-toast-open"), null);
+  act(() => withoutSession.querySelector(".display-serif").click());
   assert.deepEqual(sessions, ["s1"]);
 });
