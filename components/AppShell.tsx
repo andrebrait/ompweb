@@ -1331,7 +1331,7 @@ export function AppShell({ appName }: { appName: string }) {
   const handleAgentEnd = useCallback(() => {
     setRefreshKey((k) => k + 1);
     setExplorerRefreshKey((k) => k + 1);
-    if (document.visibilityState !== "hidden" || !("Notification" in window)) return;
+    if (document.visibilityState !== "hidden") return;
 
     const targetSession = selectedSession;
     const title = targetSession?.name ?? translate("appShell.sessionComplete");
@@ -1343,9 +1343,10 @@ export function AppShell({ appName }: { appName: string }) {
         if (targetSession) handleSelectSession(targetSession);
       });
     };
-    // Without OS permission, surface the completion as an in-app toast (which
-    // also lands in the notification center) instead of leaving it silent.
-    if (Notification.permission === "granted") notify();
+    // Without OS notification support or permission, surface the completion as
+    // an in-app toast (which also lands in the notification center).
+    if (!("Notification" in window)) toast.info(title, body);
+    else if (Notification.permission === "granted") notify();
     else if (Notification.permission === "default") {
       void Notification.requestPermission().then((permission) => {
         if (permission === "granted") notify();
