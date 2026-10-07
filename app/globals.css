@@ -1287,9 +1287,11 @@ pre, code {
 }
 
 .image-lightbox-dialog {
-  width: 100vw;
+  /* Viewport units ignore the root zoom (Interface Scale): divide so the
+     viewer covers exactly the window and "fit" fits the visible area. */
+  width: calc(100vw / var(--ui-scale));
   max-width: none;
-  height: 100dvh;
+  height: calc(100dvh / var(--ui-scale));
   max-height: none;
   margin: 0;
   padding: 0;
