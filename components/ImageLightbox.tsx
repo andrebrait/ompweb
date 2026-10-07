@@ -99,14 +99,19 @@ function ImageLightbox({ src, alt, onClose }: { src: ClickableImageProps["src"];
   const [box, setBox] = useState<Size | null>(null);
   // Centre of the view as a fraction of the content, kept across a zoom change.
   const anchorRef = useRef<{ x: number; y: number } | null>(null);
+  const [uiScale, setUiScale] = useState(1);
   const { t } = useI18n();
 
   useEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
+    // Interface Scale zooms the root, so layout pixels are uiScale screen
+    // pixels. Measure in screen pixels so 100% is one image pixel per pixel.
+    const uiScale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--ui-scale")) || 1;
+    setUiScale(uiScale);
     // contentRect excludes the viewport padding, so "fit" leaves the margin visible.
     const observer = new ResizeObserver(([entry]) => {
-      setBox({ width: entry.contentRect.width, height: entry.contentRect.height });
+      setBox({ width: entry.contentRect.width * uiScale, height: entry.contentRect.height * uiScale });
     });
     observer.observe(viewport);
     return () => observer.disconnect();
@@ -260,7 +265,7 @@ function ImageLightbox({ src, alt, onClose }: { src: ClickableImageProps["src"];
             // Real layout size, not transform: scale, so a zoomed-in image
             // scrolls to every edge. Hidden until it can be sized to fit.
             style={ready
-              ? { width: natural.width * scale, height: natural.height * scale }
+              ? { width: natural.width * scale / uiScale, height: natural.height * scale / uiScale }
               : settled ? undefined : { visibility: "hidden" }}
           />
         </div>

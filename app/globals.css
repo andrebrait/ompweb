@@ -1309,8 +1309,9 @@ pre, code {
 }
 .image-lightbox-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 6px 10px;
   min-height: 40px;
   padding: 7px 10px;
   background: var(--bg-panel);
@@ -1328,12 +1329,15 @@ pre, code {
 }
 .image-lightbox-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
   gap: 6px;
   margin-left: auto;
 }
 .image-lightbox-stepper {
   display: flex;
+  flex: none;
   align-items: center;
   height: 24px;
   overflow: hidden;
