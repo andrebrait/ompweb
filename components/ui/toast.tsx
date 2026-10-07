@@ -123,7 +123,7 @@ export function ClampedDescription({ children }: { children: React.ReactNode }) 
 function Toaster() {
   const { toasts } = Toast.useToastManager<ToastData>();
   const isMobile = useIsMobile();
-  const press = useRef<{ x: number; y: number; target: EventTarget | null } | null>(null);
+  const press = useRef<{ x: number; y: number; target: EventTarget | null; travel: number } | null>(null);
   // Clear the app chrome (topbar 36/44px + tab bar 36px) with a safe gap so
   // toasts never cover the header, tabs, or chat content.
   const topOffset = isMobile ? 88 : 80;
@@ -148,7 +148,11 @@ function Toaster() {
             toast={t}
             className="toast-card"
             onPointerDown={(event) => {
-              press.current = { x: event.clientX, y: event.clientY, target: event.target };
+              press.current = { x: event.clientX, y: event.clientY, target: event.target, travel: 0 };
+            }}
+            onPointerMove={(event) => {
+              const from = press.current;
+              if (from) from.travel = Math.max(from.travel, Math.hypot(event.clientX - from.x, event.clientY - from.y));
             }}
             onClick={t.data?.onClick ? (event) => {
               const onClick = t.data?.onClick;
@@ -159,8 +163,9 @@ function Toaster() {
               const pointerClick = from && event.detail !== 0;
               const target = pointerClick ? from.target : event.target;
               if (!onClick || (target instanceof Element && target.closest("button, a, input, textarea, select, [aria-expanded]"))) return;
-              // A drag that fell short of a swipe is not a click (detail 0: keyboard).
-              if (pointerClick && Math.hypot(event.clientX - from.x, event.clientY - from.y) > 10) return;
+              // A drag that fell short of a swipe, even one brought back to where
+              // it started, is not a click (detail 0: keyboard).
+              if (pointerClick && Math.max(from.travel, Math.hypot(event.clientX - from.x, event.clientY - from.y)) > 10) return;
               // Releasing a text selection is not a request to open anything.
               if (window.getSelection()?.isCollapsed === false) return;
               manager.close(t.id);

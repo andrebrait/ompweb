@@ -57,6 +57,10 @@ test("buttons, links, expandable text, drags and text selection do not trigger t
   const title = card().querySelector(".display-serif");
   pointer(title, "pointerdown", 100, 50);
   pointer(title, "click", 130, 50);
+  // A drag pulled back to where it started.
+  pointer(title, "pointerdown", 100, 50);
+  pointer(title, "pointermove", 160, 50);
+  pointer(title, "click", 101, 50);
   window.getSelection().selectAllChildren(title);
   act(() => title.click());
   assert.equal(opened.length, 0);
