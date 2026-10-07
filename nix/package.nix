@@ -73,10 +73,10 @@ let
        variable: "--font-noto-mono",
        display: "swap",
      });
-    @@ -32,8 +34,9 @@
-     // globals.css). Noto Serif SC is not bundled: Google Fonts sometimes serves it
-     // through extensionless `/l/font?kit=` URLs that next/font cannot parse, which
-     // failed builds at random.
+    @@ -31,8 +33,9 @@
+     // latin; CJK uses a bundled Noto Serif SC subset declared in globals.css, not
+     // next/font/google: Google Fonts sometimes serves it through extensionless
+     // `/l/font?kit=` URLs that next/font cannot parse, which failed builds at random.
     -const sourceSerif = Source_Serif_4({
     -  subsets: ["latin"],
     +const sourceSerif = localFont({

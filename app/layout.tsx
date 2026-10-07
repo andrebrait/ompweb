@@ -28,10 +28,9 @@ const notoSansMono = Noto_Sans_Mono({
 });
 
 // Display serif for the warm-humanistic heading voice. Source Serif 4 covers
-// latin; CJK headings use the system's CJK serif (see --font-serif in
-// globals.css). Noto Serif SC is not bundled: Google Fonts sometimes serves it
-// through extensionless `/l/font?kit=` URLs that next/font cannot parse, which
-// failed builds at random.
+// latin; CJK uses a bundled Noto Serif SC subset declared in globals.css, not
+// next/font/google: Google Fonts sometimes serves it through extensionless
+// `/l/font?kit=` URLs that next/font cannot parse, which failed builds at random.
 const sourceSerif = Source_Serif_4({
   subsets: ["latin"],
   variable: "--font-source-serif",
