@@ -12,7 +12,7 @@
  */
 import { Toast } from "@base-ui/react/toast";
 import { AlertCircle, Check, Info, X } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type React from "react";
 
@@ -123,6 +123,7 @@ export function ClampedDescription({ children }: { children: React.ReactNode }) 
 function Toaster() {
   const { toasts } = Toast.useToastManager<ToastData>();
   const isMobile = useIsMobile();
+  const press = useRef<{ x: number; y: number; target: EventTarget | null } | null>(null);
   // Clear the app chrome (topbar 36/44px + tab bar 36px) with a safe gap so
   // toasts never cover the header, tabs, or chat content.
   const topOffset = isMobile ? 88 : 80;
@@ -146,9 +147,20 @@ function Toaster() {
             key={t.id}
             toast={t}
             className="toast-card"
+            onPointerDown={(event) => {
+              press.current = { x: event.clientX, y: event.clientY, target: event.target };
+            }}
             onClick={t.data?.onClick ? (event) => {
               const onClick = t.data?.onClick;
-              if (!onClick || (event.target instanceof Element && event.target.closest("button, a, input, textarea, select, [aria-expanded]"))) return;
+              const from = press.current;
+              press.current = null;
+              // base-ui captures the pointer for its swipe, which retargets the
+              // click to the card; judge the element that was pressed instead.
+              const pointerClick = from && event.detail !== 0;
+              const target = pointerClick ? from.target : event.target;
+              if (!onClick || (target instanceof Element && target.closest("button, a, input, textarea, select, [aria-expanded]"))) return;
+              // A drag that fell short of a swipe is not a click (detail 0: keyboard).
+              if (pointerClick && Math.hypot(event.clientX - from.x, event.clientY - from.y) > 10) return;
               // Releasing a text selection is not a request to open anything.
               if (window.getSelection()?.isCollapsed === false) return;
               manager.close(t.id);

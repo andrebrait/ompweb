@@ -102,13 +102,13 @@ export function useNotifications({ sessionId, locale, onOpenSession }: { session
   // Delivery to this tab and notification clicks.
   useEffect(() => {
     const showToast = (rendered: RenderedNotification, type: NotificationEvent["type"]) => {
-      const { sessionId } = rendered;
-      const open = sessionId ? () => openRef.current(sessionId) : undefined;
+      const target = rendered.sessionId;
+      const open = target ? () => openRef.current(target) : undefined;
       const description = createElement(
         "span",
         null,
         rendered.body,
-        rendered.sessionId
+        open
           ? createElement(
               "button",
               {
@@ -117,7 +117,7 @@ export function useNotifications({ sessionId, locale, onOpenSession }: { session
                 // The Open button stays as the keyboard and screen-reader path; a click anywhere on the card does the same.
                 onClick: () => {
                   toast.close(rendered.tag);
-                  open?.();
+                  open();
                 },
               },
               translate("notifications.open"),

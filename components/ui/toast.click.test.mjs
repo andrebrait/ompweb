@@ -1,37 +1,85 @@
 import "../../tests/setup-dom.mjs";
 import assert from "node:assert/strict";
-import test, { afterEach } from "node:test";
+import test, { afterEach, before } from "node:test";
 import React from "react";
-import { act, cleanup, render } from "@testing-library/react/pure.js";
+import { act, cleanup, render, renderHook } from "@testing-library/react/pure.js";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tryNative: false, tsconfigPaths: true });
-const { ToastProvider, toast } = await jiti.import("./toast.tsx");
+const { ClampedDescription, ToastProvider, toast } = await jiti.import("./toast.tsx");
+const { useNotifications } = await jiti.import("../../hooks/useNotifications.ts");
+const { NOTIFICATION_MESSAGE_EVENT } = await jiti.import("../../lib/notification-client.ts");
+
+before(() => {
+  globalThis.AbortController = window.AbortController;
+  window.Element.prototype.setPointerCapture = () => {};
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
+});
 afterEach(() => { act(() => toast.close()); cleanup(); window.getSelection()?.removeAllRanges(); });
 
-function show(onButton) {
+function pointer(target, type, x, y, { detail = 1 } = {}) {
+  const event = new window.MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, detail });
+  Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: "mouse" } });
+  act(() => { target.dispatchEvent(event); });
+}
+function show(description, options = {}) {
   const opened = [];
   render(React.createElement(ToastProvider, null));
-  act(() => {
-    toast.info("Agent finished", React.createElement("button", { type: "button", onClick: onButton }, "Open"), { onClick: () => opened.push(1) });
-  });
+  act(() => { toast.info("Agent finished", description, { onClick: () => opened.push(1), ...options }); });
   return { opened, card: () => document.querySelector(".toast-card") };
 }
 
 test("clicking anywhere on a toast card runs its action and closes it", () => {
-  const { opened, card } = show();
-  act(() => card().querySelector(".display-serif").click());
+  const { opened, card } = show("Body");
+  assert.equal(card().style.cursor, "pointer");
+  const title = card().querySelector(".display-serif");
+  pointer(title, "pointerdown", 100, 50);
+  pointer(title, "click", 102, 51);
   assert.equal(opened.length, 1);
   assert.equal(card()?.hasAttribute("data-ending-style") ?? true, true);
 });
 
-test("the card's own buttons and a text selection do not trigger the card action", () => {
+test("buttons, links, expandable text, drags and text selection do not trigger the card action", () => {
   let pressed = 0;
-  const { opened, card } = show(() => { pressed += 1; });
+  const { opened, card } = show(React.createElement("span", null,
+    React.createElement("button", { type: "button", onClick: () => { pressed += 1; } }, "Open"),
+    React.createElement("a", { href: "#x" }, "link"),
+    React.createElement(ClampedDescription, null, "long text")));
   act(() => card().querySelector("button:not(.toast-close-button)").click());
   assert.equal(pressed, 1);
+  act(() => card().querySelector("a").click());
+  // A press on the clamped text whose click is retargeted to the card, as pointer capture does.
+  pointer(card().querySelector("[aria-expanded]"), "pointerdown", 100, 50);
+  pointer(card(), "click", 100, 50);
+  // A drag that fell short of a swipe.
   const title = card().querySelector(".display-serif");
+  pointer(title, "pointerdown", 100, 50);
+  pointer(title, "click", 130, 50);
   window.getSelection().selectAllChildren(title);
   act(() => title.click());
   assert.equal(opened.length, 0);
+});
+
+test("a toast without an action keeps the default cursor", () => {
+  render(React.createElement(ToastProvider, null));
+  act(() => { toast.info("Saved"); });
+  assert.equal(document.querySelector(".toast-card").style.cursor, "");
+});
+
+test("a session notification toast opens its session from a card click; one without a session does not", () => {
+  const sessions = [];
+  render(React.createElement(ToastProvider, null));
+  renderHook(() => useNotifications({ sessionId: null, locale: "en", onOpenSession: (id) => sessions.push(id) }));
+  const deliver = (sessionId) => act(() => {
+    window.dispatchEvent(new window.CustomEvent(NOTIFICATION_MESSAGE_EVENT, { detail: { kind: "toast", event: { type: "completed", sessionId, sessionName: "Fix bug" } } }));
+  });
+  deliver("s1");
+  act(() => document.querySelector(".toast-card .display-serif").click());
+  assert.deepEqual(sessions, ["s1"]);
+  act(() => toast.close());
+  deliver("");
+  const card = document.querySelector(".toast-card:not([data-ending-style])");
+  assert.equal(card.querySelector(".notification-toast-open"), null);
+  act(() => card.querySelector(".display-serif").click());
+  assert.deepEqual(sessions, ["s1"]);
 });
