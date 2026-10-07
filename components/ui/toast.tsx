@@ -197,20 +197,27 @@ export const DRAG_SLOP_PX = 10;
 
 /**
  * Swallows the click that ends a drag. A swipe, or a mouse drag that selects
- * text, must not also expand a clamped description or activate the card.
+ * text, must not also expand a clamped description or activate the card. It
+ * judges the whole travel, so a swipe pulled back to where it started still
+ * counts as a drag.
  */
 export function useDragClickGuard() {
-  const start = useRef<{ x: number; y: number } | null>(null);
+  const press = useRef<{ x: number; y: number; travel: number } | null>(null);
+  const travelTo = (x: number, y: number) => {
+    const from = press.current;
+    if (from) from.travel = Math.max(from.travel, Math.hypot(x - from.x, y - from.y));
+  };
   return {
     onPointerDown: (event: React.PointerEvent) => {
-      start.current = { x: event.clientX, y: event.clientY };
+      press.current = { x: event.clientX, y: event.clientY, travel: 0 };
     },
+    onPointerMove: (event: React.PointerEvent) => travelTo(event.clientX, event.clientY),
     onClickCapture: (event: React.MouseEvent) => {
-      const from = start.current;
-      start.current = null;
+      const from = press.current;
+      press.current = null;
       // detail 0: a keyboard-activated click, which has no pointer travel.
       if (!from || event.detail === 0) return;
-      if (Math.hypot(event.clientX - from.x, event.clientY - from.y) > DRAG_SLOP_PX) {
+      if (Math.max(from.travel, Math.hypot(event.clientX - from.x, event.clientY - from.y)) > DRAG_SLOP_PX) {
         event.stopPropagation();
         event.preventDefault();
       }
@@ -218,10 +225,32 @@ export function useDragClickGuard() {
   };
 }
 
+/** Heading back toward the start by this much cancels a swipe, as on Android. */
+const SWIPE_RETURN_PX = 16;
+
+export interface SwipeTracker {
+  /** Records a move; returns the sideways travel from the start. */
+  track: (x: number) => number;
+  /** True when the release at `x` comes after the finger turned back toward the start. */
+  pulledBack: (x: number) => boolean;
+}
+
+/** Follows one swipe's sideways travel. */
+export function createSwipeTracker(startX: number): SwipeTracker {
+  let peak = 0;
+  const track = (x: number) => {
+    const dx = x - startX;
+    if (Math.sign(dx) !== Math.sign(peak) || Math.abs(dx) > Math.abs(peak)) peak = dx;
+    return dx;
+  };
+  return { track, pulledBack: (x: number) => Math.abs(peak) - Math.abs(track(x)) >= SWIPE_RETURN_PX };
+}
+
 function Toaster() {
   const { toasts } = Toast.useToastManager<ToastData>();
   const isMobile = useIsMobile();
   const clickGuard = useDragClickGuard();
+  const swipe = useRef<{ id: number; tracker: SwipeTracker } | null>(null);
   // Clear the app chrome (topbar 36/44px + tab bar 36px) with a safe gap so
   // toasts never cover the header, tabs, or chat content.
   const topOffset = isMobile ? 88 : 80;
@@ -252,6 +281,22 @@ function Toaster() {
               clickGuard.onPointerDown(event);
               // A mouse drag selects text (e.g. to copy an error), as on any page.
               if (event.pointerType === "mouse") event.preventBaseUIHandler();
+              else swipe.current = { id: event.pointerId, tracker: createSwipeTracker(event.clientX) };
+            }}
+            onPointerMove={(event) => {
+              clickGuard.onPointerMove(event);
+              if (swipe.current?.id === event.pointerId) swipe.current.tracker.track(event.clientX);
+            }}
+            onPointerUp={(event) => {
+              const current = swipe.current;
+              swipe.current = null;
+              if (current?.id !== event.pointerId || !current.tracker.pulledBack(event.clientX)) return;
+              // base-ui dismisses on distance alone. Turn this release into the
+              // pointercancel it treats as "put the toast back", and keep the
+              // original from reaching its document-level listener.
+              event.preventBaseUIHandler();
+              event.stopPropagation();
+              event.currentTarget.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, pointerId: event.pointerId, pointerType: event.pointerType }));
             }}
             onClickCapture={clickGuard.onClickCapture}
             style={{

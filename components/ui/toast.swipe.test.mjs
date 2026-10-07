@@ -10,6 +10,7 @@ const { ToastProvider, toast } = await jiti.import("./toast.tsx");
 
 before(() => {
   globalThis.AbortController = window.AbortController;
+  globalThis.PointerEvent = window.PointerEvent;
   window.Element.prototype.setPointerCapture = () => {};
 });
 afterEach(() => { act(() => toast.close()); cleanup(); });
@@ -19,14 +20,14 @@ function pointer(target, type, x, y, pointerType) {
   Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: pointerType } });
   act(() => { target.dispatchEvent(event); });
 }
-function swipeToast(pointerType, dx) {
+function swipeToast(pointerType, ...path) {
   render(React.createElement(ToastProvider, null));
   act(() => { toast.info("Agent finished", "Body"); });
   const card = document.querySelector(".toast-card");
   pointer(card, "pointerdown", 200, 50, pointerType);
-  pointer(card, "pointermove", 200 + dx / 4, 50, pointerType);
-  pointer(card, "pointermove", 200 + dx, 52, pointerType);
-  pointer(card, "pointerup", 200 + dx, 52, pointerType);
+  pointer(card, "pointermove", 200 + path[0] / 4, 50, pointerType);
+  for (const dx of path) pointer(card, "pointermove", 200 + dx, 52, pointerType);
+  pointer(card, "pointerup", 200 + path.at(-1), 52, pointerType);
   return card;
 }
 
@@ -44,4 +45,14 @@ test("a touch swipe either way dismisses a toast, which the sidebar gesture then
 test("a mouse drag over a toast selects text instead of dismissing it", () => {
   const card = swipeToast("mouse", 120);
   assert.equal(card.hasAttribute("data-ending-style"), false);
+});
+
+test("a swipe pulled back toward the centre puts the toast back; turning out again still dismisses", () => {
+  for (const [path, dismissed] of [[[140, 70], false], [[-140, -90], false], [[140, 70, 150], true]]) {
+    const card = swipeToast("touch", ...path);
+    assert.equal(card.hasAttribute("data-ending-style"), dismissed, JSON.stringify(path));
+    assert.equal(card.hasAttribute("data-swiping"), false, "the drag ended either way");
+    act(() => toast.close());
+    cleanup();
+  }
 });

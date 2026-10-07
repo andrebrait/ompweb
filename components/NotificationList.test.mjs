@@ -47,11 +47,21 @@ test("short, mostly vertical, curved-into-vertical, mouse, and button-started dr
   drag(description(), [[100, 50], [120, 85], [150, 120]]);
   // Claimed sideways, then the thumb carries on mostly downward.
   drag(description(), [[100, 50], [125, 52], [150, 120]]);
+  // Swiped out, then pulled back toward the start before letting go.
+  drag(description(), [[100, 50], [180, 52], [140, 52]]);
+  drag(description(), [[200, 50], [80, 52], [140, 52]]);
   drag(description(), [[100, 50], [150, 51], [200, 52]], { pointerType: "mouse" });
   drag(row().querySelector("button"), [[100, 50], [150, 51], [200, 52]]);
   await settle();
   assert.equal(toastHistory.get().length, 1);
   assert.equal(row().style.transform, "");
+});
+
+test("a swipe that turns back and then out again still dismisses", async () => {
+  const { description } = mount();
+  drag(description(), [[100, 50], [180, 52], [140, 52], [190, 54]]);
+  await settle();
+  assert.equal(toastHistory.get().length, 0);
 });
 
 test("the click ending a drag is swallowed; taps and keyboard clicks still reach the row", () => {
@@ -65,5 +75,10 @@ test("the click ending a drag is swallowed; taps and keyboard clicks still reach
   // A keyboard click reports no position; an earlier press must not make it look like a drag.
   pointer(description(), "pointerdown", 100, 50);
   pointer(description(), "click", 0, 0, { detail: 0 });
+  assert.equal(description().getAttribute("aria-expanded"), "false");
+  // A drag out and back to where it started is still a drag, not a tap.
+  pointer(description(), "pointerdown", 100, 50);
+  pointer(description(), "pointermove", 160, 50);
+  pointer(description(), "click", 101, 50);
   assert.equal(description().getAttribute("aria-expanded"), "false");
 });

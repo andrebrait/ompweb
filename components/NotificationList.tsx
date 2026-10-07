@@ -3,7 +3,7 @@
 import { BellOff, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { ClampedDescription, descriptionBaseStyle, dismissButtonStyle, DRAG_SLOP_PX, KindIcon, toastHistory, useDragClickGuard, useToastHistory, type ToastHistoryEntry } from "./ui/toast";
+import { ClampedDescription, createSwipeTracker, descriptionBaseStyle, dismissButtonStyle, DRAG_SLOP_PX, KindIcon, toastHistory, useDragClickGuard, useToastHistory, type SwipeTracker, type ToastHistoryEntry } from "./ui/toast";
 
 /** Sideways travel that dismisses on release, the same distance as base-ui's toast swipe. */
 const SWIPE_DISMISS_PX = 40;
@@ -40,7 +40,7 @@ export function NotificationList() {
 function NotificationRow({ entry }: { entry: ToastHistoryEntry }) {
   const { t, locale } = useI18n();
   const clickGuard = useDragClickGuard();
-  const drag = useRef<{ id: number; x: number; y: number; claimed: boolean } | null>(null);
+  const drag = useRef<{ id: number; x: number; y: number; claimed: boolean; tracker: SwipeTracker } | null>(null);
   const [offset, setOffset] = useState(0);
   const [leaving, setLeaving] = useState<-1 | 1 | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -59,12 +59,13 @@ function NotificationRow({ entry }: { entry: ToastHistoryEntry }) {
         if (drag.current?.claimed || leaving || event.pointerType === "mouse" || event.button !== 0) return;
         drag.current = null;
         if (event.target instanceof Element && event.target.closest("button, a, input, textarea, select")) return;
-        drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, claimed: false };
+        drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, claimed: false, tracker: createSwipeTracker(event.clientX) };
       }}
       onPointerMove={(event) => {
+        clickGuard.onPointerMove(event);
         const current = drag.current;
         if (!current || event.pointerId !== current.id) return;
-        const dx = event.clientX - current.x;
+        const dx = current.tracker.track(event.clientX);
         if (!current.claimed) {
           // Claim only a clearly sideways drag. A vertical one is the list
           // scrolling: touch-action pan-y hands it to the browser, which
@@ -82,8 +83,9 @@ function NotificationRow({ entry }: { entry: ToastHistoryEntry }) {
         drag.current = null;
         setDragging(false);
         const dx = event.clientX - current.x;
-        // Judge the whole movement, not its path: a curved thumb stroke still counts.
-        if (current.claimed && Math.abs(dx) >= SWIPE_DISMISS_PX && Math.abs(dx) > Math.abs(event.clientY - current.y)) {
+        // Judge the whole movement, not its path: a curved thumb stroke still
+        // counts, but turning back toward the start puts the row back.
+        if (current.claimed && Math.abs(dx) >= SWIPE_DISMISS_PX && Math.abs(dx) > Math.abs(event.clientY - current.y) && !current.tracker.pulledBack(event.clientX)) {
           setLeaving(dx > 0 ? 1 : -1);
         } else {
           setOffset(0);
