@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo, useDeferredValue } from "react";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import type { ExitedRpcSession, ManagedProject, ProjectLaunchConfig, SessionInfo } from "@/lib/types";
 import { useI18n } from "@/lib/i18n";
 import { formatApiError } from "@/lib/i18n/api-error";
@@ -492,45 +493,44 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
   //  • a late response for the previously-selected repo writes only that
   //    repo's entry (never the active repo's, so it can't overwrite the UI).
   const [wtRefreshKey, setWtRefreshKey] = useState(0);
+  const storeWorktreeState = useCallback((requestedCwd: string, d: { projectRoot?: string; isGit?: boolean; isTopLevel?: boolean; worktrees?: WorktreeEntry[]; error?: string }) => {
+    if (d.error || !d.projectRoot) {
+      // This cwd is not a Git repo (or the lookup failed) — the workspace
+      // should show no branch/worktrees. Other repos' cached state is left
+      // intact: a non-Git workspace never inherits another repo's branch, and
+      // we never discard previously-visited repos' Git state.
+      return;
+    }
+    const projectRoot = d.projectRoot;
+    const entry: WorktreeState = {
+      forCwd: requestedCwd,
+      projectRoot,
+      isGit: d.isGit ?? false,
+      isTopLevel: d.isTopLevel ?? false,
+      worktrees: d.worktrees ?? [],
+    };
+    setWorktreeStateByProject((prev) => {
+      const key = normalizeProjectKey(projectRoot);
+      const existing = prev[key];
+      if (existing && normalizeProjectKey(existing.projectRoot) !== key) {
+        const next = { ...prev };
+        delete next[normalizeProjectKey(existing.projectRoot)];
+        next[key] = entry;
+        return next;
+      }
+      return { ...prev, [key]: entry };
+    });
+  }, []);
   useLayoutEffect(() => {
     if (!selectedCwd) return;
     let cancelled = false;
     const requestedCwd = selectedCwd;
     fetch(`/api/worktrees?cwd=${encodeURIComponent(requestedCwd)}`)
       .then((r) => r.json())
-      .then((d: { projectRoot?: string; isGit?: boolean; isTopLevel?: boolean; worktrees?: WorktreeEntry[]; error?: string }) => {
-        if (cancelled) return;
-        if (d.error || !d.projectRoot) {
-          // This cwd is not a Git repo (or the lookup failed) — the selected
-          // workspace should show no branch/worktrees. Other repos' cached
-          // state is left intact: a non-Git workspace never inherits another
-          // repo's branch, and we never discard previously-visited repos' Git
-          // state.
-          return;
-        }
-        const projectRoot = d.projectRoot;
-        const entry: WorktreeState = {
-          forCwd: requestedCwd,
-          projectRoot,
-          isGit: d.isGit ?? false,
-          isTopLevel: d.isTopLevel ?? false,
-          worktrees: d.worktrees ?? [],
-        };
-        setWorktreeStateByProject((prev) => {
-          const key = normalizeProjectKey(projectRoot);
-          const existing = prev[key];
-          if (existing && normalizeProjectKey(existing.projectRoot) !== key) {
-            const next = { ...prev };
-            delete next[normalizeProjectKey(existing.projectRoot)];
-            next[key] = entry;
-            return next;
-          }
-          return { ...prev, [key]: entry };
-        });
-      })
+      .then((d) => { if (!cancelled) storeWorktreeState(requestedCwd, d); })
       .catch(() => { /* leave any cached state; refetch on demand */ });
     return () => { cancelled = true; };
-  }, [selectedCwd, wtRefreshKey, refreshKey]);
+  }, [selectedCwd, wtRefreshKey, refreshKey, storeWorktreeState]);
 
   // Keep a just-created session and its project visible while omp is still
   // flushing the JSONL file. The server list remains authoritative once it
@@ -671,6 +671,26 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     sortedProjectsRef.current = sortedProjectsBase;
     return sortedProjectsBase;
   }, [sortedProjectsBase, hasPendingNewSession]);
+  // The full-screen mobile sidebar has room to show every workspace's worktree
+  // selector, not only the active one's, so load each workspace's Git state
+  // once (again after a refresh). Desktop keeps loading the active repo only.
+  const isMobile = useIsMobile();
+  const prefetchedWorktreesRef = useRef(new Set<string>());
+  useEffect(() => {
+    prefetchedWorktreesRef.current.clear();
+  }, [refreshKey]);
+  useEffect(() => {
+    if (!isMobile) return;
+    for (const project of sortedProjects) {
+      const key = normalizeProjectKey(project.path);
+      if (prefetchedWorktreesRef.current.has(key)) continue;
+      prefetchedWorktreesRef.current.add(key);
+      fetch(`/api/worktrees?cwd=${encodeURIComponent(project.path)}`)
+        .then((r) => r.json())
+        .then((d) => storeWorktreeState(project.path, d))
+        .catch(() => prefetchedWorktreesRef.current.delete(key));
+    }
+  }, [isMobile, sortedProjects, refreshKey, storeWorktreeState]);
   useEffect(() => {
     onWorkspaceOptionsChange?.(sortedProjects, selectedProject, selectedCwd);
   }, [onWorkspaceOptionsChange, sortedProjects, selectedProject, selectedCwd]);
@@ -1455,8 +1475,9 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
             // Each project's own branch comes from its own cached Git state —
             // a project never inherits another repo's branch. Only the active
             // repo's row owns the single switcher anchor so the dropdown opens
-            // against the correct row.
-            const projectBranch = worktreeBranchForProject(project.path);
+            // against the correct row; on mobile, another row's selector
+            // activates its workspace and opens the switcher there.
+            const projectBranch = isActive || isMobile ? worktreeBranchForProject(project.path) : null;
             return (
               <ProjectRow
                 key={project.path}
@@ -1488,7 +1509,11 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
                 worktreeBranch={projectBranch}
                 worktreeToggleRef={isActive && projectBranch ? wtToggleRef : undefined}
                 worktreeOpen={isActive ? wtDropdownOpen : false}
-                onToggleWorktrees={isActive ? toggleWorktrees : undefined}
+                onToggleWorktrees={isActive ? toggleWorktrees : () => {
+                  closeWorktreeDropdown();
+                  activateProject(project.path);
+                  setWtDropdownOpen(true);
+                }}
                 homeDir={homeDir}
               />
             );

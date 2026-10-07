@@ -1,7 +1,6 @@
 "use client";
 
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type ReactNode, type RefObject, type SetStateAction } from "react";
-import { useIsMobile } from "@/hooks/useIsMobile";
 import type { AgentMessage, ExitedRpcSession, ManagedProject, ProjectLaunchConfig, SessionInfo } from "@/lib/types";
 import { formatExitedSessionNotice, useI18n } from "@/lib/i18n";
 import { comparableProjectPath } from "@/lib/comparable-path";
@@ -64,7 +63,7 @@ interface ProjectRowProps {
   onRenamed?: () => void;
   onSessionDeleted?: (id: string) => void;
   activeWorktreeSwitcher?: ReactNode;
-  /** Active worktree/branch label shown below the workspace name. */
+  /** Worktree/branch label shown beside (or below) the workspace name. */
   worktreeBranch?: string | null;
   worktreeToggleRef?: RefObject<HTMLButtonElement | null>;
   worktreeOpen?: boolean;
@@ -140,18 +139,17 @@ function ProjectRow({
   const visibleRoots = hiddenCount > 0 && !showAllSessions
     ? tree.slice(0, MAX_PROJECT_SESSIONS)
     : tree;
-  const showWorktree = Boolean(worktreeBranch && worktreeToggleRef);
-  const isMobile = useIsMobile();
+  const showWorktree = Boolean(worktreeBranch && onToggleWorktrees);
   const identityRowRef = useRef<HTMLDivElement>(null);
   const labelTextRef = useRef<HTMLSpanElement>(null);
   const worktreeTextRef = useRef<HTMLSpanElement>(null);
   // Bumped when the row's width or the loaded fonts change: either can change the fit.
   const [layoutEpoch, setLayoutEpoch] = useState(0);
-  // Desktop keeps the worktree selector beside the name, truncating the branch
-  // before the name. main/master never truncate inline: when either label
-  // would be cut off, the selector moves to its own line (always on mobile).
+  // The worktree selector sits beside the name, truncating the branch before
+  // the name. main/master never truncate inline: when either label would be
+  // cut off, the selector moves to its own line.
   const [worktreeOverflows, setWorktreeOverflows] = useState(false);
-  const worktreeStacked = showWorktree && (isMobile || worktreeOverflows);
+  const worktreeStacked = showWorktree && worktreeOverflows;
   useEffect(() => {
     const row = identityRowRef.current;
     if (!row || !showWorktree) return;
@@ -178,13 +176,13 @@ function ProjectRow({
   // open and is re-measured once editing ends.
   useLayoutEffect(() => {
     if (!aliasEditing) setWorktreeOverflows(false);
-  }, [label, worktreeBranch, layoutEpoch, aliasEditing, hasActivity, isMobile, showWorktree]);
+  }, [label, worktreeBranch, layoutEpoch, aliasEditing, hasActivity, showWorktree]);
   useLayoutEffect(() => {
     const text = worktreeTextRef.current;
     const labelText = labelTextRef.current;
     if (aliasEditing || worktreeOverflows || !text || !/^(main|master)$/.test(worktreeBranch ?? "")) return;
     if (text.scrollWidth > text.clientWidth || (labelText && labelText.scrollWidth > labelText.clientWidth)) setWorktreeOverflows(true);
-  }, [label, worktreeBranch, layoutEpoch, aliasEditing, hasActivity, isMobile, showWorktree, worktreeOverflows]);
+  }, [label, worktreeBranch, layoutEpoch, aliasEditing, hasActivity, showWorktree, worktreeOverflows]);
 
   return (
     <section className="sidebar-project" data-active={isActive ? "true" : "false"} style={{ marginBottom: 12 }}>
