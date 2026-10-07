@@ -1,6 +1,7 @@
 "use client";
 
-import { memo, useCallback, useRef, useState, type Dispatch, type ReactNode, type RefObject, type SetStateAction } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type ReactNode, type RefObject, type SetStateAction } from "react";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import type { AgentMessage, ExitedRpcSession, ManagedProject, ProjectLaunchConfig, SessionInfo } from "@/lib/types";
 import { formatExitedSessionNotice, useI18n } from "@/lib/i18n";
 import { comparableProjectPath } from "@/lib/comparable-path";
@@ -139,6 +140,35 @@ function ProjectRow({
   const visibleRoots = hiddenCount > 0 && !showAllSessions
     ? tree.slice(0, MAX_PROJECT_SESSIONS)
     : tree;
+  const showWorktree = Boolean(worktreeBranch && worktreeToggleRef);
+  const isMobile = useIsMobile();
+  const headerRef = useRef<HTMLDivElement>(null);
+  const labelTextRef = useRef<HTMLSpanElement>(null);
+  const worktreeTextRef = useRef<HTMLSpanElement>(null);
+  const [headerWidth, setHeaderWidth] = useState(0);
+  // Desktop keeps the worktree selector beside the name, truncating the branch
+  // before the name. main/master never truncate inline: when either label
+  // would be cut off, the selector moves to its own line (always on mobile).
+  const [worktreeOverflows, setWorktreeOverflows] = useState(false);
+  const worktreeStacked = showWorktree && (isMobile || worktreeOverflows);
+  useEffect(() => {
+    const header = headerRef.current;
+    if (!header || !showWorktree) return;
+    const observer = new ResizeObserver(([entry]) => setHeaderWidth(Math.round(entry.contentRect.width)));
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, [showWorktree]);
+  // Return to the inline layout whenever the fit may have changed, then
+  // re-measure it below; both run before paint, so the swap never flickers.
+  useLayoutEffect(() => {
+    setWorktreeOverflows(false);
+  }, [label, worktreeBranch, headerWidth, aliasEditing, hasActivity, isMobile]);
+  useLayoutEffect(() => {
+    const text = worktreeTextRef.current;
+    const labelText = labelTextRef.current;
+    if (worktreeOverflows || !text || !/^(main|master)$/.test(worktreeBranch ?? "")) return;
+    if (text.scrollWidth > text.clientWidth || (labelText && labelText.scrollWidth > labelText.clientWidth)) setWorktreeOverflows(true);
+  }, [label, worktreeBranch, headerWidth, aliasEditing, hasActivity, isMobile, worktreeOverflows]);
 
   return (
     <section className="sidebar-project" data-active={isActive ? "true" : "false"} style={{ marginBottom: 12 }}>
@@ -158,6 +188,7 @@ function ProjectRow({
         }}
       />
       <div
+        ref={headerRef}
         className="sidebar-project-header"
         draggable={!aliasEditing}
         onDragStart={(event) => { event.dataTransfer.setData("text/plain", project.path); event.dataTransfer.effectAllowed = "move"; onDragPathChange(project.path); }}
@@ -176,7 +207,7 @@ function ProjectRow({
           display: "flex",
           alignItems: "center",
           gap: 2,
-          height: worktreeBranch && worktreeToggleRef ? 48 : 30,
+          minHeight: 30,
           margin: 0,
           padding: "0 6px 0 0",
           borderRadius: "var(--radius-control)",
@@ -187,8 +218,11 @@ function ProjectRow({
           ...(isDragTarget ? { outline: "1px solid var(--accent)", outlineOffset: -1 } : {}),
         }}
       >
-        <div style={{ flex: 1, minWidth: 0, alignSelf: "stretch", display: "flex", flexDirection: "column", justifyContent: "center" }}>
-          <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: SIDEBAR_STATUS_GAP }}>
+        <div
+          className="sidebar-project-identity-row"
+          data-worktree-layout={worktreeStacked ? "stacked" : "inline"}
+          style={{ flex: 1, minWidth: 0, alignSelf: "stretch", display: "flex", flexWrap: worktreeStacked ? "wrap" : "nowrap", alignItems: "center", alignContent: "center", columnGap: SIDEBAR_STATUS_GAP, padding: worktreeStacked ? "4px 0" : 0 }}
+        >
           {aliasEditing ? (
             <div
               className="sidebar-project-identity"
@@ -251,6 +285,7 @@ function ProjectRow({
               style={{
                 flex: "0 1 auto",
                 minWidth: 0,
+                minHeight: 26,
                 alignSelf: "stretch",
                 display: "flex",
                 alignItems: "center",
@@ -268,25 +303,21 @@ function ProjectRow({
                 style={{ flexShrink: 0, color: isActive ? "var(--accent)" : hovered ? "var(--text-muted)" : "var(--text-dim)", transition: "color var(--dur-fast) var(--ease-out-warm)" }}
                 aria-hidden="true"
               />
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 2, minWidth: 0 }}>
-                <span
-                  style={{
-                    minWidth: 0,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 12,
-                    fontWeight: 600,
-                    letterSpacing: "-0.01em",
-                    lineHeight: 1.25,
-                  }}
-                >
-                  {label}
-                </span>
-                {worktreeBranch && worktreeToggleRef && (
-                  <span aria-hidden="true" style={{ flexShrink: 0, opacity: 0.7 }}>·</span>
-                )}
+              <span
+                ref={labelTextRef}
+                style={{
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  letterSpacing: "-0.01em",
+                  lineHeight: 1.25,
+                }}
+              >
+                {label}
               </span>
             </button>
             </Tooltip>
@@ -299,7 +330,7 @@ function ProjectRow({
                 data-running={(activity?.running ?? 0) > 0 ? "true" : "false"}
                 role="status"
                 aria-live="polite"
-                style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: SIDEBAR_STATUS_SLOT, height: SIDEBAR_STATUS_SLOT, flexShrink: 0, lineHeight: 0 }}
+                style={{ order: worktreeStacked ? 0 : 2, display: "inline-flex", alignItems: "center", justifyContent: "center", width: SIDEBAR_STATUS_SLOT, height: SIDEBAR_STATUS_SLOT, flexShrink: 0, lineHeight: 0 }}
               >
                 {(activity?.exited ?? 0) > 0 ? (
                   <ExitedSessionIndicator title={t("projects.exited", { count: activity?.exited ?? 0 })} size={11} />
@@ -312,28 +343,33 @@ function ProjectRow({
                 )}
               </span>
             )}
-          </div>
-          {worktreeBranch && worktreeToggleRef && (
+          {showWorktree && (
             <button
               type="button"
               ref={worktreeToggleRef}
+              className="sidebar-project-worktree-toggle"
               onClick={onToggleWorktrees}
               aria-expanded={worktreeOpen}
               aria-haspopup="menu"
-              title={t("sessionSidebar.switchWorktreeTo", { path: worktreeBranch })}
+              title={t("sessionSidebar.switchWorktreeTo", { path: worktreeBranch ?? "" })}
               style={{
+                order: worktreeStacked ? 2 : 1,
                 display: "inline-flex",
                 alignItems: "center",
-                gap: 5,
-                flexShrink: 0,
-                minWidth: 0,
-                maxWidth: "100%",
-                height: 24,
-                padding: "0 4px 0 32px",
-                border: "none",
+                gap: worktreeStacked ? 4 : 3,
+                // Inline: shrink before the workspace name does, down to the
+                // icon, padding and border (24px) plus three characters and
+                // the ellipsis. Nowrap text would otherwise keep min-content wide.
+                flex: worktreeStacked ? "0 1 auto" : "0 1000 auto",
+                minWidth: worktreeStacked ? 0 : "calc(4ch + 24px)",
+                maxWidth: worktreeStacked ? "calc(100% - 28px)" : "100%",
+                height: worktreeStacked ? 26 : 22,
+                margin: worktreeStacked ? "2px 0 0 28px" : 0,
+                padding: worktreeStacked ? "0 6px" : "0 4px",
+                border: `1px solid ${worktreeStacked ? "var(--border)" : "transparent"}`,
                 borderRadius: "var(--radius-control)",
                 background: worktreeOpen ? "var(--bg-selected)" : "none",
-                color: worktreeOpen ? "var(--accent)" : hovered ? "var(--text-muted)" : "var(--text-dim)",
+                color: worktreeOpen ? "var(--accent)" : worktreeStacked || hovered ? "var(--text-muted)" : "var(--text-dim)",
                 cursor: "pointer",
                 fontFamily: "var(--font-mono)",
                 fontSize: 10.5,
@@ -341,10 +377,13 @@ function ProjectRow({
                 transition: "color var(--dur-fast) var(--ease-out-warm), background var(--dur-fast) var(--ease-out-warm)",
               }}
             >
-              <GitBranch size={10} style={{ flexShrink: 0 }} aria-hidden="true" />
-              <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{worktreeBranch}</span>
+              <GitBranch size={11} style={{ flexShrink: 0 }} aria-hidden="true" />
+              <span ref={worktreeTextRef} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{worktreeBranch}</span>
+              {worktreeStacked && <ChevronDown size={11} style={{ flexShrink: 0, opacity: 0.75 }} aria-hidden="true" />}
             </button>
           )}
+          {/* Zero-height flex line break: pushes the stacked selector below the name. */}
+          {worktreeStacked && <span aria-hidden="true" style={{ order: 1, flexBasis: "100%", height: 0 }} />}
         </div>
         <div
           className="sidebar-project-actions"
