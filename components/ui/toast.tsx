@@ -22,6 +22,7 @@ interface ToastData {
   kind?: ToastKind;
   /** Clamp the description to 2 lines; click the description to expand it. */
   clamp?: boolean;
+  onClick?: () => void;
 }
 
 interface ToastOptions {
@@ -35,6 +36,11 @@ interface ToastOptions {
   id?: string;
   /** Fired when the toast closes (dismissed by the user, `toast.close`, or timeout). */
   onClose?: () => void;
+  /**
+   * Runs when the card itself is clicked (anywhere but its buttons, links and
+   * expandable text), then closes the toast.
+   */
+  onClick?: () => void;
 }
 
 const manager = Toast.createToastManager<ToastData>();
@@ -48,7 +54,7 @@ function add(kind: ToastKind, title: React.ReactNode, description?: React.ReactN
     title,
     description,
     type: kind,
-    data: { kind, clamp: options?.clamp },
+    data: { kind, clamp: options?.clamp, onClick: options?.onClick },
     ...(timeout !== undefined ? { timeout } : {}),
     ...(options?.onClose ? { onClose: options.onClose } : {}),
   });
@@ -140,8 +146,17 @@ function Toaster() {
             key={t.id}
             toast={t}
             className="toast-card"
+            onClick={t.data?.onClick ? (event) => {
+              const onClick = t.data?.onClick;
+              if (!onClick || (event.target instanceof Element && event.target.closest("button, a, input, textarea, select, [aria-expanded]"))) return;
+              // Releasing a text selection is not a request to open anything.
+              if (window.getSelection()?.isCollapsed === false) return;
+              manager.close(t.id);
+              onClick();
+            } : undefined}
             style={{
               pointerEvents: "auto",
+              cursor: t.data?.onClick ? "pointer" : undefined,
               display: "flex",
               alignItems: "flex-start",
               gap: 8,
