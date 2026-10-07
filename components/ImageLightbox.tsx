@@ -2,11 +2,27 @@
 
 import { useEffect, useRef, useState, type ImgHTMLAttributes } from "react";
 import { createPortal } from "react-dom";
+import { Maximize } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 
-const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 8;
-const ZOOM_STEP = 0.25;
+/** Lowest zoom when the fitted size is larger; big images can go below it down to their fit. */
+const ZOOM_FLOOR = 0.1;
+const ZOOM_FACTOR = 1.25;
+
+interface Size { width: number; height: number }
+
+/** Scale that fits `image` inside `box`; never above 1, so small images keep their real size. */
+export function fitZoom(image: Size, box: Size): number {
+  if (image.width <= 0 || image.height <= 0 || box.width <= 0 || box.height <= 0) return 1;
+  return Math.min(1, box.width / image.width, box.height / image.height);
+}
+
+/** One zoom step in or out, clamped to [min(fit, 10%), 800%]. */
+export function stepZoom(zoom: number, direction: 1 | -1, fit: number): number {
+  const next = direction > 0 ? zoom * ZOOM_FACTOR : zoom / ZOOM_FACTOR;
+  return Math.min(ZOOM_MAX, Math.max(Math.min(fit, ZOOM_FLOOR), next));
+}
 
 interface ClickableImageProps extends Omit<ImgHTMLAttributes<HTMLImageElement>, "src"> {
   /** Image source: string URL (data:, http(s):, blob:, /api/files/...) or Blob. */
@@ -74,8 +90,27 @@ export function ClickableImage({ src, alt, ...imgProps }: ClickableImageProps) {
 
 function ImageLightbox({ src, alt, onClose }: { src: ClickableImageProps["src"]; alt: string; onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const [zoom, setZoom] = useState(1);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  // "fit" follows the window as it resizes; a number is a zoom the user chose.
+  const [zoom, setZoom] = useState<number | "fit">("fit");
+  const [natural, setNatural] = useState<Size | null>(null);
+  const [box, setBox] = useState<Size | null>(null);
   const { t } = useI18n();
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    // contentRect excludes the viewport padding, so "fit" leaves the margin visible.
+    const observer = new ResizeObserver(([entry]) => {
+      setBox({ width: entry.contentRect.width, height: entry.contentRect.height });
+    });
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, []);
+
+  const fit = natural && box ? fitZoom(natural, box) : 1;
+  const scale = zoom === "fit" ? fit : zoom;
+  const minZoom = Math.min(fit, ZOOM_FLOOR);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -123,8 +158,8 @@ function ImageLightbox({ src, alt, onClose }: { src: ClickableImageProps["src"];
             <div className="image-lightbox-stepper">
               <button
                 type="button"
-                onClick={() => setZoom((value) => Math.max(ZOOM_MIN, value - ZOOM_STEP))}
-                disabled={zoom <= ZOOM_MIN}
+                onClick={() => setZoom(stepZoom(scale, -1, fit))}
+                disabled={!natural || scale <= minZoom}
                 title={t("imagePreview.zoomOut")}
                 aria-label={t("imagePreview.zoomOut")}
               >
@@ -132,11 +167,11 @@ function ImageLightbox({ src, alt, onClose }: { src: ClickableImageProps["src"];
                   <path d="M5 12h14" />
                 </svg>
               </button>
-              <span className="image-lightbox-zoom-value">{Math.round(zoom * 100)}%</span>
+              <span className="image-lightbox-zoom-value">{natural ? `${Math.round(scale * 100)}%` : "…"}</span>
               <button
                 type="button"
-                onClick={() => setZoom((value) => Math.min(ZOOM_MAX, value + ZOOM_STEP))}
-                disabled={zoom >= ZOOM_MAX}
+                onClick={() => setZoom(stepZoom(scale, 1, fit))}
+                disabled={!natural || scale >= ZOOM_MAX}
                 title={t("imagePreview.zoomIn")}
                 aria-label={t("imagePreview.zoomIn")}
               >
@@ -148,13 +183,22 @@ function ImageLightbox({ src, alt, onClose }: { src: ClickableImageProps["src"];
             <button
               type="button"
               className="image-lightbox-icon-button"
-              onClick={() => setZoom(1)}
-              title={t("imagePreview.resetZoom")}
-              aria-label={t("imagePreview.resetZoom")}
+              onClick={() => setZoom("fit")}
+              aria-pressed={zoom === "fit"}
+              title={t("imagePreview.fitToScreen")}
+              aria-label={t("imagePreview.fitToScreen")}
             >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" />
-              </svg>
+              <Maximize size={13} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="image-lightbox-icon-button image-lightbox-actual-size"
+              onClick={() => setZoom(1)}
+              aria-pressed={zoom === 1}
+              title={t("imagePreview.actualSize")}
+              aria-label={t("imagePreview.actualSize")}
+            >
+              1:1
             </button>
             <button
               type="button"
@@ -170,6 +214,7 @@ function ImageLightbox({ src, alt, onClose }: { src: ClickableImageProps["src"];
           </div>
         </div>
         <div
+          ref={viewportRef}
           className="image-lightbox-viewport"
           onClick={(event) => {
             if (event.target === event.currentTarget) onClose();
@@ -180,9 +225,12 @@ function ImageLightbox({ src, alt, onClose }: { src: ClickableImageProps["src"];
             src={src}
             alt={alt}
             className="image-lightbox-img"
-            // `zoom` is non-standard (a no-op in Firefox < 126); transform
-            // scale is composited and supported everywhere.
-            style={{ transform: `scale(${zoom})` }}
+            onLoad={(event) => setNatural({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
+            // Real layout size, not transform: scale, so a zoomed-in image
+            // scrolls to every edge. Hidden until its size is known.
+            style={natural
+              ? { width: natural.width * scale, height: natural.height * scale }
+              : { visibility: "hidden" }}
           />
         </div>
       </div>

@@ -1365,6 +1365,18 @@ pre, code {
   border: 1px solid var(--border);
   border-radius: 5px;
 }
+.image-lightbox-actual-size {
+  flex-basis: auto;
+  width: auto;
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+.image-lightbox-icon-button[aria-pressed="true"] {
+  background: var(--bg-selected);
+  color: var(--text);
+}
 .image-lightbox-stepper button:hover:not(:disabled),
 .image-lightbox-icon-button:hover {
   background: var(--bg-hover);
@@ -1400,10 +1412,10 @@ pre, code {
 }
 .image-lightbox-dialog .image-lightbox-img {
   display: block;
+  flex: none;
   margin: auto;
   max-width: none;
-  height: auto;
-  transition: transform var(--dur-fast) var(--ease-out-warm);
+  max-height: none;
 }
 
 @media (max-width: 480px) {
