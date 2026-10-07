@@ -139,8 +139,9 @@ function SidebarPortalMenu({
       if (Number.isFinite(v) && v > 0) scale = v;
     }
     const ru = scale !== 1 ? { top: r.top / scale, right: r.right / scale, bottom: r.bottom / scale, left: r.left / scale } : r;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
+    // The viewport in the same unscaled CSS pixels as the menu's position.
+    const vw = window.innerWidth / scale;
+    const vh = window.innerHeight / scale;
     let top: number;
     if (placement === "above") {
       top = ru.top - height - MENU_MARGIN;
@@ -240,6 +241,9 @@ function SidebarPortalMenu({
         visibility: pos ? "visible" : "hidden",
         zIndex: 1000,
         minWidth,
+        // Long labels (worktree branches) ellipsize instead of pushing the menu
+        // off-screen. Viewport units are not zoomed, so divide by the interface scale.
+        maxWidth: `calc(100vw / var(--ui-scale, 1) - ${2 * MENU_VIEWPORT_PAD}px)`,
         padding: 4,
         border: "1px solid var(--border)",
         borderRadius: "var(--radius-control)",
