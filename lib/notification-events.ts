@@ -64,10 +64,12 @@ export interface RenderedNotification {
 type Translate = (key: string, vars?: Record<string, string | number>) => string;
 
 const MAX_DETAIL = 180;
+/** Session names can be pasted at any length; push payloads are capped near 4 KB. */
+const MAX_TITLE = 100;
 
-function clip(text: string): string {
+function clip(text: string, max = MAX_DETAIL): string {
   const flat = text.replace(/\s+/g, " ").trim();
-  return flat.length > MAX_DETAIL ? `${flat.slice(0, MAX_DETAIL - 1)}…` : flat;
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
 /** Title, body, click target, and replace-tag for one event in the caller's language. */
@@ -98,7 +100,7 @@ export function renderNotification(event: NotificationEvent, t: Translate): Rend
       break;
   }
   return {
-    title: event.sessionName || t("notifications.untitledSession"),
+    title: (event.sessionName && clip(event.sessionName, MAX_TITLE)) || t("notifications.untitledSession"),
     body,
     url: event.sessionId ? `/?session=${encodeURIComponent(event.sessionId)}` : "/",
     tag: `${event.sessionId}:${event.type}`,

@@ -575,6 +575,9 @@ function NotificationSettingsPanel() {
         });
         if (!res.ok) {
           const body: unknown = await res.json().catch(() => null);
+          // The server drops a subscription the push service reports gone;
+          // resubscribe so the next test (and real pushes) can reach this device.
+          setPushActive(await ensurePushSubscription().catch(() => false));
           throw new Error(isRecord(body) && typeof body.error === "string" ? body.error : `HTTP ${res.status}`);
         }
       } else if (!(await showSystemNotification(testNotification))) {
