@@ -863,7 +863,7 @@
   "messageView.fullOutputLoading": "Loading full output…",
   "modelsConfig.addFromCatalog": "from catalog",
   "modelsConfig.addModel": "+ model",
-  "modelsConfig.addProvider": "+ Add provider",
+  "modelsConfig.addProvider": "Add provider",
   "modelsConfig.alreadyConnected": "Already connected. You can re-login or disconnect.",
   "modelsConfig.api": "API",
   "modelsConfig.apiKey": "API Key",

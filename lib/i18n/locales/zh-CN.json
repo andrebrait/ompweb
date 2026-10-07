@@ -829,7 +829,7 @@
   "messageView.fullOutputLoading": "正在加载完整输出…",
   "modelsConfig.addFromCatalog": "从目录添加",
   "modelsConfig.addModel": "+ 模型",
-  "modelsConfig.addProvider": "+ 添加提供商",
+  "modelsConfig.addProvider": "添加提供商",
   "modelsConfig.alreadyConnected": "已连接。你可以重新登录或断开连接。",
   "modelsConfig.api": "API",
   "modelsConfig.apiKey": "API 密钥",
