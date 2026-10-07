@@ -2,7 +2,7 @@
 
 import { Popover } from "@base-ui/react/popover";
 import { Bell, X } from "lucide-react";
-import { useSyncExternalStore } from "react";
+import { useRef, useSyncExternalStore } from "react";
 import { useI18n } from "@/lib/i18n";
 import { ClampedDescription, descriptionBaseStyle, dismissButtonStyle, KindIcon, toastHistory } from "./ui/toast";
 
@@ -10,6 +10,12 @@ import { ClampedDescription, descriptionBaseStyle, dismissButtonStyle, KindIcon,
 export function NotificationCenter() {
   const { t, locale } = useI18n();
   const entries = useSyncExternalStore(toastHistory.subscribe, toastHistory.get, toastHistory.get);
+  // Removing an entry unmounts the focused button; keep keyboard focus inside the popup.
+  const popupRef = useRef<HTMLDivElement>(null);
+  const removeAndRefocus = (remove: () => void) => {
+    remove();
+    popupRef.current?.focus();
+  };
   const label = t("appShell.notifications");
   return (
     <Popover.Root>
@@ -19,6 +25,7 @@ export function NotificationCenter() {
       <Popover.Portal>
         <Popover.Positioner sideOffset={4} align="start" style={{ zIndex: 2000 }}>
           <Popover.Popup
+            ref={popupRef}
             className="dropdown-surface"
             style={{
               width: "min(92vw, 380px)",
@@ -37,9 +44,9 @@ export function NotificationCenter() {
               <Popover.Title className="display-serif" style={{ margin: 0, fontSize: 14 }}>{label}</Popover.Title>
               <button
                 type="button"
-                onClick={toastHistory.clear}
+                onClick={() => removeAndRefocus(toastHistory.clear)}
                 disabled={entries.length === 0}
-                className="ui-focus-ring"
+                className="toast-close-button ui-focus-ring"
                 style={{ border: 0, background: "transparent", color: entries.length ? "var(--accent)" : "var(--text-dim)", cursor: entries.length ? "pointer" : "default", fontSize: 12, padding: "2px 4px", borderRadius: "var(--radius-control)" }}
               >
                 {t("appShell.notificationsClear")}
@@ -69,10 +76,10 @@ export function NotificationCenter() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => toastHistory.remove(entry.id)}
+                      onClick={() => removeAndRefocus(() => toastHistory.remove(entry.id))}
                       aria-label={t("appShell.notificationDismiss")}
                       title={t("appShell.notificationDismiss")}
-                      className="ui-focus-ring"
+                      className="toast-close-button ui-focus-ring"
                       style={dismissButtonStyle}
                     >
                       <X size={12} strokeWidth={2} aria-hidden />

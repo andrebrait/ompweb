@@ -1,5 +1,6 @@
 // Streaming/SSE, message-transform, subagent, and session-protocol helpers
-// extracted from useAgentSession (pure logic only — no hook state).
+// extracted from useAgentSession (no hook state; host tools may touch browser
+// notifications and the notification-center history).
 
 import type {
   AgentMessage,

@@ -39,10 +39,13 @@ interface ToastOptions {
 
 const manager = Toast.createToastManager<ToastData>();
 
-// Android's Toast (2s/3.5s) and Snackbar (1.5s/2.75s) defaults are too short to
-// read and act on. Material recommends 4-10s, and Windows/macOS banners use about 5s.
 const DEFAULT_TIMEOUT_MS = 6000;
 const ERROR_TIMEOUT_MS = 10000;
+
+/** Auto-dismiss delay: an explicit `timeout`/`duration` (0 = sticky) wins over the per-kind default. */
+export function resolveToastTimeout(kind: ToastKind, options?: Pick<ToastOptions, "timeout" | "duration">): number {
+  return options?.timeout ?? options?.duration ?? (kind === "error" ? ERROR_TIMEOUT_MS : DEFAULT_TIMEOUT_MS);
+}
 
 export const TOAST_HISTORY_LIMIT = 100;
 
@@ -83,7 +86,7 @@ export const toastHistory = {
 };
 
 function add(kind: ToastKind, title: React.ReactNode, description?: React.ReactNode, options?: ToastOptions) {
-  const timeout = options?.timeout ?? options?.duration ?? (kind === "error" ? ERROR_TIMEOUT_MS : DEFAULT_TIMEOUT_MS);
+  const timeout = resolveToastTimeout(kind, options);
   const id = manager.add({
     id: options?.id,
     title,

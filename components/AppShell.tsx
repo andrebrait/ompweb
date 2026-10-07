@@ -1334,24 +1334,25 @@ export function AppShell({ appName }: { appName: string }) {
     if (document.visibilityState !== "hidden" || !("Notification" in window)) return;
 
     const targetSession = selectedSession;
+    const title = targetSession?.name ?? translate("appShell.sessionComplete");
+    const body = translate("appShell.taskFinished");
     const notify = () => {
-      toastHistory.record("info", targetSession?.name ?? translate("appShell.sessionComplete"), translate("appShell.taskFinished"));
-      showCompletionNotification(
-        targetSession?.name ?? translate("appShell.sessionComplete"),
-        translate("appShell.taskFinished"),
-        () => {
-          window.focus();
-          if (targetSession) handleSelectSession(targetSession);
-        },
-      );
+      toastHistory.record("info", title, body);
+      showCompletionNotification(title, body, () => {
+        window.focus();
+        if (targetSession) handleSelectSession(targetSession);
+      });
     };
+    // Without OS permission, surface the completion as an in-app toast (which
+    // also lands in the notification center) instead of leaving it silent.
     if (Notification.permission === "granted") notify();
     else if (Notification.permission === "default") {
-      void Notification.requestPermission().then((permission) => { if (permission === "granted") notify(); });
+      void Notification.requestPermission().then((permission) => {
+        if (permission === "granted") notify();
+        else toast.info(title, body);
+      });
     } else {
-      // "denied": the OS blocks notifications, so surface the completion as an
-      // in-app toast instead of leaving background completions silent.
-      toast.info(targetSession?.name ?? translate("appShell.sessionComplete"), translate("appShell.taskFinished"));
+      toast.info(title, body);
     }
   }, [handleSelectSession, selectedSession]);
 
@@ -1679,10 +1680,11 @@ export function AppShell({ appName }: { appName: string }) {
         return width + child.getBoundingClientRect().width
           + parseFloat(style.marginLeft) + parseFloat(style.marginRight);
       }, 0) + Math.max(0, children.length - 1) * parseFloat(contentStyle.columnGap);
+      const toolsGap = parseFloat(getComputedStyle(tools).columnGap);
       const leftNeed = controlsWidth
         // Buttons pinned outside the overflow menu (sidebar toggle, notification bell).
         + Array.from(tools.children).reduce((width, child) => child === details ? width
-          : width + child.getBoundingClientRect().width + parseFloat(getComputedStyle(tools).columnGap), 0)
+          : width + child.getBoundingClientRect().width + toolsGap, 0)
         + parseFloat(headerStyle.paddingLeft);
       const rightNeed = parseFloat(headerStyle.paddingRight) + right.offsetWidth;
       const required = leftNeed + parseFloat(headerStyle.columnGap) + rightNeed;
