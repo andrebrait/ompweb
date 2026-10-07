@@ -12,7 +12,7 @@
  */
 import { Toast } from "@base-ui/react/toast";
 import { AlertCircle, Check, Info, X } from "lucide-react";
-import { useState, useSyncExternalStore } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type React from "react";
 
@@ -192,9 +192,36 @@ export const dismissButtonStyle = {
   flexShrink: 0,
 } as const;
 
+/** Pointer travel beyond this is a drag, not a click (about the tap slop of mobile browsers). */
+const CLICK_SLOP_PX = 10;
+
+/**
+ * Swallows the click that ends a drag. A swipe, or a mouse drag that selects
+ * text, must not also expand a clamped description or activate the card.
+ */
+export function useDragClickGuard() {
+  const start = useRef<{ x: number; y: number } | null>(null);
+  return {
+    onPointerDown: (event: React.PointerEvent) => {
+      start.current = { x: event.clientX, y: event.clientY };
+    },
+    onClickCapture: (event: React.MouseEvent) => {
+      const from = start.current;
+      start.current = null;
+      // detail 0: a keyboard-activated click, which has no pointer travel.
+      if (!from || event.detail === 0) return;
+      if (Math.hypot(event.clientX - from.x, event.clientY - from.y) > CLICK_SLOP_PX) {
+        event.stopPropagation();
+        event.preventDefault();
+      }
+    },
+  };
+}
+
 function Toaster() {
   const { toasts } = Toast.useToastManager<ToastData>();
   const isMobile = useIsMobile();
+  const clickGuard = useDragClickGuard();
   // Clear the app chrome (topbar 36/44px + tab bar 36px) with a safe gap so
   // toasts never cover the header, tabs, or chat content.
   const topOffset = isMobile ? 88 : 80;
@@ -218,6 +245,15 @@ function Toaster() {
             key={t.id}
             toast={t}
             className="toast-card"
+            // Swipe sideways to dismiss, like Android notifications.
+            swipeDirection={["left", "right"]}
+            data-swipe-dismiss=""
+            onPointerDown={(event) => {
+              clickGuard.onPointerDown(event);
+              // A mouse drag selects text (e.g. to copy an error), as on any page.
+              if (event.pointerType === "mouse") event.preventBaseUIHandler();
+            }}
+            onClickCapture={clickGuard.onClickCapture}
             style={{
               pointerEvents: "auto",
               display: "flex",

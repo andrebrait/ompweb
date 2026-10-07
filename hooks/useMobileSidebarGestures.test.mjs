@@ -171,6 +171,15 @@ test("an edge pull inside the open header tools does not open a drawer over thos
   assert.equal(hook.result.current.leftOpen, false);
 });
 
+test("a swipe that dismisses a notification does not also open a drawer", () => {
+  const hook = mount();
+  const row = document.createElement("li");
+  row.dataset.swipeDismiss = "";
+  document.body.append(row);
+  assert.equal(swipe(140, 240, { target: row }).move.defaultPrevented, false);
+  assert.deepEqual(hook.result.current, { leftOpen: false, rightOpen: false });
+});
+
 test("composer menus and pickers block drawer gestures until dismissed", () => {
   const hook = mount();
   const popup = document.createElement("div");

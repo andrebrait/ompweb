@@ -1,12 +1,19 @@
 "use client";
 
 import { BellOff, X } from "lucide-react";
+import { useRef, useState } from "react";
+import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import { useI18n } from "@/lib/i18n";
-import { ClampedDescription, descriptionBaseStyle, dismissButtonStyle, KindIcon, toastHistory, useToastHistory } from "./ui/toast";
+import { ClampedDescription, descriptionBaseStyle, dismissButtonStyle, KindIcon, toastHistory, useDragClickGuard, useToastHistory, type ToastHistoryEntry } from "./ui/toast";
+
+/** Pointer travel that claims a sideways drag as a swipe. */
+const SWIPE_CLAIM_PX = 10;
+/** Sideways travel that dismisses on release; base-ui's toast swipe uses the same 40px. */
+const SWIPE_DISMISS_PX = 40;
 
 /** Notifications tab of the right panel: recent toasts and OS notifications, newest first. */
 export function NotificationList() {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const entries = useToastHistory();
   if (entries.length === 0) {
     return (
@@ -17,46 +24,122 @@ export function NotificationList() {
     );
   }
   return (
-    <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+    // overflowX hidden: a row swiped away must not flash a horizontal scrollbar.
+    <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
       <ul style={{ listStyle: "none", margin: 0, padding: 4 }}>
-        {entries.map((entry) => (
-          <li key={entry.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: 8, borderRadius: "var(--radius-control)", background: entry.read ? undefined : "var(--bg-subtle)" }}>
-            <KindIcon kind={entry.kind} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-                <span className="display-serif" style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.4, overflowWrap: "anywhere" }}>{entry.title}</span>
-                {!entry.read && (
-                  <span role="img" aria-label={t("appShell.notificationUnread")} style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", flexShrink: 0, alignSelf: "center" }} />
-                )}
-                <time dateTime={new Date(entry.at).toISOString()} style={{ fontSize: 11, color: "var(--text-dim)", flexShrink: 0 }}>
-                  {new Date(entry.at).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}
-                </time>
-              </div>
-              {entry.description != null && (
-                <div style={{ ...descriptionBaseStyle, overflowWrap: "anywhere" }}>
-                  {entry.clamp ? <ClampedDescription>{entry.description}</ClampedDescription> : entry.description}
-                </div>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={(event) => {
-                // Dismissing unmounts this button (and the list, if it was the
-                // last entry); keep keyboard focus in the always-mounted tab panel.
-                const panel = event.currentTarget.closest<HTMLElement>('[role="tabpanel"]');
-                toastHistory.remove(entry.id);
-                panel?.focus();
-              }}
-              aria-label={t("appShell.notificationDismiss")}
-              title={t("appShell.notificationDismiss")}
-              className="toast-close-button ui-focus-ring"
-              style={dismissButtonStyle}
-            >
-              <X size={12} strokeWidth={2} aria-hidden />
-            </button>
-          </li>
-        ))}
+        {entries.map((entry) => <NotificationRow key={entry.id} entry={entry} />)}
       </ul>
     </div>
+  );
+}
+
+/**
+ * One notification. A touch or pen swipe sideways dismisses it, like Android;
+ * a mouse drag keeps selecting text. The swipe can start anywhere on the row
+ * except its buttons and links.
+ */
+function NotificationRow({ entry }: { entry: ToastHistoryEntry }) {
+  const { t, locale } = useI18n();
+  const reducedMotion = usePrefersReducedMotion();
+  const clickGuard = useDragClickGuard();
+  const drag = useRef<{ id: number; x: number; y: number; claimed: boolean } | null>(null);
+  const [offset, setOffset] = useState(0);
+  const [leaving, setLeaving] = useState<-1 | 1 | null>(null);
+  const [dragging, setDragging] = useState(false);
+  return (
+    <li
+      data-swipe-dismiss
+      onPointerDown={(event) => {
+        clickGuard.onPointerDown(event);
+        if (drag.current || leaving || event.pointerType === "mouse" || event.button !== 0) return;
+        if (event.target instanceof Element && event.target.closest("button, a, input, textarea, select")) return;
+        drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, claimed: false };
+      }}
+      onPointerMove={(event) => {
+        const current = drag.current;
+        if (!current || event.pointerId !== current.id) return;
+        const dx = event.clientX - current.x;
+        if (!current.claimed) {
+          // Claim only a clearly sideways drag. A vertical one is the list
+          // scrolling: touch-action pan-y hands it to the browser, which
+          // then cancels this pointer.
+          if (Math.abs(dx) < SWIPE_CLAIM_PX || Math.abs(dx) <= Math.abs(event.clientY - current.y)) return;
+          current.claimed = true;
+          setDragging(true);
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }
+        setOffset(dx);
+      }}
+      onPointerUp={(event) => {
+        const current = drag.current;
+        if (!current || event.pointerId !== current.id) return;
+        drag.current = null;
+        setDragging(false);
+        const dx = event.clientX - current.x;
+        // Judge the whole movement, not its path: a curved thumb stroke still counts.
+        if (current.claimed && Math.abs(dx) >= SWIPE_DISMISS_PX && Math.abs(dx) > Math.abs(event.clientY - current.y)) {
+          if (reducedMotion) toastHistory.remove(entry.id);
+          else setLeaving(dx > 0 ? 1 : -1);
+        } else {
+          setOffset(0);
+        }
+      }}
+      onPointerCancel={(event) => {
+        if (event.pointerId !== drag.current?.id) return;
+        drag.current = null;
+        setDragging(false);
+        setOffset(0);
+      }}
+      onClickCapture={clickGuard.onClickCapture}
+      onTransitionEnd={(event) => {
+        if (leaving && event.target === event.currentTarget && event.propertyName === "transform") toastHistory.remove(entry.id);
+      }}
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 8,
+        padding: 8,
+        borderRadius: "var(--radius-control)",
+        background: entry.read ? undefined : "var(--bg-subtle)",
+        touchAction: "pan-y",
+        transform: leaving ? `translateX(${leaving * 110}%)` : offset ? `translateX(${offset}px)` : undefined,
+        opacity: leaving ? 0 : 1 - Math.min(Math.abs(offset) / 400, 0.5),
+        transition: dragging ? "none" : "transform var(--dur-fast) var(--ease-out-warm), opacity var(--dur-fast) var(--ease-out-warm)",
+      }}
+    >
+      <KindIcon kind={entry.kind} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+          <span className="display-serif" style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.4, overflowWrap: "anywhere" }}>{entry.title}</span>
+          {!entry.read && (
+            <span role="img" aria-label={t("appShell.notificationUnread")} style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", flexShrink: 0, alignSelf: "center" }} />
+          )}
+          <time dateTime={new Date(entry.at).toISOString()} style={{ fontSize: 11, color: "var(--text-dim)", flexShrink: 0 }}>
+            {new Date(entry.at).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}
+          </time>
+        </div>
+        {entry.description != null && (
+          <div style={{ ...descriptionBaseStyle, overflowWrap: "anywhere" }}>
+            {entry.clamp ? <ClampedDescription>{entry.description}</ClampedDescription> : entry.description}
+          </div>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={(event) => {
+          // Dismissing unmounts this button (and the list, if it was the
+          // last entry); keep keyboard focus in the always-mounted tab panel.
+          const panel = event.currentTarget.closest<HTMLElement>('[role="tabpanel"]');
+          toastHistory.remove(entry.id);
+          panel?.focus();
+        }}
+        aria-label={t("appShell.notificationDismiss")}
+        title={t("appShell.notificationDismiss")}
+        className="toast-close-button ui-focus-ring"
+        style={dismissButtonStyle}
+      >
+        <X size={12} strokeWidth={2} aria-hidden />
+      </button>
+    </li>
   );
 }
