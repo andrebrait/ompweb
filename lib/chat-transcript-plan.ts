@@ -177,12 +177,18 @@ export function sanitizePassiveToolContext(content: unknown): string {
     : Array.isArray(content)
       ? content.flatMap((block) => (block?.type === "text" && typeof block.text === "string" ? [block.text] : [])).join("\n")
       : "";
+  // split/trimEnd, not a `\s+$`-style regex: those backtrack quadratically on long
+  // whitespace runs, and session files are untrusted input.
   return stripAnsi(text)
     .replace(/[\x00-\x08\x0B-\x1F\x7F-\x9F\u200B-\u200F\u202A-\u202E\u2066-\u2069]/g, "")
-    .replace(/[^\S\n]+$/gm, "")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
     .replace(/\n{3,}/g, "\n\n")
-    .replace(/^\n+|\s+$/g, "")
-    .slice(0, PASSIVE_TOOL_CONTEXT_MAX);
+    .replace(/^\n+/, "")
+    .trimEnd()
+    .slice(0, PASSIVE_TOOL_CONTEXT_MAX)
+    .trimEnd();
 }
 
 // Keeps an attached result's identity stable across recomputes so memoized
