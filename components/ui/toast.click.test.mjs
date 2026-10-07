@@ -6,9 +6,11 @@ import { act, cleanup, render, renderHook } from "@testing-library/react/pure.js
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tryNative: false, tsconfigPaths: true });
-const { ClampedDescription, ToastProvider, toast } = await jiti.import("./toast.tsx");
-const { useNotifications } = await jiti.import("../../hooks/useNotifications.ts");
-const { NOTIFICATION_MESSAGE_EVENT } = await jiti.import("../../lib/notification-client.ts");
+// Same specifiers as useNotifications' own imports: on Windows a relative path
+// can load a second toast module, whose manager the rendered provider never sees.
+const { ClampedDescription, ToastProvider, toast } = await jiti.import("@/components/ui/toast");
+const { useNotifications } = await jiti.import("@/hooks/useNotifications");
+const { NOTIFICATION_MESSAGE_EVENT } = await jiti.import("@/lib/notification-client");
 
 before(() => {
   globalThis.AbortController = window.AbortController;
