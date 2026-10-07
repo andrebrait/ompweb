@@ -1337,6 +1337,8 @@ export function AppShell({ appName }: { appName: string }) {
   // sign-in expired), load the session URL: sign-in carries it through.
   const openSessionById = useCallback((sessionId: string) => {
     window.focus();
+    // On narrow screens the file panel covers the chat it is about to show.
+    if (isCompactOverlay) setRightPanelOpen(false);
     // A full load (not router navigation) so an expired sign-in reaches proxy.ts and the login page.
     const sessionUrl = new URL(`/?session=${encodeURIComponent(sessionId)}`, window.location.origin).href;
     void fetch("/api/sessions")
@@ -1352,7 +1354,7 @@ export function AppShell({ appName }: { appName: string }) {
         });
       })
       .catch(() => window.location.assign(sessionUrl));
-  }, [handleSelectSession]);
+  }, [handleSelectSession, isCompactOverlay]);
 
   // Full-page Settings hides the chat, so its session counts as not viewed.
   useNotifications({ sessionId: settingsTab ? null : selectedSession?.id ?? null, locale, onOpenSession: openSessionById });
