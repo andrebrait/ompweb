@@ -655,7 +655,7 @@
   "errors.login_no_pending": "No pending login for this token",
   "errors.login_token_code_required": "A login token and authorization code are required",
   "errors.login_token_mismatch": "The login token does not match the provider",
-  "errors.logout_unsupported": "omp-web cannot disconnect this provider: omp exposes no logout command outside its own UI. Run `omp` in a terminal and use /logout to remove the credential.",
+  "errors.logout_unsupported": "omp-web cannot disconnect accounts with this omp version. Update omp, or run `omp` in a terminal and use /logout.",
   "errors.model_id_required": "A model ID is required",
   "errors.model_required": "A model config is required",
   "errors.model_test_unresolved": "The model did not resolve — check the API key and provider config",
@@ -865,7 +865,7 @@
   "modelsConfig.addFromCatalog": "from catalog",
   "modelsConfig.addModel": "+ model",
   "modelsConfig.addProvider": "Add provider",
-  "modelsConfig.alreadyConnected": "Already connected. You can re-login or disconnect.",
+  "modelsConfig.alreadyConnected": "Connected. Signing in with another account adds it; signing in with a connected account refreshes it.",
   "modelsConfig.api": "API",
   "modelsConfig.apiKey": "API Key",
   "modelsConfig.apiKeyHint": "Prefix with `!` to run a shell command, or use an env var name",
@@ -941,7 +941,7 @@
   "modelsConfig.providerNotConfigured": "{name} is not configured.",
   "modelsConfig.reasoningThinking": "Reasoning / thinking",
   "modelsConfig.reload": "Reload",
-  "modelsConfig.relogin": "Re-login",
+  "modelsConfig.addAccount": "Add account",
   "modelsConfig.remove": "Remove",
   "modelsConfig.rename": "Rename",
   "modelsConfig.resetToAuto": "reset to auto",
@@ -1642,5 +1642,9 @@
   "modelsConfig.accountsCount": "{count} accounts",
   "modelsConfig.accountsLoading": "Loading accounts…",
   "modelsConfig.accountNumber": "Account {index}",
-  "modelsConfig.accountsRotationHint": "omp manages account selection and rotation."
+  "modelsConfig.accountsRotationHint": "omp manages account selection and rotation.",
+  "modelsConfig.accountApiKey": "API key",
+  "modelsConfig.disconnectAccount": "Disconnect {label}",
+  "modelsConfig.disconnectAccountTitle": "Disconnect account?",
+  "modelsConfig.disconnectAccountBody": "omp will delete the stored credential for {label}. Other accounts for this provider stay connected."
 }
