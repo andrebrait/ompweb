@@ -1,5 +1,5 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
-import { toast } from "@/components/ui/toast";
+import { toast, toastHistory } from "@/components/ui/toast";
 import { translate } from "@/lib/i18n";
 import { DEFAULT_NOTIFICATION_PREFS, renderNotification, type NotificationEvent, type RenderedNotification } from "@/lib/notification-events";
 import {
@@ -102,10 +102,13 @@ export function useNotifications({ sessionId, locale, onOpenSession }: { session
   // Delivery to this tab and notification clicks.
   useEffect(() => {
     // The whole card opens the session (click, tap, or Enter on the focused card); no separate Open link.
-    const showToast = (rendered: RenderedNotification, type: NotificationEvent["type"]) => {
+    const openFor = (rendered: RenderedNotification) => {
       const target = rendered.sessionId;
+      return target ? () => openRef.current(target) : undefined;
+    };
+    const showToast = (rendered: RenderedNotification, type: NotificationEvent["type"]) => {
       const show = type === "error" ? toast.error : toast.info;
-      show(rendered.title, rendered.body, { id: rendered.tag, onClick: target ? () => openRef.current(target) : undefined });
+      show(rendered.title, rendered.body, { id: rendered.tag, onClick: openFor(rendered) });
     };
     const onMessage = (raw: Event) => {
       if (!(raw instanceof CustomEvent)) return;
@@ -119,6 +122,8 @@ export function useNotifications({ sessionId, locale, onOpenSession }: { session
       // Permission withdrawn or never granted: the toast is the only way left to tell the user.
       void showSystemNotification(rendered).then((shown) => {
         if (!shown) showToast(rendered, event.type);
+        // Shown by the OS: log it so the Notifications tab still lists it.
+        else toastHistory.record(event.type === "error" ? "error" : "info", rendered.title, rendered.body, { id: rendered.tag, onClick: openFor(rendered) });
       });
     };
     const onOpen = (raw: Event) => {

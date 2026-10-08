@@ -82,3 +82,18 @@ test("the click ending a drag is swallowed; taps and keyboard clicks still reach
   pointer(description(), "click", 101, 50);
   assert.equal(description().getAttribute("aria-expanded"), "false");
 });
+
+test("an entry with an action runs it on click or Enter, but not from its controls", () => {
+  const opened = [];
+  act(() => { toastHistory.record("info", "Agent finished", "Body", { id: "n2", onClick: () => opened.push(1) }); });
+  const view = render(React.createElement(NotificationList));
+  const row = view.container.querySelector("li");
+  act(() => view.container.querySelector(".display-serif").click());
+  assert.equal(row.tabIndex, 0);
+  act(() => { row.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
+  assert.equal(opened.length, 2);
+  // The dismiss button removes the entry without running its action.
+  act(() => view.container.querySelector("button").click());
+  assert.equal(opened.length, 2);
+  assert.equal(toastHistory.get().length, 0);
+});

@@ -738,8 +738,10 @@ motion: --dur-fast (150ms) --dur-med (220ms) --dur-slow (320ms) --ease-out-warm
 `primitives.tsx` (Dialog/Tooltip/Collapsible), `field.tsx` (form fields +
 ConfirmDialog), `toast.tsx` (`toast.success/error/info`, mounted in AppShell;
 every toast also lands in `toastHistory`, the last 100 kept in memory for the
-right panel's Notifications tab; OS notifications call `toastHistory.record()`
-so they appear there too). Unread entries badge the right-panel toggle, which
+right panel's Notifications tab, with its `onClick`; OS-shown notifications are
+recorded with `toastHistory.record()` (also with the session `onClick`) so they
+appear there too). An entry with an `onClick` runs it on click or Enter, like
+the toast card. Unread entries badge the right-panel toggle, which
 then opens the Notifications tab; entries become read when the user leaves
 that tab or uses Mark all as read. Toasts and Notifications entries dismiss on
 a sideways touch/pen swipe (base-ui's toast swipe; `NotificationRow` for the

@@ -103,3 +103,27 @@ test("a session notification toast opens its session from a card click; one with
   act(() => withoutSession.querySelector(".display-serif").click());
   assert.deepEqual(sessions, ["s1"]);
 });
+
+test("a notification the OS showed is listed in history and opens its session from there", async () => {
+  const sessions = [];
+  const { toastHistory } = await jiti.import("@/components/ui/toast");
+  const created = [];
+  // Bare `Notification` in the code under test resolves to the global, not window.
+  globalThis.Notification = window.Notification = class { static permission = "granted"; constructor(title) { created.push(title); } };
+  try {
+    renderHook(() => useNotifications({ sessionId: null, locale: "en", onOpenSession: (id) => sessions.push(id) }));
+    await act(async () => {
+      window.dispatchEvent(new window.CustomEvent(NOTIFICATION_MESSAGE_EVENT, { detail: { kind: "os", event: { type: "completed", sessionId: "s9", sessionName: "Shown by OS" } } }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    assert.deepEqual(created, ["Shown by OS"]);
+    const entry = toastHistory.get().find((e) => e.title === "Shown by OS");
+    assert.ok(entry, "listed in the Notifications tab");
+    entry.onClick();
+    assert.deepEqual(sessions, ["s9"]);
+  } finally {
+    delete window.Notification;
+    delete globalThis.Notification;
+    toastHistory.clear();
+  }
+});
