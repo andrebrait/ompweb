@@ -113,12 +113,13 @@ test("a notification the OS showed is listed in history and opens its session fr
   try {
     renderHook(() => useNotifications({ sessionId: null, locale: "en", onOpenSession: (id) => sessions.push(id) }));
     await act(async () => {
-      window.dispatchEvent(new window.CustomEvent(NOTIFICATION_MESSAGE_EVENT, { detail: { kind: "os", event: { type: "completed", sessionId: "s9", sessionName: "Shown by OS" } } }));
+      window.dispatchEvent(new window.CustomEvent(NOTIFICATION_MESSAGE_EVENT, { detail: { kind: "os", event: { type: "error", sessionId: "s9", sessionName: "Shown by OS", detail: "boom" } } }));
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     assert.deepEqual(created, ["Shown by OS"]);
     const entry = toastHistory.get().find((e) => e.title === "Shown by OS");
     assert.ok(entry, "listed in the Notifications tab");
+    assert.equal(entry.kind, "error");
     entry.onClick();
     assert.deepEqual(sessions, ["s9"]);
   } finally {
