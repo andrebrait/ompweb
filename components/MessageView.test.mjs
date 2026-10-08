@@ -12,6 +12,8 @@ const jiti = createJiti(import.meta.url, {
 });
 const { MessageView, SafeMarkdownBody, TaskResultPanel, isInterruptedMessage } = await jiti.import("./MessageView.tsx");
 const { CodeBlock } = await jiti.import("./MermaidBlock.tsx");
+const { buildSessionContext } = await jiti.import("../lib/session-reader.ts");
+const { collectToolResults, planTranscriptRows } = await jiti.import("../lib/chat-transcript-plan.ts");
 afterEach(cleanup);
 
 test("sent messages without timestamps or branch metadata still offer copy", () => {
@@ -533,6 +535,66 @@ test("developer reminders show their wrapper attributes, start collapsed, and to
 
   fireEvent.click(header);
   assert.doesNotMatch(view.container.textContent, /One-line wrappers/);
+});
+
+test("passive tool context from a session file renders on the batch's last tool card", () => {
+  const at = "2026-01-01T00:00:00.000Z";
+  const entry = (id, parentId, message) => ({ type: "message", id, parentId, timestamp: at, message });
+  const { messages } = buildSessionContext([
+    entry("u1", null, { role: "user", content: "look around" }),
+    entry("a1", "u1", {
+      role: "assistant", provider: "t", model: "m",
+      content: [
+        { type: "toolCall", id: "call-1", name: "read", arguments: { path: "a.ts" } },
+        { type: "toolCall", id: "call-2", name: "bash", arguments: { command: "ls" } },
+      ],
+    }),
+    entry("r1", "a1", { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "text", text: "a" }] }),
+    entry("r2", "r1", { role: "toolResult", toolCallId: "call-2", toolName: "bash", content: [{ type: "text", text: "b" }] }),
+    entry("d1", "r2", {
+      role: "developer", attribution: "agent", passiveToolContext: true, timestamp: 1,
+      content: [{ type: "text", text: "\x1b[2mTreat\tthis result\nas authoritative.\x1b[0m" }],
+    }),
+    entry("d2", "d1", { role: "developer", content: [{ type: "text", text: "Unmarked steering note." }], timestamp: 2 }),
+    entry("a2", "d2", { role: "assistant", provider: "t", model: "m", content: [{ type: "text", text: "Done." }] }),
+  ]);
+  const toolResults = collectToolResults(messages);
+  const html = (message) => renderToStaticMarkup(React.createElement(MessageView, { message, toolResults, toolCallsDefaultCollapsed: false }));
+  // Expanded tool group, collapsed cards: one truncating row on the last card, the full text on hover.
+  const shown = html(messages[1]);
+  assert.equal(shown.match(/>Context:/g)?.length, 1);
+  assert.match(shown, /class="activity-row-secondary" title="Context: Treat\tthis result\nas authoritative\."><span aria-hidden="true">↳ <\/span>Context: Treat\tthis result\nas authoritative\./);
+  assert.ok(shown.indexOf(">read<") < shown.indexOf(">bash<"));
+  assert.ok(shown.indexOf("Context:") > shown.indexOf(">bash<"), "the line sits on the last card (call-2)");
+  assert.doesNotMatch(shown, /tool-call-context/);
+  // An expanded card shows the full text as its own segment at the end of its details instead.
+  const single = { ...messages[1], content: [messages[1].content[1]] };
+  const view = render(React.createElement(MessageView, { message: single, toolResults }));
+  fireEvent.click(view.getByRole("button", { expanded: false }));
+  const segment = view.container.querySelector(".tool-call-details .tool-call-context");
+  assert.equal(segment?.textContent, "↳ Context: Treat\tthis result\nas authoritative.");
+  assert.equal(view.container.querySelector(".activity-row-secondary[title]"), null, "no truncated row while expanded");
+  // A harness wrapper (omp's rule reminders) becomes a label instead of raw tag text.
+  const wrapped = new Map(toolResults);
+  wrapped.set("call-2", { ...toolResults.get("call-2"), passiveContext: '<system-reminder reason="rule_violation" rule="ts-set-map">\nUse a Record.\n</system-reminder>' });
+  const labeled = renderToStaticMarkup(React.createElement(MessageView, { message: single, toolResults: wrapped }));
+  assert.match(labeled, /↳ <\/span>Context \(rule_violation · ts-set-map\): Use a Record\.<\/div>/);
+  assert.doesNotMatch(labeled, /system-reminder/);
+  // The length cap can cut the closing tag; the opening tag still never leaks.
+  wrapped.set("call-2", { ...toolResults.get("call-2"), passiveContext: '<system-reminder reason="" rule="ts-set-map">\nUse a Rec' });
+  const cut = renderToStaticMarkup(React.createElement(MessageView, { message: single, toolResults: wrapped }));
+  assert.match(cut, /↳ <\/span>Context \(ts-set-map\): Use a Rec<\/div>/);
+  assert.doesNotMatch(cut, /system-reminder/);
+  // The marked message is no row of its own; the unmarked one still is.
+  assert.equal(messages[4].customType, "passive-tool-context");
+  assert.equal(html(messages[4]), "");
+  assert.equal(messages[5].customType, "developer");
+  assert.equal(messages[5].display, true);
+  assert.match(html(messages[5]), /Unmarked steering note\./);
+  assert.deepEqual(
+    planTranscriptRows(messages)[0].segments.map((segment) => segment.kind === "text" ? "text" : segment.pieces.map((piece) => piece.index)),
+    [[1, 5], "text"],
+  );
 });
 
 test("a deferred thinking block rendered from a block subset loads its source block", async (t) => {

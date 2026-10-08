@@ -3899,6 +3899,17 @@ html[data-touch-targets="accessible"] .right-panel-toolbar {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.tool-call-context {
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  max-height: 260px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
 .tool-call-output {
   max-height: 260px;
   overflow: auto;
