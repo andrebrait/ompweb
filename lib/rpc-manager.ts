@@ -22,6 +22,7 @@ import { samePath } from "./paths";
 import { isRecord } from "./type-guards";
 import { parseSkillDiagnosticsSnapshot, type SkillDiagnosticsSnapshot } from "./skill-diagnostics";
 import { isReservedLaunchArg, loadProjectRegistry } from "./project-registry";
+import { eventWithToolResultImageUrls } from "./media-cache";
 import type {
   BashResultInfo,
   OmpModel,
@@ -990,7 +991,10 @@ export class AgentSessionWrapper {
     this.pendingHostUris.clear();
   }
 
-  private emit(event: UnsequencedAgentEvent): void {
+  private emit(nativeEvent: UnsequencedAgentEvent): void {
+    // Tool-result images go out (and into the replay snapshot) as media URLs:
+    // big screenshots must never sit in the browser's chat state as base64.
+    const event = eventWithToolResultImageUrls(nativeEvent);
     // `web` belongs to this wrapper, never to native/extension-supplied frames.
     // Strip it before caching tool snapshots as well as before wire emission.
     delete event.web;

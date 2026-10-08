@@ -70,6 +70,7 @@ app/api/
   default-cwd/route.ts            POST create ~/omp-cwd-YYYYMMDD
   files/[...path]/route.ts        GET file contents for viewer
   github-repo/route.ts            GET ?cwd= — GitHub owner/repo of the checkout (for #N links)
+  media/[hash]/route.ts           GET tool-result image by sha256 (?thumb=1 → 480px WebP preview)
   home/route.ts                   GET user home directory
   models/route.ts                 GET { models, modelList, defaultModel }
   models-config/route.ts          GET/PUT — read/write ~/.omp/agent/models.yml
@@ -95,6 +96,7 @@ lib/
   btw.ts               /btw side-question records + pure frame/snapshot merge (order-safe)
   draft-store.ts       local draft persistence helpers
   file-access.ts       allowed file roots for /api/files and worktrees
+  media-cache.ts       tool-result images → /api/media URLs; media copies + thumbnails
   file-paths.ts        client/server path encoding helpers
   github-refs.ts       remark plugin linking #N / owner/repo#N + GithubRepoContext
   git-clone.ts         pure clone helpers: URL→directory name (https/ssh only), \r-aware progress log
@@ -244,6 +246,21 @@ wait for that commit:
   supersedes it) but must NOT drop buffered tool updates.
 - Live entries are cleared on `agent_start`, terminal `agent_end`, prompt
   send/settlement failure — a tool must never leak into the next run.
+
+### Tool-result images (`lib/media-cache.ts`, `/api/media/[hash]`)
+- Tool-result images never reach the browser as base64. History (`deferMedia`)
+  and live frames (`AgentSessionWrapper.emit`, which also feeds the replay
+  snapshot) replace each image with `{type:"image", mimeType, url:"/api/media/<sha256>"}`.
+  User-message and custom-message images stay inline.
+- The hash is omp's blob address (sha256 of the bytes): blob refs map directly
+  (a missing blob becomes the `[image unavailable …]` text), inline images are
+  hashed and copied to `<omp-web dir>/media/`. omp writes blobs in place, so the
+  route serves the copy until the blob has the copy's size. A daily sweep (run
+  on the next media write) deletes copies omp now holds and files older than
+  30 days.
+- `ToolCallBlock` shows `?thumb=1` (480px WebP made once with `sharp` and cached
+  next to the copies; full image if sharp is unavailable) and opens the full
+  image in the lightbox. The route serves only PNG/JPEG/GIF/WebP by magic bytes.
 
 ### Event protocol differences vs pi
 omp emits no `prompt_done` / `prompt_error` / `compaction_start` /

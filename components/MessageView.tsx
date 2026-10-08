@@ -1149,7 +1149,8 @@ const ToolCallBlock = memo(function ToolCallBlock({
                       {resultImages.map((img, i) => (
                         <ClickableImage
                           key={i}
-                          src={imageBlockSrc(img)}
+                          src={img.url ? `${img.url}?thumb=1` : imageBlockSrc(img)}
+                          fullSrc={img.url}
                           alt=""
                           style={{ maxWidth: 240, maxHeight: 240, borderRadius: 6, objectFit: "contain", display: "block", border: "1px solid color-mix(in srgb, var(--accent) 18%, transparent)" }}
                         />
