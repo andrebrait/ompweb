@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Bell, Folder, GitBranch, X } from "lucide-react";
+import { Bell, Folder, GitBranch, GitFork, X } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { getFileIcon } from "./FileIcons";
 
@@ -32,8 +32,10 @@ interface Props {
   onSelectNotifications?: () => void;
   /** Unread-notification count badge on the Notifications tab. */
   notificationsBadge?: number;
+  /** Pinned Worktrees tab rendered after Git. */
+  worktreesSelected?: boolean;
+  onSelectWorktrees?: () => void;
 }
-
 const badgeStyle = (color: string) => ({
   display: "inline-flex",
   alignItems: "center",
@@ -121,7 +123,7 @@ function PinnedTab({ id, panelId, label, title, icon, selected, badge, badgeColo
   );
 }
 
-export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, explorerSelected = false, onSelectExplorer, explorerBadge = 0, gitSelected = false, onSelectGit, gitBadge = 0, notificationsSelected = false, onSelectNotifications, notificationsBadge = 0 }: Props) {
+export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, explorerSelected = false, onSelectExplorer, explorerBadge = 0, gitSelected = false, onSelectGit, gitBadge = 0, notificationsSelected = false, onSelectNotifications, notificationsBadge = 0, worktreesSelected = false, onSelectWorktrees }: Props) {
   const { t } = useI18n();
   const [hoveredClose, setHoveredClose] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -129,6 +131,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, explorerSel
     ...(onSelectNotifications ? ["notifications"] : []),
     ...(onSelectExplorer ? ["explorer"] : []),
     ...(onSelectGit ? ["git"] : []),
+    ...(onSelectWorktrees ? ["worktrees"] : []),
     ...tabs.map((tab) => tab.id),
   ];
 
@@ -136,6 +139,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, explorerSel
     if (id === "explorer") onSelectExplorer?.();
     else if (id === "git") onSelectGit?.();
     else if (id === "notifications") onSelectNotifications?.();
+    else if (id === "worktrees") onSelectWorktrees?.();
     else {
       const tab = tabs.find((item) => item.id === id);
       if (tab) onSelectTab(tab.id);
@@ -246,6 +250,20 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, explorerSel
           badge={gitBadge}
           badgeColor="var(--status-modified)"
           onSelect={onSelectGit}
+          onKeyDown={handleTabKeyDown}
+        />
+      )}
+      {onSelectWorktrees && (
+        <PinnedTab
+          id="worktrees"
+          panelId="workspace-file-panel-worktrees"
+          label={t("tabBar.worktrees")}
+          title={t("tabBar.worktrees")}
+          icon={<GitFork size={13} strokeWidth={2} aria-hidden="true" />}
+          selected={worktreesSelected}
+          badge={0}
+          badgeColor="var(--accent)"
+          onSelect={onSelectWorktrees}
           onKeyDown={handleTabKeyDown}
         />
       )}

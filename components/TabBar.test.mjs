@@ -34,6 +34,8 @@ test("right-panel tabs support roving arrows, Home/End, and keyboard close", asy
     gitSelected: false,
     onSelectGit: () => selected.push("git"),
     onSelectNotifications: () => selected.push("notifications"),
+    worktreesSelected: false,
+    onSelectWorktrees: () => selected.push("worktrees"),
   }));
 
   // Notifications is the first pinned tab, so Home lands there.
@@ -68,4 +70,9 @@ test("right-panel tabs support roving arrows, Home/End, and keyboard close", asy
 
   fireEvent.keyDown(beta, { key: "Delete" });
   assert.deepEqual(closed, ["beta"]);
+
+  fireEvent.keyDown(alpha, { key: "ArrowLeft" });
+  await nextFrame();
+  assert.equal(document.activeElement, screen.getByRole("tab", { name: "Worktrees" }));
+  assert.deepEqual(selected, ["beta", "notifications", "explorer", "beta", "worktrees"]);
 });

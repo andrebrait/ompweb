@@ -10,6 +10,7 @@ import { useNavigationHistory } from "@/hooks/useNavigationHistory";
 import { isMacPlatform, navigateShortcutHint, NAVIGATION_HISTORY_MAX_ENTRIES } from "@/lib/navigation-history";
 import { useMobileSidebarGestures } from "@/hooks/useMobileSidebarGestures";
 import { SessionSidebar } from "./SessionSidebar";
+import type { WorktreeContext } from "./SessionSidebar-helpers";
 import { ToastProvider } from "./ui/toast";
 import { toast, toastHistory, useUnreadToastCount } from "./ui/toast";
 import { ConfirmDialog } from "./ui/field";
@@ -20,7 +21,7 @@ import type { RightPanelView } from "./RightPanel";
 import { BranchNavigator } from "./BranchNavigator";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { CommandPaletteMount } from "./CommandPaletteMount";
-import { Check, ChevronDown, Command, Ellipsis, Folder, History, Menu, PanelLeft, PanelRight, Terminal, Wand2, Zap } from "lucide-react";
+import { Check, ChevronDown, Command, Ellipsis, Folder, GitBranch, History, Menu, PanelLeft, PanelRight, Terminal, Wand2, Zap } from "lucide-react";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { translate, useI18n } from "@/lib/i18n";
 import { formatApiError } from "@/lib/i18n/api-error";
@@ -1090,6 +1091,8 @@ export function AppShell({ appName }: { appName: string }) {
 
   const initialSessionId = initialNavigation.sessionId;
   const [activeCwd, setActiveCwd] = useState<string | null>(null);
+  // Owned by the sidebar; rendered by the file panel's Worktrees tab.
+  const [worktreeCtx, setWorktreeCtx] = useState<WorktreeContext | null>(null);
   // True once the initial ?session= URL param has been resolved (or confirmed absent)
   const [initialSessionRestored, setInitialSessionRestored] = useState<boolean>(() => !initialSessionId);
   // During the initial URL restore the sidebar adopts the restored cwd and
@@ -1588,9 +1591,20 @@ export function AppShell({ appName }: { appName: string }) {
   }, []);
 
   const activeFileTab = fileTabs.find((tab) => tab.id === activeFileTabId) ?? null;
-  // Explorer tab browses the active workspace: live cwd first, then the
-  // selected / new-session cwd (mirrors what the sidebar used to pass down).
-  const explorerCwd = activeCwd ?? selectedSession?.cwd ?? newSessionCwd ?? null;
+  // Explorer, Git, and the file viewers follow the open session's folder, then
+  // the sidebar's live cwd, then the new-session cwd. Relative paths (mention,
+  // copy path) resolve against the same folder so they match the Explorer.
+  // A session whose worktree was removed (its repo's worktree list no longer
+  // contains its folder) falls back to the sidebar's cwd, the repo root.
+  const sessionCwd = selectedSession?.cwd ?? null;
+  const sessionWorktreeRemoved = sessionCwd !== null && worktreeCtx !== null
+    && comparableProjectPath(selectedSession?.projectRoot ?? sessionCwd) === comparableProjectPath(worktreeCtx.projectRoot)
+    && !worktreeCtx.worktrees.some((wt) => {
+      const root = comparableProjectPath(wt.path);
+      const cwd = comparableProjectPath(sessionCwd);
+      return cwd === root || cwd.startsWith(`${root}/`);
+    });
+  const explorerCwd = (sessionWorktreeRemoved ? null : sessionCwd) ?? activeCwd ?? newSessionCwd ?? null;
   const handleOpenLinkedFile = useCallback((filePath: string) => {
     handleOpenFile(filePath, getFileName(filePath), selectedSession?.id ?? null);
   }, [handleOpenFile, selectedSession?.id]);
@@ -1599,17 +1613,17 @@ export function AppShell({ appName }: { appName: string }) {
   // panel behaves like an editor toolbar, not just a tab strip.
   const handleMentionActiveFile = useCallback(() => {
     if (!activeFileTab) return;
-    handleAtMention(getRelativeFilePath(activeFileTab.filePath, activeCwd ?? undefined), false);
-  }, [activeFileTab, activeCwd, handleAtMention]);
+    handleAtMention(getRelativeFilePath(activeFileTab.filePath, explorerCwd ?? undefined), false);
+  }, [activeFileTab, explorerCwd, handleAtMention]);
 
   const handleCopyActiveFilePath = useCallback(() => {
     if (!activeFileTab) return;
-    const relative = getRelativeFilePath(activeFileTab.filePath, activeCwd ?? undefined);
+    const relative = getRelativeFilePath(activeFileTab.filePath, explorerCwd ?? undefined);
     copyText(relative).then(
       () => toast.success(t("appShell.copied")),
       () => toast.error(t("appShell.commandCopyFailed")),
     );
-  }, [activeFileTab, activeCwd, t]);
+  }, [activeFileTab, explorerCwd, t]);
 
   const handleDownloadActiveFile = useCallback(() => {
     if (!activeFileTab) return;
@@ -1779,6 +1793,7 @@ export function AppShell({ appName }: { appName: string }) {
       selectedCwd={selectedSession?.cwd ?? newSessionCwd ?? null}
       onCwdChange={handleCwdChange}
       onWorkspaceOptionsChange={handleWorkspaceOptionsChange}
+      onWorktreeContextChange={setWorktreeCtx}
       addProjectOpen={addProjectOpen}
       setAddProjectOpen={setAddProjectOpen}
       usageVisible={providerUsageVisible}
@@ -2423,6 +2438,27 @@ export function AppShell({ appName }: { appName: string }) {
                     </select>
                     <ChevronDown className="new-session-workspace-chevron" size={16} strokeWidth={1.8} aria-hidden="true" />
                   </div>
+                  {/* The workspace's worktrees: picking one sets where the new
+                      session starts (same switch as the file panel's Worktrees tab). */}
+                  {worktreeCtx && worktreeCtx.worktrees.length > 1
+                    && comparableProjectPath(worktreeCtx.projectRoot) === comparableProjectPath(newSessionProject) && (
+                    <div className="new-session-workspace-control">
+                      <span className="new-session-workspace-icon" aria-hidden="true">
+                        <GitBranch size={17} strokeWidth={1.8} />
+                      </span>
+                      <select
+                        aria-label={t("sessionSidebar.switchWorktree")}
+                        aria-describedby="new-session-workspace-path"
+                        value={worktreeCtx.currentPath}
+                        onChange={(event) => worktreeCtx.select(event.target.value)}
+                      >
+                        {worktreeCtx.worktrees.map((wt) => (
+                          <option key={wt.path} value={wt.path}>{wt.branch ?? getFileName(wt.path)}</option>
+                        ))}
+                      </select>
+                      <ChevronDown className="new-session-workspace-chevron" size={16} strokeWidth={1.8} aria-hidden="true" />
+                    </div>
+                  )}
                   <div id="new-session-workspace-path" className="new-session-workspace-path" title={effectiveNewSessionCwd}>
                     {effectiveNewSessionCwd}
                   </div>
@@ -2531,7 +2567,7 @@ export function AppShell({ appName }: { appName: string }) {
         revealPath={revealPath}
         onRevealDone={handleRevealDone}
         explorerCwd={explorerCwd}
-        activeCwd={activeCwd}
+        worktrees={worktreeCtx}
         explorerRefreshKey={explorerRefreshKey}
         fileSearchOpen={fileSearchOpen}
         onToggleFileSearch={handleToggleFileSearch}

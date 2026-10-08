@@ -24,10 +24,12 @@ import { GitChangesPanel } from "./GitChangesPanel";
 import { FileViewer } from "./FileViewer";
 import { NotificationList } from "./NotificationList";
 import { toastHistory, useUnreadToastCount } from "./ui/toast";
+import { WorktreesPanel } from "./WorktreesPanel";
+import type { WorktreeContext } from "./SessionSidebar-helpers";
 import { useI18n } from "@/lib/i18n";
 import { getFileName } from "@/lib/file-paths";
 
-export type RightPanelView = "explorer" | "git" | "notifications" | "file";
+export type RightPanelView = "explorer" | "git" | "notifications" | "worktrees" | "file";
 
 interface Props {
   fileTabs: Tab[];
@@ -43,7 +45,8 @@ interface Props {
   revealPath: string | null;
   onRevealDone: () => void;
   explorerCwd: string | null;
-  activeCwd: string | null;
+  /** Active Git workspace's worktrees (null when it is not a Git top-level repo). */
+  worktrees: WorktreeContext | null;
   explorerRefreshKey: number;
   fileSearchOpen: boolean;
   onToggleFileSearch: () => void;
@@ -94,7 +97,7 @@ export const RightPanel = memo(function RightPanel({
   revealPath,
   onRevealDone,
   explorerCwd,
-  activeCwd,
+  worktrees,
   explorerRefreshKey,
   fileSearchOpen,
   onToggleFileSearch,
@@ -206,6 +209,8 @@ export const RightPanel = memo(function RightPanel({
               notificationsSelected={rightView === "notifications"}
               onSelectNotifications={() => onSelectView("notifications")}
               notificationsBadge={unreadNotifications}
+              worktreesSelected={rightView === "worktrees"}
+              onSelectWorktrees={() => onSelectView("worktrees")}
             />
           </div>
           {rightView === "explorer" ? (
@@ -298,7 +303,7 @@ export const RightPanel = memo(function RightPanel({
                 <Trash2 size={13} strokeWidth={2} aria-hidden="true" />
               </button>
             </div>
-          ) : activeFileTab && (
+          ) : rightView === "file" && activeFileTab && (
             <div style={{ display: "flex", alignItems: "center", flexShrink: 0, padding: "0 2px" }} role="toolbar" aria-label={activeFileTab.filePath}>
               <button
                 onClick={onMentionActiveFile}
@@ -465,13 +470,17 @@ export const RightPanel = memo(function RightPanel({
         <div id="workspace-file-panel-notifications" role="tabpanel" tabIndex={-1} aria-label={t("appShell.notifications")} style={{ display: rightView === "notifications" ? "flex" : "none", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden", outline: "none" }}>
           {visitedViews.has("notifications") && <NotificationList />}
         </div>
+        <div id="workspace-file-panel-worktrees" role="tabpanel" aria-label={t("tabBar.worktrees")} style={{ display: rightView === "worktrees" ? "flex" : "none", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
+          {/* Keyed by repository so a draft branch or pending confirmation never carries over to another repo. */}
+          {visitedViews.has("worktrees") && <WorktreesPanel key={worktrees?.projectRoot ?? ""} ctx={worktrees} />}
+        </div>
         {/* Keep open viewers mounted so switching tabs preserves scroll and preview state. */}
         <div id="workspace-file-panel-file" role="tabpanel" aria-label={activeFileTab?.filePath ?? t("appShell.filePanel")} style={{ display: rightView === "file" ? "block" : "none", flex: 1, minHeight: 0, overflow: "hidden" }}>
           {fileTabs.length > 0 ? fileTabs.map((tab) => (
             <div key={tab.id} style={{ display: tab.id === activeFileTabId ? "block" : "none", height: "100%" }}>
               <FileViewer
                 filePath={tab.filePath}
-                cwd={activeCwd ?? undefined}
+                cwd={explorerCwd ?? undefined}
                 sourceSessionId={tab.sourceSessionId}
                 gitRefreshKey={explorerRefreshKey}
                 active={tab.id === activeFileTabId && rightPanelOpen && rightView === "file"}
