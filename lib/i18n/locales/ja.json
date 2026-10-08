@@ -829,7 +829,7 @@
   "messageView.fullOutputLoading": "完全な出力を読み込み中…",
   "modelsConfig.addFromCatalog": "カタログから",
   "modelsConfig.addModel": "+ モデル",
-  "modelsConfig.addProvider": "+ プロバイダーを追加",
+  "modelsConfig.addProvider": "プロバイダーを追加",
   "modelsConfig.alreadyConnected": "既に接続されています。再ログインまたは切断ができます。",
   "modelsConfig.api": "API",
   "modelsConfig.apiKey": "APIキー",
