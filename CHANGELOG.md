@@ -35,6 +35,7 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 - Word-completion ghost text in a scrolled composer now appears right after the caret. When the draft had text after the caret, it used to be drawn lines further down.
 - Show a single plus sign on the **Add provider** buttons in Models settings, and none in the Add provider dialog title. The translated label no longer repeats the button's **+** icon.
+- Links in a Markdown file preview no longer navigate omp-web away. A relative link the file panel cannot open, such as one in a Markdown file outside the workspace, shows as plain text with its target on hover; web links open in a new tab. An image the panel cannot load shows its alt text instead of a broken image.
 - Balance the composer icons on phones and narrow toolbars with a slightly smaller effort-level icon and a larger Slow-mode snail, while keeping menu icon sizes unchanged.
 - Keep the model picker on the left and reasoning effort, Fast, Slow, microphone, and Send/Stop controls in a right-aligned composer group, including wrapped mobile rows.
 - The Provider Usage panel now shows each account's email instead of omp's redacted form (`an*`); accounts without an email show as **Account N**. Only the email, plan and limits reach the browser.
