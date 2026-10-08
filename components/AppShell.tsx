@@ -21,7 +21,7 @@ import type { RightPanelView } from "./RightPanel";
 import { BranchNavigator } from "./BranchNavigator";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { CommandPaletteMount } from "./CommandPaletteMount";
-import { Check, ChevronDown, Command, Ellipsis, Folder, History, Menu, PanelLeft, PanelRight, Terminal, Wand2, Zap } from "lucide-react";
+import { Check, ChevronDown, Command, Ellipsis, Folder, GitBranch, History, Menu, PanelLeft, PanelRight, Terminal, Wand2, Zap } from "lucide-react";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { translate, useI18n } from "@/lib/i18n";
 import { formatApiError } from "@/lib/i18n/api-error";
@@ -2394,6 +2394,27 @@ export function AppShell({ appName }: { appName: string }) {
                     </select>
                     <ChevronDown className="new-session-workspace-chevron" size={16} strokeWidth={1.8} aria-hidden="true" />
                   </div>
+                  {/* The workspace's worktrees: picking one sets where the new
+                      session starts (same switch as the file panel's Worktrees tab). */}
+                  {worktreeCtx && worktreeCtx.worktrees.length > 1
+                    && comparableProjectPath(worktreeCtx.projectRoot) === comparableProjectPath(newSessionProject) && (
+                    <div className="new-session-workspace-control">
+                      <span className="new-session-workspace-icon" aria-hidden="true">
+                        <GitBranch size={17} strokeWidth={1.8} />
+                      </span>
+                      <select
+                        aria-label={t("sessionSidebar.switchWorktree")}
+                        aria-describedby="new-session-workspace-path"
+                        value={worktreeCtx.currentPath}
+                        onChange={(event) => worktreeCtx.select(event.target.value)}
+                      >
+                        {worktreeCtx.worktrees.map((wt) => (
+                          <option key={wt.path} value={wt.path}>{wt.branch ?? getFileName(wt.path)}</option>
+                        ))}
+                      </select>
+                      <ChevronDown className="new-session-workspace-chevron" size={16} strokeWidth={1.8} aria-hidden="true" />
+                    </div>
+                  )}
                   <div id="new-session-workspace-path" className="new-session-workspace-path" title={effectiveNewSessionCwd}>
                     {effectiveNewSessionCwd}
                   </div>
