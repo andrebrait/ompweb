@@ -56,3 +56,14 @@ test("a swipe pulled back toward the centre puts the toast back; turning out aga
     cleanup();
   }
 });
+
+test("a touch drag that starts on a toast's action button leaves the toast in place", () => {
+  render(React.createElement(ToastProvider, null));
+  act(() => { toast.info("Update available", React.createElement("button", { type: "button" }, "Copy")); });
+  const card = document.querySelector(".toast-card");
+  const button = card.querySelector("button:not(.toast-close-button)");
+  pointer(button, "pointerdown", 200, 50, "touch");
+  for (const dx of [20, 80, 140]) pointer(button, "pointermove", 200 + dx, 52, "touch");
+  pointer(button, "pointerup", 340, 52, "touch");
+  assert.equal(card.hasAttribute("data-ending-style"), false);
+});
