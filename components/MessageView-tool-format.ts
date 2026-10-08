@@ -230,60 +230,6 @@ export function getSemanticToolLabel(block: ToolCallContent): { action: string; 
   return { action: block.toolName, target: getToolPreview(block) };
 }
 
-export function summarizeToolCallGroup(blocks: ToolCallContent[]): {
-  summaryText: string;
-  categories: ToolCategory[];
-  totalCount: number;
-} {
-  const counts: Record<ToolCategory, number> = {
-    read: 0,
-    search: 0,
-    edit: 0,
-    terminal: 0,
-    todo: 0,
-    task: 0,
-    code: 0,
-    web: 0,
-    hub: 0,
-    other: 0,
-  };
-
-  for (const b of blocks) {
-    const cat = getToolCategory(b.toolName);
-    counts[cat]++;
-  }
-
-  const parts: string[] = [];
-  if (counts.read > 0) parts.push(`Read ${counts.read} file${counts.read > 1 ? "s" : ""}`);
-  if (counts.search > 0) parts.push(`searched ${counts.search} time${counts.search > 1 ? "s" : ""}`);
-  if (counts.edit > 0) parts.push(`edited ${counts.edit} file${counts.edit > 1 ? "s" : ""}`);
-  if (counts.terminal > 0) parts.push(`ran ${counts.terminal} command${counts.terminal > 1 ? "s" : ""}`);
-  if (counts.todo > 0) parts.push(`updated ${counts.todo} task${counts.todo > 1 ? "s" : ""}`);
-  if (counts.task > 0) parts.push(`spawned ${counts.task} subagent${counts.task > 1 ? "s" : ""}`);
-  if (counts.code > 0) parts.push(`executed ${counts.code} code cell${counts.code > 1 ? "s" : ""}`);
-  if (counts.web > 0) parts.push(`browsed ${counts.web} page${counts.web > 1 ? "s" : ""}`);
-  if (counts.hub > 0) parts.push(`coordinated ${counts.hub} agent handoff${counts.hub > 1 ? "s" : ""}`);
-
-  const activeCategories = (Object.keys(counts) as ToolCategory[]).filter((c) => counts[c] > 0);
-
-  let summaryText = "";
-  if (parts.length === 0) {
-    summaryText = `${blocks.length} tool operations`;
-  } else if (parts.length === 1) {
-    summaryText = parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
-  } else if (parts.length === 2) {
-    summaryText = `${parts[0].charAt(0).toUpperCase() + parts[0].slice(1)} and ${parts[1]}`;
-  } else {
-    summaryText = parts.map((p, i) => (i === 0 ? p.charAt(0).toUpperCase() + p.slice(1) : p)).join(" · ");
-  }
-
-  return {
-    summaryText,
-    categories: activeCategories,
-    totalCount: blocks.length,
-  };
-}
-
 export function formatToolCommand(block: ToolCallContent): string {
   const input = block.input;
   if (input && typeof input.command === "string") return input.command;

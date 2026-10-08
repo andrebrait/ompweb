@@ -27,7 +27,6 @@ import {
   getHubJobs,
   getHubJobsHeader,
   getHubSendSummary,
-  summarizeToolCallGroup,
   getSemanticToolLabel,
   type ToolCategory,
 } from "./MessageView-tool-format";
@@ -79,42 +78,6 @@ function ToolCategoryIcon({
     default:
       return <Wrench size={size} strokeWidth={1.8} className={className} style={{ color: "var(--text-muted)", ...style }} />;
   }
-}
-
-type GroupedBlockItem =
-  | { type: "single"; item: { block: AssistantContentBlock; originalIndex: number } }
-  | { type: "toolGroup"; items: Array<{ block: ToolCallContent; originalIndex: number }> };
-
-function groupAdjacentBlocks(items: Array<{ block: AssistantContentBlock; originalIndex: number }>): GroupedBlockItem[] {
-  const result: GroupedBlockItem[] = [];
-  let currentGroup: Array<{ block: ToolCallContent; originalIndex: number }> | null = null;
-
-  for (const item of items) {
-    if (item.block.type === "toolCall") {
-      if (!currentGroup) currentGroup = [];
-      currentGroup.push({ block: item.block as ToolCallContent, originalIndex: item.originalIndex });
-    } else {
-      if (currentGroup) {
-        if (currentGroup.length === 1) {
-          result.push({ type: "single", item: currentGroup[0] });
-        } else {
-          result.push({ type: "toolGroup", items: currentGroup });
-        }
-        currentGroup = null;
-      }
-      result.push({ type: "single", item });
-    }
-  }
-
-  if (currentGroup) {
-    if (currentGroup.length === 1) {
-      result.push({ type: "single", item: currentGroup[0] });
-    } else {
-      result.push({ type: "toolGroup", items: currentGroup });
-    }
-  }
-
-  return result;
 }
 
 const MAX_THINKING_CACHE_ENTRIES = 100;
@@ -729,38 +692,22 @@ function AssistantMessageView({
       </div>
 
       <div ref={bodyRef} data-selection-scope="message" tabIndex={-1} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-        {groupAdjacentBlocks(blockItems).map((group, groupIdx) => {
-          if (group.type === "single") {
-            const { block, originalIndex } = group.item;
-            return (
-              <BlockView
-                key={`${entryId ?? "stream"}-${originalIndex}`}
-                block={block}
-                toolResults={toolResults}
-                isStreaming={isStreaming}
-                streamingDuration={streamingDurations.get(originalIndex) ?? (block.type === "thinking" ? thinkingDurationFromFile : undefined)}
-                toolCallDurations={toolCallDurations}
-                cwd={cwd}
-                onOpenFile={onOpenFile}
-                sessionId={sessionId}
-                entryId={entryId}
-                blockIndex={originalIndex}
-                toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}
-              />
-            );
-          }
-          return (
-            <ToolCallGroupBlock
-              key={`${entryId ?? "stream"}-group-${groupIdx}`}
-              items={group.items}
-              toolResults={toolResults}
-              isStreaming={isStreaming}
-              toolCallDurations={toolCallDurations}
-              onOpenFile={onOpenFile}
-              toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}
-            />
-          );
-        })}
+        {blockItems.map(({ block, originalIndex }) => (
+          <BlockView
+            key={`${entryId ?? "stream"}-${originalIndex}`}
+            block={block}
+            toolResults={toolResults}
+            isStreaming={isStreaming}
+            streamingDuration={streamingDurations.get(originalIndex) ?? (block.type === "thinking" ? thinkingDurationFromFile : undefined)}
+            toolCallDurations={toolCallDurations}
+            cwd={cwd}
+            onOpenFile={onOpenFile}
+            sessionId={sessionId}
+            entryId={entryId}
+            blockIndex={originalIndex}
+            toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}
+          />
+        ))}
         {errorMessage && (
           isInterrupted ? (
             <div
@@ -965,7 +912,6 @@ const ToolCallBlock = memo(function ToolCallBlock({
   duration,
   isStreaming,
   defaultCollapsed = true,
-  inGroup = false,
   onOpenFile,
 }: {
   block: ToolCallContent;
@@ -974,7 +920,6 @@ const ToolCallBlock = memo(function ToolCallBlock({
   isStreaming?: boolean;
   defaultCollapsed?: boolean;
   cwd?: string;
-  inGroup?: boolean;
   onOpenFile?: (filePath: string) => void;
 }) {
   const { t } = useI18n();
@@ -1047,9 +992,9 @@ const ToolCallBlock = memo(function ToolCallBlock({
   const cleanFilePath = rawFilePath && !hasUrlScheme ? rawFilePath.split(":")[0] : null;
 
   return (
-    <div className={inGroup ? "activity-group-item" : "activity-row"} data-activity-operation="true">
+    <div className="activity-row" data-activity-operation="true">
       <Collapsible open={expanded} onOpenChange={setExpanded}>
-        <CollapsibleTrigger className={inGroup ? "activity-group-item-trigger" : "activity-row-trigger"}>
+        <CollapsibleTrigger className="activity-row-trigger">
           <span className={`activity-row-indicator${isError ? " activity-row-indicator-error" : ""}`} aria-hidden>
             {isError ? (
               <CircleAlert size={12} strokeWidth={1.8} />
@@ -1222,122 +1167,8 @@ const ToolCallBlock = memo(function ToolCallBlock({
   && prev.result === next.result
   && prev.duration === next.duration
   && prev.defaultCollapsed === next.defaultCollapsed
-  && prev.inGroup === next.inGroup
   && prev.onOpenFile === next.onOpenFile
 ));
-
-const ToolCallGroupBlock = memo(function ToolCallGroupBlock({
-  items,
-  toolResults,
-  isStreaming,
-  toolCallDurations,
-  onOpenFile,
-  toolCallsDefaultCollapsed,
-}: {
-  items: Array<{ block: ToolCallContent; originalIndex: number }>;
-  toolResults?: Map<string, ToolResultMessage>;
-  isStreaming?: boolean;
-  toolCallDurations?: Map<string, number>;
-  onOpenFile?: (filePath: string) => void;
-  toolCallsDefaultCollapsed: boolean;
-}) {
-  const { t } = useI18n();
-  const [expanded, setExpanded] = useState(!toolCallsDefaultCollapsed);
-  const blocks = items.map((i) => i.block);
-  const groupSummary = useMemo(() => summarizeToolCallGroup(blocks), [blocks]);
-
-  const hasError = blocks.some((b) => toolResults?.get(b.toolCallId)?.isError);
-  // A partial snapshot is a tool still executing, not a settled result.
-  const isPending = isStreaming && blocks.some((b) => {
-    const result = toolResults?.get(b.toolCallId);
-    return !result || result.partial === true;
-  });
-
-  const totalDuration = useMemo(() => {
-    if (!toolCallDurations) return undefined;
-    let sum = 0;
-    let counted = 0;
-    for (const b of blocks) {
-      const d = toolCallDurations.get(b.toolCallId);
-      if (d !== undefined) {
-        sum += d;
-        counted++;
-      }
-    }
-    return counted > 0 ? sum : undefined;
-  }, [blocks, toolCallDurations]);
-
-  return (
-    <div className="activity-group" data-activity-operation="true">
-      <Collapsible open={expanded} onOpenChange={setExpanded}>
-        <CollapsibleTrigger className="activity-group-header">
-          <span className="activity-group-icon-cluster" aria-hidden>
-            {groupSummary.categories.slice(0, 3).map((cat) => (
-              <ToolCategoryIcon key={cat} category={cat} size={12} />
-            ))}
-          </span>
-          <span className="activity-group-summary">
-            {groupSummary.summaryText}
-          </span>
-          {totalDuration !== undefined && (
-            <span className="activity-row-duration">
-              {t("messageView.durationSeconds", { seconds: totalDuration })}
-            </span>
-          )}
-          <span className={`activity-row-indicator${hasError ? " activity-row-indicator-error" : ""}`} aria-hidden>
-            {hasError ? (
-              <CircleAlert size={12} strokeWidth={1.8} />
-            ) : isPending ? (
-              <LoaderCircle size={12} strokeWidth={1.8} className="activity-row-spinner" />
-            ) : (
-              <Check size={12} strokeWidth={2} />
-            )}
-          </span>
-          <ChevronDown
-            size={12}
-            strokeWidth={1.8}
-            aria-hidden
-            style={{
-              flexShrink: 0,
-              transform: expanded ? "none" : "rotate(-90deg)",
-              transition: "transform var(--dur-fast) var(--ease-out-warm)",
-            }}
-          />
-        </CollapsibleTrigger>
-        {expanded && (
-          <div className="activity-group-body">
-            {items.map(({ block }) => {
-              const result = toolResults?.get(block.toolCallId);
-              const duration = toolCallDurations?.get(block.toolCallId);
-              return (
-                <ToolCallBlock
-                  key={block.toolCallId}
-                  block={block}
-                  result={result}
-                  duration={duration}
-                  isStreaming={isStreaming}
-                  defaultCollapsed={true}
-                  inGroup={true}
-                  onOpenFile={onOpenFile}
-                />
-              );
-            })}
-          </div>
-        )}
-      </Collapsible>
-    </div>
-  );
-}, (prev, next) => (
-  prev.items.length === next.items.length
-  && prev.items.every((item, i) => (
-    item.block.toolCallId === next.items[i]?.block.toolCallId
-    && item.block.toolName === next.items[i]?.block.toolName
-    && inputsShallowEqual(item.block.input, next.items[i]?.block.input)
-  ))
-  && prev.onOpenFile === next.onOpenFile
-  && (!prev.toolResults || !next.toolResults || prev.items.every((item) => prev.toolResults?.get(item.block.toolCallId) === next.toolResults?.get(item.block.toolCallId)))
-));
-
 
 function CompactionMessageView({ message }: { message: CustomMessage }) {
   const { t, locale } = useI18n();

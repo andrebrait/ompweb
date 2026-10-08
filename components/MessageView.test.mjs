@@ -122,7 +122,7 @@ test("expanded oversized user message can be collapsed again", (t) => {
   assert.equal(document.activeElement, toggle);
 });
 
-test("expanded grouped tool inputs follow streaming arguments without toggling output", () => {
+test("expanded tool inputs follow streaming arguments without toggling output", () => {
   const code = "print('first')\nprint('complete')";
   const editInput = { path: "/tmp/example.ts", patch: "-old\n+new", options: { dryRun: false } };
   const toolResults = new Map([["edit-call", {
@@ -141,11 +141,9 @@ test("expanded grouped tool inputs follow streaming arguments without toggling o
     },
   });
   const { container, rerender } = render(React.createElement(MessageView, props("print('first')")));
-  // Open both tool rows through their disclosure triggers. The collapsible
-  // group header is not a row, so only the group-item triggers are clicked.
-  const rowTriggers = () => [...container.querySelectorAll("button.activity-group-item-trigger")];
+  // With collapse off, each tool call is its own already-open row.
+  const rowTriggers = () => [...container.querySelectorAll("button.activity-row-trigger")];
   assert.equal(rowTriggers().length, 2);
-  for (const trigger of rowTriggers()) fireEvent.click(trigger);
   const toggles = (label) => [...container.querySelectorAll("button.tool-call-input-toggle")]
     .filter((button) => (button.textContent ?? "").includes(label));
   const inputPanels = () => [...container.querySelectorAll("div.tool-call-input")];
@@ -655,9 +653,8 @@ test("expanded edit results with a patch render the split diff view", () => {
   assert.doesNotMatch(html, /<pre/);
 });
 
-test("consecutive tool calls group into an activity group summary", () => {
+test("parallel tool calls each render as their own row, never a merged group", () => {
   const html = renderToStaticMarkup(React.createElement(MessageView, {
-    isStreaming: true,
     toolCallsDefaultCollapsed: true,
     message: {
       role: "assistant",
@@ -669,24 +666,8 @@ test("consecutive tool calls group into an activity group summary", () => {
     },
   }));
 
-  assert.match(html, /activity-group/);
-  assert.match(html, /Read 2 files and searched 1 time/);
-});
-
-test("bash (local) rows count as terminal commands in group summaries", () => {
-  const html = renderToStaticMarkup(React.createElement(MessageView, {
-    isStreaming: true,
-    toolCallsDefaultCollapsed: true,
-    message: {
-      role: "assistant",
-      content: [
-        { type: "toolCall", toolCallId: "call-1", toolName: "bash", input: { command: "go vet ./..." } },
-        { type: "toolCall", toolCallId: "call-2", toolName: "bash (local)", input: { command: "go test ./..." } },
-      ],
-    },
-  }));
-
-  assert.match(html, /Ran 2 commands/);
+  assert.equal(html.match(/class="activity-row-trigger"/g)?.length, 3);
+  for (const target of ["a.ts", "b.ts", "test"]) assert.match(html, new RegExp(target));
 });
 
 test("todo tool calls render clean status badge with action and task name", () => {
