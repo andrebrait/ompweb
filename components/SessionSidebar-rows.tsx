@@ -142,12 +142,11 @@ function ProjectRow({
   const showWorktree = Boolean(worktreeBranch && onToggleWorktrees);
   const identityRowRef = useRef<HTMLDivElement>(null);
   const labelTextRef = useRef<HTMLSpanElement>(null);
-  const worktreeTextRef = useRef<HTMLSpanElement>(null);
   // Bumped when the row's width or the loaded fonts change: either can change the fit.
   const [layoutEpoch, setLayoutEpoch] = useState(0);
-  // The worktree selector sits beside the name, truncating the branch before
-  // the name. main/master never truncate inline: when either label would be
-  // cut off, the selector moves to its own line.
+  // The worktree selector sits beside the name and truncates its branch first,
+  // but never below the width of "master" (see its minWidth). Once even that
+  // much no longer fits beside the full name, the selector moves to its own line.
   const [worktreeOverflows, setWorktreeOverflows] = useState(false);
   const worktreeStacked = showWorktree && worktreeOverflows;
   useEffect(() => {
@@ -178,10 +177,9 @@ function ProjectRow({
     if (!aliasEditing) setWorktreeOverflows(false);
   }, [label, worktreeBranch, layoutEpoch, aliasEditing, hasActivity, showWorktree]);
   useLayoutEffect(() => {
-    const text = worktreeTextRef.current;
     const labelText = labelTextRef.current;
-    if (aliasEditing || worktreeOverflows || !text || !/^(main|master)$/.test(worktreeBranch ?? "")) return;
-    if (text.scrollWidth > text.clientWidth || (labelText && labelText.scrollWidth > labelText.clientWidth)) setWorktreeOverflows(true);
+    if (aliasEditing || worktreeOverflows || !showWorktree || !labelText) return;
+    if (labelText.scrollWidth > labelText.clientWidth) setWorktreeOverflows(true);
   }, [label, worktreeBranch, layoutEpoch, aliasEditing, hasActivity, showWorktree, worktreeOverflows]);
 
   return (
@@ -369,20 +367,22 @@ function ProjectRow({
               style={{
                 display: "inline-flex",
                 alignItems: "center",
-                gap: worktreeStacked ? 4 : 3,
-                // Inline: shrink before the workspace name does, down to the
-                // icon, padding and border (24px) plus three characters and
-                // the ellipsis. Nowrap text would otherwise keep min-content wide.
+                gap: 3,
+                // Inline: shrink before the workspace name does, but only down
+                // to the full width of "master" (shorter branches keep their
+                // full width): icons, gaps, padding and border (39px, +1 for
+                // sub-pixel rounding) plus up to six characters. Once the name
+                // must truncate too, the selector stacks instead.
                 flex: worktreeStacked ? "0 1 auto" : "0 1000 auto",
-                minWidth: worktreeStacked ? 0 : "calc(4ch + 24px)",
+                minWidth: worktreeStacked ? 0 : `calc(${Math.min((worktreeBranch ?? "").length, 6)}ch + 40px)`,
                 maxWidth: worktreeStacked ? "calc(100% - 28px)" : "100%",
-                height: worktreeStacked ? 26 : 22,
+                height: 24,
                 margin: worktreeStacked ? "2px 0 0 28px" : 0,
-                padding: worktreeStacked ? "0 6px" : "0 4px",
-                border: `1px solid ${worktreeStacked ? "var(--border)" : "transparent"}`,
+                padding: "0 5px",
+                border: "1px solid var(--border)",
                 borderRadius: "var(--radius-control)",
                 background: worktreeOpen ? "var(--bg-selected)" : "none",
-                color: worktreeOpen ? "var(--accent)" : worktreeStacked || hovered ? "var(--text-muted)" : "var(--text-dim)",
+                color: worktreeOpen ? "var(--accent)" : "var(--text-muted)",
                 cursor: "pointer",
                 fontFamily: "var(--font-mono)",
                 fontSize: 10.5,
@@ -391,8 +391,8 @@ function ProjectRow({
               }}
             >
               <GitBranch size={11} style={{ flexShrink: 0 }} aria-hidden="true" />
-              <span ref={worktreeTextRef} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{worktreeBranch}</span>
-              {worktreeStacked && <ChevronDown size={11} style={{ flexShrink: 0, opacity: 0.75 }} aria-hidden="true" />}
+              <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{worktreeBranch}</span>
+              <ChevronDown size={10} style={{ flexShrink: 0, opacity: 0.75 }} aria-hidden="true" />
             </button>
           )}
         </div>
