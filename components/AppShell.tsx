@@ -10,6 +10,7 @@ import { useNavigationHistory } from "@/hooks/useNavigationHistory";
 import { isMacPlatform, navigateShortcutHint, NAVIGATION_HISTORY_MAX_ENTRIES } from "@/lib/navigation-history";
 import { useMobileSidebarGestures } from "@/hooks/useMobileSidebarGestures";
 import { SessionSidebar } from "./SessionSidebar";
+import type { WorktreeContext } from "./SessionSidebar-helpers";
 import { ToastProvider } from "./ui/toast";
 import { toast } from "./ui/toast";
 import { ConfirmDialog } from "./ui/field";
@@ -980,7 +981,7 @@ export function AppShell({ appName }: { appName: string }) {
     }
   }, [isCompactOverlay]);
   const [rightPanelHasOpened, setRightPanelHasOpened] = useState(false);
-  const [rightView, setRightView] = useState<"explorer" | "git" | "file">("explorer");
+  const [rightView, setRightView] = useState<RightPanelView>("explorer");
   // User-chosen pixel width (null = fluid 42% default), persisted.
   const [rightPanelWidth, setRightPanelWidth] = useState<number | null>(null);
   const [rightPanelResizing, setRightPanelResizing] = useState(false);
@@ -1075,6 +1076,8 @@ export function AppShell({ appName }: { appName: string }) {
 
   const initialSessionId = initialNavigation.sessionId;
   const [activeCwd, setActiveCwd] = useState<string | null>(null);
+  // Owned by the sidebar; rendered by the file panel's Worktrees tab.
+  const [worktreeCtx, setWorktreeCtx] = useState<WorktreeContext | null>(null);
   // True once the initial ?session= URL param has been resolved (or confirmed absent)
   const [initialSessionRestored, setInitialSessionRestored] = useState<boolean>(() => !initialSessionId);
   // During the initial URL restore the sidebar adopts the restored cwd and
@@ -1567,9 +1570,10 @@ export function AppShell({ appName }: { appName: string }) {
   }, []);
 
   const activeFileTab = fileTabs.find((tab) => tab.id === activeFileTabId) ?? null;
-  // Explorer tab browses the active workspace: live cwd first, then the
-  // selected / new-session cwd (mirrors what the sidebar used to pass down).
-  const explorerCwd = activeCwd ?? selectedSession?.cwd ?? newSessionCwd ?? null;
+  // Explorer, Git, and the file viewers follow the open session's folder, then
+  // the sidebar's live cwd, then the new-session cwd. Relative paths (mention,
+  // copy path) resolve against the same folder so they match the Explorer.
+  const explorerCwd = selectedSession?.cwd ?? activeCwd ?? newSessionCwd ?? null;
   const handleOpenLinkedFile = useCallback((filePath: string) => {
     handleOpenFile(filePath, getFileName(filePath), selectedSession?.id ?? null);
   }, [handleOpenFile, selectedSession?.id]);
@@ -1578,17 +1582,17 @@ export function AppShell({ appName }: { appName: string }) {
   // panel behaves like an editor toolbar, not just a tab strip.
   const handleMentionActiveFile = useCallback(() => {
     if (!activeFileTab) return;
-    handleAtMention(getRelativeFilePath(activeFileTab.filePath, activeCwd ?? undefined), false);
-  }, [activeFileTab, activeCwd, handleAtMention]);
+    handleAtMention(getRelativeFilePath(activeFileTab.filePath, explorerCwd ?? undefined), false);
+  }, [activeFileTab, explorerCwd, handleAtMention]);
 
   const handleCopyActiveFilePath = useCallback(() => {
     if (!activeFileTab) return;
-    const relative = getRelativeFilePath(activeFileTab.filePath, activeCwd ?? undefined);
+    const relative = getRelativeFilePath(activeFileTab.filePath, explorerCwd ?? undefined);
     copyText(relative).then(
       () => toast.success(t("appShell.copied")),
       () => toast.error(t("appShell.commandCopyFailed")),
     );
-  }, [activeFileTab, activeCwd, t]);
+  }, [activeFileTab, explorerCwd, t]);
 
   const handleDownloadActiveFile = useCallback(() => {
     if (!activeFileTab) return;
@@ -1758,6 +1762,7 @@ export function AppShell({ appName }: { appName: string }) {
       selectedCwd={selectedSession?.cwd ?? newSessionCwd ?? null}
       onCwdChange={handleCwdChange}
       onWorkspaceOptionsChange={handleWorkspaceOptionsChange}
+      onWorktreeContextChange={setWorktreeCtx}
       addProjectOpen={addProjectOpen}
       setAddProjectOpen={setAddProjectOpen}
       usageVisible={providerUsageVisible}
@@ -2497,7 +2502,7 @@ export function AppShell({ appName }: { appName: string }) {
         revealPath={revealPath}
         onRevealDone={handleRevealDone}
         explorerCwd={explorerCwd}
-        activeCwd={activeCwd}
+        worktrees={worktreeCtx}
         explorerRefreshKey={explorerRefreshKey}
         fileSearchOpen={fileSearchOpen}
         onToggleFileSearch={handleToggleFileSearch}

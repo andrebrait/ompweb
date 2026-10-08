@@ -16,6 +16,19 @@ interface WorktreeState {
   isTopLevel: boolean;
   worktrees: WorktreeEntry[];
 }
+/** The active Git workspace's worktrees plus the actions that change them
+ *  (owned by SessionSidebar, rendered by the file panel's Worktrees tab). */
+interface WorktreeContext {
+  projectRoot: string;
+  worktrees: WorktreeEntry[];
+  /** Path of the worktree the workspace currently points at. */
+  currentPath: string;
+  select(path: string): void;
+  /** Creates the branch's worktree and selects it; rejects with an Error whose message is user-facing. */
+  create(branch: string): Promise<void>;
+  /** Resolves "dirty" when the worktree has uncommitted changes and force was false; rejects with a user-facing Error otherwise. */
+  remove(path: string, force: boolean): Promise<"removed" | "dirty">;
+}
 /** Normalize a repository/project path for use as a Git-state map key. The
  *  same physical repo may be reached via different path spellings (forward /
  *  back slashes, drive-letter casing); folding them makes distinct spellings
@@ -184,6 +197,7 @@ export {
   saveExpandedProjects,
   saveUnreadSessionIds,
   type SessionTreeNode,
+  type WorktreeContext,
   type WorktreeEntry,
   type WorktreeState,
 };

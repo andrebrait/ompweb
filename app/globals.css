@@ -1601,12 +1601,6 @@ pre, code {
   .sidebar-project-header {
     min-height: 44px;
   }
-  .sidebar-project-worktree button {
-    min-height: 40px;
-  }
-  .sidebar-project-worktree-toggle {
-    min-height: 32px;
-  }
   .session-item-row {
     min-height: 44px;
   }
@@ -1688,19 +1682,6 @@ pre, code {
 }
 .sidebar-project[data-active="true"] > .sidebar-project-header {
   box-shadow: inset 2px 0 0 var(--accent);
-}
-.sidebar-project-worktree {
-  margin: 0 0 0 32px;
-  padding: 0 0 2px 6px;
-  animation: sidebar-worktree-in var(--dur-fast) var(--ease-out-warm) both;
-}
-.sidebar-project-worktree > div {
-  width: auto !important;
-  margin: 0 !important;
-}
-.sidebar-project-worktree button {
-  width: 100% !important;
-  max-width: none !important;
 }
 
 /* New-session workspace picker: keep the destination legible without turning
@@ -1825,10 +1806,6 @@ pre, code {
   .new-session-workspace-chevron {
     transition: none;
   }
-}
-@keyframes sidebar-worktree-in {
-  from { opacity: 0; transform: translateY(-3px); }
-  to { opacity: 1; transform: translateY(0); }
 }
 .sidebar-project-sessions {
   animation: sidebar-sessions-in var(--dur-med) var(--ease-out-warm) both;
@@ -2167,7 +2144,7 @@ pre, code {
   .composer-toolbar { flex-wrap: nowrap !important; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .sidebar-project-sessions, .sidebar-project-worktree, .composer-control-shelf { animation: none; }
+  .sidebar-project-sessions, .composer-control-shelf { animation: none; }
 }
 
 @media (max-width: 640px) {

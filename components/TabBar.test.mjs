@@ -33,6 +33,8 @@ test("right-panel tabs support roving arrows, Home/End, and keyboard close", asy
     onSelectExplorer: () => selected.push("explorer"),
     gitSelected: false,
     onSelectGit: () => selected.push("git"),
+    worktreesSelected: false,
+    onSelectWorktrees: () => selected.push("worktrees"),
   }));
 
   const explorer = screen.getByRole("tab", { name: "Explorer" });
@@ -59,4 +61,9 @@ test("right-panel tabs support roving arrows, Home/End, and keyboard close", asy
 
   fireEvent.keyDown(beta, { key: "Delete" });
   assert.deepEqual(closed, ["beta"]);
+
+  fireEvent.keyDown(alpha, { key: "ArrowLeft" });
+  await nextFrame();
+  assert.equal(document.activeElement, screen.getByRole("tab", { name: "Worktrees" }));
+  assert.deepEqual(selected, ["beta", "explorer", "beta", "worktrees"]);
 });
