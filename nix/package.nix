@@ -18,12 +18,6 @@ let
     hash = "sha256-hntzxqlUpKZGFpBtF5+UVyp0h5Ch0CLr7v8H9W6gIho=";
   };
 
-  notoSerifSC = fetchurl {
-    name = "NotoSerifSC-VF.otf";
-    url = "https://raw.githubusercontent.com/notofonts/noto-cjk/Serif2.003/Serif/Variable/OTF/Subset/NotoSerifSC-VF.otf";
-    hash = "sha256-cbTT3tLZD/Q7t1pOSM2+Fw8LjVSG3In/h/KhcotW2mQ=";
-  };
-
   jetBrainsMono = fetchurl {
     name = "JetBrainsMono.ttf";
     url = "https://raw.githubusercontent.com/JetBrains/JetBrainsMono/v2.304/fonts/variable/JetBrainsMono%5Bwght%5D.ttf";
@@ -40,16 +34,18 @@ let
     diff --git a/app/layout.tsx b/app/layout.tsx
     --- a/app/layout.tsx
     +++ b/app/layout.tsx
-    @@ -1,45 +1,46 @@
+    @@ -1,28 +1,30 @@
      import type { Metadata, Viewport } from "next";
+     import { headers } from "next/headers";
      import Script from "next/script";
-    -import { Geist, JetBrains_Mono, Noto_Sans_Mono, Noto_Serif_SC, Source_Serif_4 } from "next/font/google";
+    -import { Geist, JetBrains_Mono, Noto_Sans_Mono, Source_Serif_4 } from "next/font/google";
     +import localFont from "next/font/local";
      import { ThemeColor } from "@/hooks/useTheme";
      import { IosFocusZoomGuard } from "@/components/IosFocusZoomGuard";
      import { SIDEBAR_HISTORY_BRIDGE_SCRIPT } from "@/lib/sidebar-history-bridge";
+     import { getInstallName } from "@/lib/install-name";
      import "./globals.css";
-
+     
     -const geist = Geist({
     -  subsets: ["latin"],
     +const geist = localFont({
@@ -58,7 +54,7 @@ let
        variable: "--font-geist",
        display: "swap",
      });
-
+     
     -const jetbrainsMono = JetBrains_Mono({
     -  subsets: ["latin"],
     -  weight: ["400", "500", "600"],
@@ -68,7 +64,7 @@ let
        variable: "--font-jb-mono",
        display: "swap",
      });
-
+     
     -const notoSansMono = Noto_Sans_Mono({
     -  subsets: ["latin", "cyrillic"],
     +const notoSansMono = localFont({
@@ -77,10 +73,10 @@ let
        variable: "--font-noto-mono",
        display: "swap",
      });
-
-     // Display serif pair for the warm-humanistic heading voice: Source Serif 4
-     // covers latin, Noto Serif SC covers CJK. Both expose CSS variables consumed
-     // by --font-serif in globals.css.
+    @@ -31,8 +33,9 @@
+     // latin; CJK uses a bundled Noto Serif SC subset declared in globals.css, not
+     // next/font/google: Google Fonts sometimes serves it through extensionless
+     // `/l/font?kit=` URLs that next/font cannot parse, which failed builds at random.
     -const sourceSerif = Source_Serif_4({
     -  subsets: ["latin"],
     +const sourceSerif = localFont({
@@ -89,19 +85,6 @@ let
        variable: "--font-source-serif",
        display: "swap",
      });
-
-    -const notoSerifSC = Noto_Serif_SC({
-    -  // CJK glyphs are served via unicode-range slices regardless of subset;
-    -  // "latin" satisfies next/font's preloading requirement.
-    -  subsets: ["latin"],
-    -  weight: ["600", "700"],
-    +const notoSerifSC = localFont({
-    +  src: "./fonts/NotoSerifSC-VF.otf",
-    +  weight: "200 900",
-       variable: "--font-noto-serif",
-       display: "swap",
-     });
-
   '';
 
   productionLib = lib.fileset.difference ../lib (
@@ -143,7 +126,6 @@ buildNpmPackage (finalAttrs: {
     mkdir -p app/fonts
     cp ${notoSansMono} app/fonts/NotoSansMono.ttf
     cp ${sourceSerif} app/fonts/SourceSerif4Variable-Roman.otf
-    cp ${notoSerifSC} app/fonts/NotoSerifSC-VF.otf
     cp ${jetBrainsMono} app/fonts/JetBrainsMono.ttf
     cp ${geist} app/fonts/Geist.ttf
   '';
