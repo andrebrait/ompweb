@@ -317,6 +317,7 @@ function install(options = {}) {
     OMP_WEB_HOSTNAME: hostname,
     OMP_WEB_NO_OPEN: process.env.OMP_WEB_NO_OPEN ?? "1",
     ...(process.env.OMP_WEB_DISABLE_AUTOUPDATE ? { OMP_WEB_DISABLE_AUTOUPDATE: process.env.OMP_WEB_DISABLE_AUTOUPDATE } : {}),
+    ...(process.env.OMP_WEB_NAME ? { OMP_WEB_NAME: process.env.OMP_WEB_NAME } : {}),
     ...(password ? { OMP_WEB_PASSWORD: password } : {}),
     ...(ompBin ? { OMP_WEB_OMP_BIN: ompBin } : {}),
     ...(agentDir ? { PI_CODING_AGENT_DIR: agentDir } : {}),

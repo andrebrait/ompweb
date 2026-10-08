@@ -77,6 +77,7 @@ function install(pkgArg) {
   const hostname = process.env.OMP_WEB_HOSTNAME ?? "127.0.0.1";
   const noOpen = process.env.OMP_WEB_NO_OPEN ?? "1";
   const disableAutoUpdate = process.env.OMP_WEB_DISABLE_AUTOUPDATE;
+  const installName = process.env.OMP_WEB_NAME;
   const password = process.env.OMP_WEB_PASSWORD;
   const agentDir = process.env.PI_CODING_AGENT_DIR?.replace(/^~(?=\/|$)/, HOME);
 
@@ -98,6 +99,7 @@ function install(pkgArg) {
     OMP_WEB_HOSTNAME: hostname,
     OMP_WEB_NO_OPEN: noOpen,
     ...(disableAutoUpdate ? { OMP_WEB_DISABLE_AUTOUPDATE: disableAutoUpdate } : {}),
+    ...(installName ? { OMP_WEB_NAME: installName } : {}),
     ...(password ? { OMP_WEB_PASSWORD: password } : {}),
     ...(ompBin ? { OMP_WEB_OMP_BIN: ompBin } : {}),
     ...(agentDir ? { PI_CODING_AGENT_DIR: agentDir } : {}),
