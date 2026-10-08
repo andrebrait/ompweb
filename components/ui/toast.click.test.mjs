@@ -128,3 +128,24 @@ test("a notification the OS showed is listed in history and opens its session fr
     toastHistory.clear();
   }
 });
+
+test("a push the service worker showed is listed in history and opens its session; other messages are ignored", async () => {
+  const sessions = [];
+  const { toastHistory } = await jiti.import("@/components/ui/toast");
+  const worker = new window.EventTarget();
+  Object.defineProperty(window.navigator, "serviceWorker", { configurable: true, value: worker });
+  try {
+    renderHook(() => useNotifications({ sessionId: null, locale: "en", onOpenSession: (id) => sessions.push(id) }));
+    const post = (data) => act(() => { worker.dispatchEvent(new window.MessageEvent("message", { data })); });
+    post({ type: "omp-notification-shown", notification: { type: "error", title: "Pushed", body: "Run failed", tag: "s7:error", sessionId: "s7" } });
+    post({ type: "omp-notification-shown", notification: { title: 42 } });
+    post("junk");
+    const entries = toastHistory.get();
+    assert.deepEqual(entries.map((e) => [e.id, e.kind, e.title]), [["s7:error", "error", "Pushed"]]);
+    entries[0].onClick();
+    assert.deepEqual(sessions, ["s7"]);
+  } finally {
+    delete window.navigator.serviceWorker;
+    toastHistory.clear();
+  }
+});

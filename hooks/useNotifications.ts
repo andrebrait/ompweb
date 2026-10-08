@@ -2,6 +2,7 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import { toast, toastHistory } from "@/components/ui/toast";
 import { translate } from "@/lib/i18n";
 import { DEFAULT_NOTIFICATION_PREFS, renderNotification, type NotificationEvent, type RenderedNotification } from "@/lib/notification-events";
+import { isRecord } from "@/lib/type-guards";
 import {
   ensurePushSubscription,
   getNotificationDeviceId,
@@ -131,9 +132,16 @@ export function useNotifications({ sessionId, locale, onOpenSession }: { session
     };
     const onWorkerMessage = (message: MessageEvent) => {
       const data: unknown = message.data;
-      if (data && typeof data === "object" && "type" in data && data.type === "omp-open-session" && "sessionId" in data && typeof data.sessionId === "string") {
+      if (!isRecord(data)) return;
+      if (data.type === "omp-open-session" && typeof data.sessionId === "string") {
         openRef.current(data.sessionId);
+        return;
       }
+      // A push the service worker showed while this tab was open (subscribed browsers get pushes, not "os" frames).
+      const shown = data.notification;
+      if (data.type !== "omp-notification-shown" || !isRecord(shown) || typeof shown.title !== "string" || typeof shown.body !== "string" || typeof shown.tag !== "string" || typeof shown.sessionId !== "string") return;
+      const target = shown.sessionId;
+      toastHistory.record(shown.type === "error" ? "error" : "info", shown.title, shown.body, { id: shown.tag || undefined, onClick: target ? () => openRef.current(target) : undefined });
     };
     window.addEventListener(NOTIFICATION_MESSAGE_EVENT, onMessage);
     window.addEventListener(OPEN_SESSION_EVENT, onOpen);
