@@ -2,7 +2,7 @@
 
 import { Children, cloneElement, isValidElement, useContext, useMemo, type ComponentProps, type MouseEvent, type ReactElement, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
-import { resolveLocalFileHref } from "@/lib/file-links";
+import { remarkInlineCodeFileLinks, resolveLocalFileHref } from "@/lib/file-links";
 import { encodeFilePathForApi } from "@/lib/file-paths";
 import { AgentLinkContext, agentAwareUrlTransform, agentLinkIds, remarkAgentLinks } from "../lib/agent-links";
 import { GithubRepoContext, remarkGithubRefs } from "../lib/github-refs";
@@ -24,9 +24,13 @@ export function MarkdownBody({ children, className, isStreaming, cwd, onOpenFile
   const { remarkPlugins: baseRemarkPlugins, rehypePlugins } = useMarkdownPlugins(normalizedMarkdown);
   const githubRepo = useContext(GithubRepoContext);
   // GitHub refs run first: `agent://Foo#12` must not become an issue link.
+  // Inline-code paths link only where a click can open them.
   const remarkPlugins = useMemo<MarkdownPlugins["remarkPlugins"]>(
-    () => [...baseRemarkPlugins, [remarkGithubRefs, { repo: githubRepo }], remarkAgentLinks],
-    [baseRemarkPlugins, githubRepo],
+    () => {
+      const plugins: MarkdownPlugins["remarkPlugins"] = [...baseRemarkPlugins, [remarkGithubRefs, { repo: githubRepo }], remarkAgentLinks];
+      return onOpenFile ? [...plugins, [remarkInlineCodeFileLinks, { cwd }]] : plugins;
+    },
+    [baseRemarkPlugins, githubRepo, onOpenFile, cwd],
   );
   const openAgentLink = useContext(AgentLinkContext);
 

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { apiErrorResponse } from "@/lib/api-utils";
 import { getContentDisposition } from "@/lib/content-disposition";
 import fs from "fs";
+import { homedir } from "os";
 import path from "path";
 import {
   getAllowedFileRoots,
@@ -93,6 +94,9 @@ function filePathFromSegments(segments: string[]): string {
  * `getUploadDirectory`): a relative upload path must not select the target dir.
  */
 function resolveReadFilePath(segments: string[], allowedRoots: Set<string>): string {
+  // `~/…` chat links name the server user's home, as the agent's shell did.
+  // The expanded path then faces the same root/reference checks as any other.
+  if (segments[0] === "~") return normalizeSlashes(path.join(homedir(), ...segments.slice(1)));
   const absolutePath = filePathFromSegments(segments);
   if (isFilePathAllowed(absolutePath, allowedRoots)) return absolutePath;
   return resolveRequestedFilePath(segments.join("/"), allowedRoots) ?? absolutePath;
