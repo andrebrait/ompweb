@@ -64,7 +64,10 @@ app/api/
   agent/new/route.ts              POST { cwd, message, toolNames?, provider?, modelId? }
   agent/[id]/route.ts             GET state | POST any RPC command
   agent/[id]/events/route.ts      GET SSE stream
-  agent/running/events/route.ts   GET SSE stream of currently-running session ids
+  agent/running/events/route.ts   GET SSE stream of currently-running session ids (+ this tab's notifications)
+  notifications/devices/route.ts  GET VAPID key + subscribed | PUT { deviceId, prefs, subscription? }
+  notifications/presence/route.ts POST { clientId, deviceId, visible, sessionId, seq }
+  notifications/test/route.ts     POST { deviceId } send a test push (502 on push-service refusal)
   auth/**                         provider list, login/logout, API keys (via RPC)
   cwd/validate/route.ts           POST validate/select a cwd
   default-cwd/route.ts            POST create ~/omp-cwd-YYYYMMDD
@@ -106,6 +109,9 @@ lib/
   pi-types.ts          local structural types for agent/RPC objects
   project-ordering.ts  pure project sort/group/activity helpers (client + tests)
   project-registry.ts  on-disk managed-project registry (~/.omp/agent/projects.json)
+  notification-events.ts  shared: event/prefs types, frame→event detector, renderNotification()
+  notification-hub.ts  server: presence, device store + VAPID keys, routing, Web Push
+  notification-client.ts  browser: device id, prefs store, service worker + push subscription
   rpc-manager.ts       session registry + startRpcSession over RpcProcess
   session-reader.ts    session .jsonl parsing + path cache + buildSessionContext
   session-resume.ts    running-session list for auto-resume after a restart
@@ -147,6 +153,7 @@ components/
 hooks/
   useAgentSession.ts       messages + streaming + SSE + fork/navigate/reconciliation logic
   useAudio.ts              completion sound + browser AudioContext unlock
+  useNotifications.ts      presence reports, toast/system delivery, notification clicks
   useDragDrop.ts           shared drag/drop state
   useIsMobile.ts           responsive breakpoint hook
   usePrefersReducedMotion.ts OS reduce-motion preference (SMIL-safe)
@@ -601,6 +608,59 @@ during the wait.
 - `hooks/useAudio.ts` stores the toggle in `localStorage` and reuses one `AudioContext`.
 - Browser autoplay policy means sound must be unlocked from a user gesture; `ChatInput` calls the unlock hook from interactive controls, and `ChatWindow` plays the tone from `onAgentEnd`.
 
+### Notifications (`lib/notification-*.ts`, `public/sw.js`, Settings → Notifications)
+- Detection runs on the server in `AgentSessionWrapper.handleFrame` (and
+  `handleProcessExit` for crashes), so sessions no tab watches still notify.
+  `createNotificationDetector()` only inspects top-level frames; subagent
+  activity is wrapped in `subagent_*` frames and never notifies. "Completed"
+  fires on `session_settled` (not `prompt_result`), so background work started
+  by the prompt is done too; a failed or aborted last prompt suppresses it.
+  Auto-approved tool confirmations return before the hook and never notify.
+  omp sends `retry_fallback_applied` before the `auto_retry_start` of the same
+  failure, so the detector holds a reason-less fallback until that frame.
+  Failures also arrive as omp-web's own `prompt_error` (failed `response`) and
+  `process_exit` frames; the detector reports one failure per run.
+- A session omp moved to a new file keeps its old ids as `aliases` on the
+  event, so a tab still showing an old id counts as viewing it.
+- Presence and streams are separate on purpose. Presence: each tab reports
+  `{clientId, deviceId, visible, sessionId}` to `/api/notifications/presence`
+  (visibility/session change, input after idling, every 30 s while present;
+  expires 60 s after receipt). `visible` means visible AND input within 3 min.
+  `sessionId` is null while full-page Settings hides the chat. Streams: the
+  tab's open SSE connections (`attachNotificationClient`), which reconnect and
+  overlap independently of presence. `clientId` is per page load, `deviceId`
+  per browser (`localStorage`). Reports carry a per-page `seq`; the server
+  drops one older than the stored report (requests can arrive out of order).
+  Prefs PUTs run one at a time and read the prefs when sent, for the same reason.
+- Routing (`routeNotification`, unit-tested): a visible tab on the session
+  drops the event everywhere (presence only, so a reconnecting stream cannot
+  leak it); else if a visible tab with an open stream exists, `whenActive:
+  "toast"` devices get a toast on their active tabs only; else push (subscribed
+  devices) or in-page `showNotification` (tabs with an open stream).
+- The server decides before pushing: iOS revokes push permission for pushes
+  that display nothing, so `public/sw.js` always shows what it receives.
+- Notifications ride the sidebar's `/api/agent/running/events?clientId=` stream,
+  not a new SSE connection: browsers allow six HTTP/1.1 connections per host.
+  `SessionSidebar` re-dispatches them as a window event. The sidebar unmounts
+  while Settings is open, so that tab gets no toasts then; it also stops
+  counting as active, so other devices are not silenced.
+- Prefs and push subscriptions are per device, in `localStorage` and mirrored to
+  `~/.omp/agent/omp-web/notifications.json` (mode 0600; also holds the VAPID
+  private key). The server reads that file on every use, never caching it: an
+  installed server and `npm run dev` can share the agent dir. Push text is
+  rendered server-side in the device's locale. Browsers with saved settings (enabled or not) sync on load; never-configured browsers do not.
+- A crash notifies "Run failed" while a run is live or while background work
+  started by it has not settled yet (`unsettled`, cleared by `session_settled`).
+- The Settings test button pushes through the server for subscribed devices
+  (502 with the push service's answer on failure) and shows a local
+  notification otherwise, or a toast where none are allowed.
+- `/sw.js` and `/badge-96.png` are exempt from the password gate (`proxy.ts`):
+  browsers re-fetch the worker for updates without the session cookie.
+- Notification clicks survive an expired sign-in: `proxy.ts` sends `/?session=…`
+  to `/login?next=/?session=…`, and `LoginForm` returns there (only `/?…`
+  targets are accepted). The worker navigates non-app windows to the session
+  URL; the app falls back to that URL when `/api/sessions` cannot be read.
+
 ## omp Session File Format (v3)
 
 Location: `~/.omp/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`
@@ -658,6 +718,9 @@ list) and carry `data-swipe-dismiss`, which the mobile sidebar gesture skips.
 the whole travel. `createSwipeTracker` cancels a swipe the finger turned back
 (16px from its farthest point), as on Android; for toasts the release is
 converted into the `pointercancel` base-ui treats as "snap back".
+The `onClick` option makes the whole card the action: a click outside its
+buttons, links and expandable text, ignoring drags and text selection, or Enter
+on the focused card. There is no separate action button).
 Icons come from `lucide-react` — do not add new inline SVGs. The command
 palette (`components/CommandPalette.tsx`, ⌘K/Ctrl+K) is built on `cmdk`.
 

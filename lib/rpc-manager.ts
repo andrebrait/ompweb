@@ -20,6 +20,8 @@ import { PRESET_FULL } from "./tool-presets";
 import { comparableProjectPath } from "./comparable-path";
 import { samePath } from "./paths";
 import { isRecord } from "./type-guards";
+import { BLOCKING_UI_METHODS, createNotificationDetector } from "./notification-events";
+import { publishNotification } from "./notification-hub";
 import { parseSkillDiagnosticsSnapshot, type SkillDiagnosticsSnapshot } from "./skill-diagnostics";
 import { isReservedLaunchArg, loadProjectRegistry } from "./project-registry";
 import { eventWithToolResultImageUrls } from "./media-cache";
@@ -108,10 +110,6 @@ export class WebRpcError extends Error {
     this.code = code;
   }
 }
-
-// Extension UI methods that stay pending until the client answers (replayed to
-// newly-attached SSE listeners so dialogs survive reconnects).
-const PENDING_UI_METHODS = new Set(["select", "confirm", "input", "editor", "ask", "open_url"]);
 
 /** Shape check for an ask-dialog `answers` payload; omp validates the content. */
 function isAskAnswers(value: unknown): boolean {
@@ -330,6 +328,11 @@ export class AgentSessionWrapper {
    * the same conversation moving to a sibling file, not a session switch. */
   private sessionMovePending = false;
   private unsubscribeFrames: (() => void) | null = null;
+  private readonly detectNotification = createNotificationDetector();
+  /** Agent activity since the last `session_settled`: background work may still run after the turn ended. */
+  private unsettled = false;
+  /** Ids this conversation had before omp moved it to a new file. */
+  private readonly movedFromIds: string[] = [];
   private initPromise: Promise<void> | null = null;
   private restarting = false;
   private mcpListWaiter: { resolve: (text: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> } | null = null;
@@ -553,6 +556,8 @@ export class AgentSessionWrapper {
       this.awaitingAgentStart = false;
       this.awaitingAgentStartDeadline = 0;
       this.continuationGraceUntil = 0;
+      // A different conversation now: the old one's ids must not suppress its notifications.
+      this.movedFromIds.length = 0;
     }
     this._sessionId = state.sessionId;
     this._sessionFile = state.sessionFile ?? "";
@@ -564,6 +569,8 @@ export class AgentSessionWrapper {
     if (moved) {
       this.sessionMovePending = false;
       if (oldId !== this._sessionId) {
+        // Tabs still showing the old id are still viewing this conversation.
+        this.movedFromIds.push(oldId);
         // Keep the old id routable: other tabs still address it, and a fresh
         // `--resume` of the old file would fork again (its owner lives on).
         this.onIdentityChangeCallback?.(oldId, this._sessionId, { keepOldId: true });
@@ -659,7 +666,20 @@ export class AgentSessionWrapper {
     // Terminal agent_end so a client mid-stream stops spinning immediately
     // instead of waiting for the reconcile poll.
     if (this.streaming || this.promptRunning) this.emit({ type: "agent_end", isTerminal: true, messages: [] });
+    if (this.streaming || this.promptRunning || this.unsettled) {
+      this.publishNotifications({ type: "process_exit", detail: detail || status });
+    }
     this.destroy();
+  }
+
+  private publishNotifications(frame: Record<string, unknown>): void {
+    const session = {
+      sessionId: this._sessionId,
+      sessionName: this._sessionName || this.cwd.split(/[\\/]/).filter(Boolean).pop() || null,
+    };
+    for (const notification of this.detectNotification(frame, session)) {
+      publishNotification(this.movedFromIds.length ? { ...notification, aliases: this.movedFromIds } : notification);
+    }
   }
 
   private handleFrame(frame: RpcFrame): void {
@@ -682,6 +702,7 @@ export class AgentSessionWrapper {
         break;
       }
       case "agent_start":
+        this.unsettled = true;
         this.promptRunning = true;
         this.streaming = true;
         this.awaitingAgentStart = false;
@@ -713,6 +734,9 @@ export class AgentSessionWrapper {
         } else {
           this.continuationGraceUntil = Date.now() + NON_TERMINAL_CONTINUATION_GRACE_MS;
         }
+        break;
+      case "session_settled":
+        this.unsettled = false;
         break;
       case "prompt_result":
         // Local-only prompt (builtin/extension slash command) — no agent run.
@@ -768,7 +792,9 @@ export class AgentSessionWrapper {
           this.promptRunning = false;
           this.awaitingAgentStart = false;
           this.awaitingAgentStartDeadline = 0;
-          this.emit({ type: "prompt_error", errorMessage: detail, error: event.error, command: event.command });
+          const promptError = { type: "prompt_error", errorMessage: detail, error: event.error, command: event.command };
+          this.publishNotifications(promptError);
+          this.emit(promptError);
           notifyRunningChange();
           return;
         }
@@ -856,6 +882,7 @@ export class AgentSessionWrapper {
       }
     }
 
+    this.publishNotifications(event);
     this.emit(event);
     notifyRunningChange({ refreshSessionList });
   }
@@ -896,7 +923,9 @@ export class AgentSessionWrapper {
       this.proc.sendFrame({ type: "extension_ui_response", id, confirmed: true });
       return true;
     }
-    if (PENDING_UI_METHODS.has(method)) {
+    // Blocking dialogs stay pending until the client answers (replayed to
+    // newly-attached SSE listeners so dialogs survive reconnects).
+    if (BLOCKING_UI_METHODS.has(method)) {
       this.forgetPendingUiRequest(id);
       const timeout = typeof event.timeout === "number" ? event.timeout : undefined;
       if (timeout && timeout > 0) {

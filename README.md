@@ -64,6 +64,31 @@ available for a selected running session when notices are off. Inspection does
 not resume stopped sessions. Missing support or no running session is unavailable,
 not a clean result.
 
+## Notifications
+
+Turn on notifications in **Settings → Notifications**. Each browser keeps its own
+settings: which events notify (task finished, waiting for input, run failed,
+model switched automatically) and what happens while you use omp-web in another
+tab (an in-app toast, or always a system notification). Nothing is shown for the
+session you are viewing. Clicking a notification opens its session.
+
+- **Push** reaches the browser even when no omp-web tab is open. It needs a
+  secure context (HTTPS through your reverse proxy, or `localhost`), and the
+  omp-web server needs outbound HTTPS access to the browser vendors' push
+  services. omp-web generates its push (VAPID) keys on first use and stores them
+  with the device list in `~/.omp/agent/omp-web/notifications.json` (mode 0600).
+- On **iPhone and iPad** (iOS 16.4 or later), push works only in the app added
+  to the Home Screen.
+- In a secure context without push support, system notifications appear while
+  an omp-web tab is open. Over plain HTTP on a non-localhost address, browsers
+  allow no system notifications: only the in-app toasts shown while you use
+  omp-web remain.
+- Desktop browsers show notifications through the operating system's
+  notification center. Push delivery needs the browser process running.
+
+Completion notifications use omp's `prompt_result` and `session_settled` RPC
+frames (omp 18.3.1 or later).
+
 ## Quick Start
 
 **Run directly without installing:**
@@ -241,7 +266,8 @@ host (KDE Plasma, and most Wayland/X11 desktops).
 - **Windows System Tray & Service**: Background service, tray icon, logon autostart, and Desktop/Start Menu shortcuts (Windows).
 - **macOS launchd Service**: LaunchAgent that starts at login, restarts on crash, and logs under `~/Library/Logs/ompweb`.
 - **Linux systemd Service & Tray**: User service that starts at login and restarts on crash, plus a StatusNotifierItem tray icon with service controls (KDE Plasma and compatible desktops).
-- **Web-based Settings** (8 tabs): Interface & Behavior, Safety & Approvals, AI Model Defaults, API Keys & Providers, Usage, Agent & Intelligence (advisor, memory, compaction), Agents, Extensions & Tools (MCP, skills, plugins), System & Updates.
+- **Notifications**: Desktop and mobile (PWA) notifications for finished tasks, questions waiting for an answer, failed runs, and automatic model switches, with Web Push when served over HTTPS. See [Notifications](#notifications).
+- **Web-based Settings** (10 tabs): Interface & Behavior, Safety & Approvals, AI Model Defaults, API Keys & Providers, Usage, Agent & Intelligence (advisor, memory, compaction), Agents, Extensions & Tools (MCP, skills, plugins), Notifications, System & Updates.
 - **Slash Commands & Shortcuts**: Quick prompts (`/plan`, `/review`, `/fix`, `/test`, etc.), `⌘K` / `Ctrl+K` palette, and model/reasoning cycling.
 - **UI Themes & Localization**: Warm paper light/dark themes plus an omp.sh-inspired midnight (`omp`) theme, chat font size & interface scale, with full English, Chinese (简体中文), and Japanese (日本語) translations.
 

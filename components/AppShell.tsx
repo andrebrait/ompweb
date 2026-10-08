@@ -33,7 +33,7 @@ import { buildAtMentionText, buildFileAtMentionsText, buildFileLineMentionText }
 import { getInitialNavigation } from "@/lib/initial-navigation";
 import { comparableProjectPath } from "@/lib/comparable-path";
 import { clearDraft } from "@/lib/draft-store";
-import { showCompletionNotification } from "@/lib/browser-notifications";
+import { useNotifications } from "@/hooks/useNotifications";
 import {
   APP_UPDATE_COMPLETED_RELOAD_MS,
   APP_UPDATE_POLL_MS,
@@ -1345,31 +1345,34 @@ export function AppShell({ appName }: { appName: string }) {
   const handleAgentEnd = useCallback(() => {
     setRefreshKey((k) => k + 1);
     setExplorerRefreshKey((k) => k + 1);
-    if (document.visibilityState !== "hidden") return;
+  }, []);
 
-    const targetSession = selectedSession;
-    const title = targetSession?.name ?? translate("appShell.sessionComplete");
-    const body = translate("appShell.taskFinished");
-    const notify = () => {
-      toastHistory.record("info", title, body);
-      showCompletionNotification(title, body, () => {
-        window.focus();
-        if (targetSession) handleSelectSession(targetSession);
-      });
-    };
-    // Without OS notification support or permission, surface the completion as
-    // an in-app toast (which also lands in the notification center).
-    if (!("Notification" in window)) toast.info(title, body);
-    else if (Notification.permission === "granted") notify();
-    else if (Notification.permission === "default") {
-      void Notification.requestPermission().then((permission) => {
-        if (permission === "granted") notify();
-        else toast.info(title, body);
-      });
-    } else {
-      toast.info(title, body);
-    }
-  }, [handleSelectSession, selectedSession]);
+  // Notification clicks name a session id; the session list carries its cwd
+  // and project, which selecting needs. When the list cannot be read (the
+  // sign-in expired), load the session URL: sign-in carries it through.
+  const openSessionById = useCallback((sessionId: string) => {
+    window.focus();
+    // On narrow screens the file panel covers the chat it is about to show.
+    if (isCompactOverlay) setRightPanelOpen(false);
+    // A full load (not router navigation) so an expired sign-in reaches proxy.ts and the login page.
+    const sessionUrl = new URL(`/?session=${encodeURIComponent(sessionId)}`, window.location.origin).href;
+    void fetch("/api/sessions")
+      .then((r) => {
+        if (!r.ok) {
+          window.location.assign(sessionUrl);
+          return;
+        }
+        return (r.json() as Promise<{ sessions: SessionInfo[] }>).then((d) => {
+          const session = d.sessions.find((s) => s.id === sessionId);
+          if (session) handleSelectSession(session);
+          else toast.error(translate("notifications.sessionNotFound"));
+        });
+      })
+      .catch(() => window.location.assign(sessionUrl));
+  }, [handleSelectSession, isCompactOverlay]);
+
+  // Full-page Settings hides the chat, so its session counts as not viewed.
+  useNotifications({ sessionId: settingsTab ? null : selectedSession?.id ?? null, locale, onOpenSession: openSessionById });
 
   const handleAutoName = useCallback(async () => {
     const sessionId = selectedSession?.id;

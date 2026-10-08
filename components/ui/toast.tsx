@@ -22,6 +22,7 @@ interface ToastData {
   kind?: ToastKind;
   /** Clamp the description to 2 lines; click the description to expand it. */
   clamp?: boolean;
+  onClick?: () => void;
 }
 
 interface ToastOptions {
@@ -35,6 +36,11 @@ interface ToastOptions {
   id?: string;
   /** Fired when the toast closes (dismissed by the user, `toast.close`, or timeout). */
   onClose?: () => void;
+  /**
+   * Runs when the card itself is clicked (anywhere but its buttons, links and
+   * expandable text), then closes the toast.
+   */
+  onClick?: () => void;
 }
 
 const manager = Toast.createToastManager<ToastData>();
@@ -109,7 +115,7 @@ function add(kind: ToastKind, title: React.ReactNode, description?: React.ReactN
     title,
     description,
     type: kind,
-    data: { kind, clamp: options?.clamp },
+    data: { kind, clamp: options?.clamp, onClick: options?.onClick },
     timeout,
     ...(options?.onClose ? { onClose: options.onClose } : {}),
   });
@@ -251,6 +257,10 @@ function Toaster() {
   const isMobile = useIsMobile();
   const clickGuard = useDragClickGuard();
   const swipe = useRef<{ id: number; tracker: SwipeTracker } | null>(null);
+  // Press origin for the whole-card onClick action below: base-ui captures the
+  // pointer for its swipe, which retargets the click to the card, so the
+  // action judges the element that was pressed instead of the click target.
+  const press = useRef<{ x: number; y: number; target: EventTarget | null; travel: number } | null>(null);
   // Clear the app chrome (topbar 36/44px + tab bar 36px) with a safe gap so
   // toasts never cover the header, tabs, or chat content.
   const topOffset = isMobile ? 88 : 80;
@@ -282,10 +292,13 @@ function Toaster() {
               // A mouse drag selects text (e.g. to copy an error), as on any page.
               if (event.pointerType === "mouse") event.preventBaseUIHandler();
               else swipe.current = { id: event.pointerId, tracker: createSwipeTracker(event.clientX) };
+              press.current = { x: event.clientX, y: event.clientY, target: event.target, travel: 0 };
             }}
             onPointerMove={(event) => {
               clickGuard.onPointerMove(event);
               if (swipe.current?.id === event.pointerId) swipe.current.tracker.track(event.clientX);
+              const from = press.current;
+              if (from) from.travel = Math.max(from.travel, Math.hypot(event.clientX - from.x, event.clientY - from.y));
             }}
             onPointerUp={(event) => {
               const current = swipe.current;
@@ -299,8 +312,34 @@ function Toaster() {
               event.currentTarget.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, pointerId: event.pointerId, pointerType: event.pointerType }));
             }}
             onClickCapture={clickGuard.onClickCapture}
+            onClick={t.data?.onClick ? (event) => {
+              const onClick = t.data?.onClick;
+              const from = press.current;
+              press.current = null;
+              // base-ui captures the pointer for its swipe, which retargets the
+              // click to the card; judge the element that was pressed instead.
+              const pointerClick = from && event.detail !== 0;
+              const target = pointerClick ? from.target : event.target;
+              if (!onClick || (target instanceof Element && target.closest("button, a, input, textarea, select, [aria-expanded]"))) return;
+              // A drag that fell short of a swipe, even one brought back to where
+              // it started, is not a click (detail 0: keyboard).
+              if (pointerClick && Math.max(from.travel, Math.hypot(event.clientX - from.x, event.clientY - from.y)) > 10) return;
+              // Releasing a text selection is not a request to open anything.
+              if (window.getSelection()?.isCollapsed === false) return;
+              manager.close(t.id);
+              onClick();
+            } : undefined}
+            // The card is focusable (base-ui gives it tabIndex 0): Enter on it
+            // runs the action, which has no separate button.
+            onKeyDown={t.data?.onClick ? (event) => {
+              if (event.key !== "Enter" || event.target !== event.currentTarget) return;
+              event.preventDefault();
+              manager.close(t.id);
+              t.data?.onClick?.();
+            } : undefined}
             style={{
               pointerEvents: "auto",
+              cursor: t.data?.onClick ? "pointer" : undefined,
               display: "flex",
               alignItems: "flex-start",
               gap: 8,

@@ -22,11 +22,16 @@ export function proxy(request: NextRequest) {
   if (pathname.startsWith("/api/")) {
     return NextResponse.json({ error: "Password required", code: "password_required" }, { status: 401 });
   }
-  return NextResponse.redirect(new URL("/login", request.url));
+  const login = new URL("/login", request.url);
+  // Keep a deep link to a session (e.g. a notification click) across sign-in.
+  if (pathname === "/" && request.nextUrl.search) login.searchParams.set("next", `/${request.nextUrl.search}`);
+  return NextResponse.redirect(login);
 }
 
 // The sign-in screen still needs its Next.js JavaScript and CSS before a
 // session exists; these and the ordinary browser icons are public assets,
 // not workspace data. /api/manifest stays authenticated: its link includes
 // credentials and its embedded installation icons need no separate request.
-export const config = { matcher: "/((?!_next/static|_next/image|favicon\\.ico|icon\\.svg|icon\\.png|icon-192\\.png).*)" };
+// The service worker script holds no data either, and the browser re-fetches
+// it for update checks even after the sign-in cookie expired.
+export const config = { matcher: "/((?!_next/static|_next/image|favicon\\.ico|icon\\.svg|icon\\.png|icon-192\\.png|badge-96\\.png|sw\\.js).*)" };
