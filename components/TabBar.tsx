@@ -17,7 +17,7 @@ interface Props {
   activeTabId: string;
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
-  /** Pinned Explorer tab rendered before the file tabs (right-panel tab redesign). */
+  /** Pinned Explorer tab rendered after Notifications, before the file tabs (right-panel tab redesign). */
   explorerSelected?: boolean;
   onSelectExplorer?: () => void;
   /** Changed-file count badge on the Explorer tab. */
@@ -27,7 +27,7 @@ interface Props {
   onSelectGit?: () => void;
   /** Changed-file count badge on the Git tab. */
   gitBadge?: number;
-  /** Pinned Notifications tab rendered after Git. */
+  /** Pinned Notifications tab rendered first. */
   notificationsSelected?: boolean;
   onSelectNotifications?: () => void;
   /** Unread-notification count badge on the Notifications tab. */
@@ -47,7 +47,7 @@ const badgeStyle = (color: string) => ({
   fontWeight: 700,
 });
 
-/** Explorer / Git / Notifications: fixed tabs before the file tabs. */
+/** Notifications / Explorer / Git: fixed tabs before the file tabs. */
 function PinnedTab({ id, panelId, label, title, icon, selected, badge, badgeColor, onSelect, onKeyDown }: {
   id: string;
   panelId: string;
@@ -126,9 +126,9 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, explorerSel
   const [hoveredClose, setHoveredClose] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const orderedTabIds = [
+    ...(onSelectNotifications ? ["notifications"] : []),
     ...(onSelectExplorer ? ["explorer"] : []),
     ...(onSelectGit ? ["git"] : []),
-    ...(onSelectNotifications ? ["notifications"] : []),
     ...tabs.map((tab) => tab.id),
   ];
 
@@ -207,6 +207,20 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, explorerSel
         height: "var(--tab-height)",
       }}
     >
+      {onSelectNotifications && (
+        <PinnedTab
+          id="notifications"
+          panelId="workspace-file-panel-notifications"
+          label={t("appShell.notifications")}
+          title={notificationsBadge > 0 ? t("appShell.notificationsUnreadCount", { count: notificationsBadge }) : t("appShell.notifications")}
+          icon={<Bell size={13} strokeWidth={2} aria-hidden="true" />}
+          selected={notificationsSelected}
+          badge={notificationsBadge}
+          badgeColor="var(--accent)"
+          onSelect={onSelectNotifications}
+          onKeyDown={handleTabKeyDown}
+        />
+      )}
       {onSelectExplorer && (
         <PinnedTab
           id="explorer"
@@ -232,20 +246,6 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, explorerSel
           badge={gitBadge}
           badgeColor="var(--status-modified)"
           onSelect={onSelectGit}
-          onKeyDown={handleTabKeyDown}
-        />
-      )}
-      {onSelectNotifications && (
-        <PinnedTab
-          id="notifications"
-          panelId="workspace-file-panel-notifications"
-          label={t("appShell.notifications")}
-          title={notificationsBadge > 0 ? t("appShell.notificationsUnreadCount", { count: notificationsBadge }) : t("appShell.notifications")}
-          icon={<Bell size={13} strokeWidth={2} aria-hidden="true" />}
-          selected={notificationsSelected}
-          badge={notificationsBadge}
-          badgeColor="var(--accent)"
-          onSelect={onSelectNotifications}
           onKeyDown={handleTabKeyDown}
         />
       )}
