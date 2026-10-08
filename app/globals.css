@@ -1287,9 +1287,11 @@ pre, code {
 }
 
 .image-lightbox-dialog {
-  width: 100vw;
+  /* Viewport units ignore the root zoom (Interface Scale): divide so the
+     viewer covers exactly the window and "fit" fits the visible area. */
+  width: calc(100vw / var(--ui-scale));
   max-width: none;
-  height: 100dvh;
+  height: calc(100dvh / var(--ui-scale));
   max-height: none;
   margin: 0;
   padding: 0;
@@ -1307,8 +1309,9 @@ pre, code {
 }
 .image-lightbox-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 6px 10px;
   min-height: 40px;
   padding: 7px 10px;
   background: var(--bg-panel);
@@ -1326,12 +1329,15 @@ pre, code {
 }
 .image-lightbox-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
   gap: 6px;
   margin-left: auto;
 }
 .image-lightbox-stepper {
   display: flex;
+  flex: none;
   align-items: center;
   height: 24px;
   overflow: hidden;
@@ -1364,6 +1370,18 @@ pre, code {
   flex: 0 0 24px;
   border: 1px solid var(--border);
   border-radius: 5px;
+}
+.image-lightbox-actual-size {
+  flex-basis: auto;
+  width: auto;
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+.image-lightbox-icon-button[aria-pressed="true"] {
+  background: var(--bg-selected);
+  color: var(--text);
 }
 .image-lightbox-stepper button:hover:not(:disabled),
 .image-lightbox-icon-button:hover {
@@ -1400,10 +1418,10 @@ pre, code {
 }
 .image-lightbox-dialog .image-lightbox-img {
   display: block;
+  flex: none;
   margin: auto;
   max-width: none;
-  height: auto;
-  transition: transform var(--dur-fast) var(--ease-out-warm);
+  max-height: none;
 }
 
 @media (max-width: 480px) {
@@ -1418,6 +1436,12 @@ pre, code {
   .image-lightbox-viewport {
     padding: 12px;
   }
+}
+html[data-touch-targets="accessible"] .image-lightbox-stepper,
+html[data-touch-targets="accessible"] :is(.image-lightbox-stepper button, .image-lightbox-icon-button, .image-lightbox-zoom-value) {
+  min-width: 44px;
+  height: 44px;
+  line-height: 44px;
 }
 
 /* File viewer toolbar */
