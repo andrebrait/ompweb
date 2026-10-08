@@ -1573,7 +1573,17 @@ export function AppShell({ appName }: { appName: string }) {
   // Explorer, Git, and the file viewers follow the open session's folder, then
   // the sidebar's live cwd, then the new-session cwd. Relative paths (mention,
   // copy path) resolve against the same folder so they match the Explorer.
-  const explorerCwd = selectedSession?.cwd ?? activeCwd ?? newSessionCwd ?? null;
+  // A session whose worktree was removed (its repo's worktree list no longer
+  // contains its folder) falls back to the sidebar's cwd, the repo root.
+  const sessionCwd = selectedSession?.cwd ?? null;
+  const sessionWorktreeRemoved = sessionCwd !== null && worktreeCtx !== null
+    && comparableProjectPath(selectedSession?.projectRoot ?? sessionCwd) === comparableProjectPath(worktreeCtx.projectRoot)
+    && !worktreeCtx.worktrees.some((wt) => {
+      const root = comparableProjectPath(wt.path);
+      const cwd = comparableProjectPath(sessionCwd);
+      return cwd === root || cwd.startsWith(`${root}/`);
+    });
+  const explorerCwd = (sessionWorktreeRemoved ? null : sessionCwd) ?? activeCwd ?? newSessionCwd ?? null;
   const handleOpenLinkedFile = useCallback((filePath: string) => {
     handleOpenFile(filePath, getFileName(filePath), selectedSession?.id ?? null);
   }, [handleOpenFile, selectedSession?.id]);
