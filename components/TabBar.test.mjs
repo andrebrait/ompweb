@@ -33,7 +33,11 @@ test("right-panel tabs support roving arrows, Home/End, and keyboard close", asy
     onSelectExplorer: () => selected.push("explorer"),
     gitSelected: false,
     onSelectGit: () => selected.push("git"),
+    onSelectNotifications: () => selected.push("notifications"),
   }));
+
+  // Notifications is the first pinned tab, so Home lands there.
+  const notifications = screen.getByRole("tab", { name: "Notifications" });
 
   const explorer = screen.getByRole("tab", { name: "Explorer" });
   const alpha = screen.getByRole("tab", { name: "/workspace/alpha.ts" });
@@ -49,13 +53,18 @@ test("right-panel tabs support roving arrows, Home/End, and keyboard close", asy
 
   fireEvent.keyDown(beta, { key: "Home" });
   await nextFrame();
+  assert.equal(document.activeElement, notifications);
+  assert.deepEqual(selected, ["beta", "notifications"]);
+
+  fireEvent.keyDown(notifications, { key: "ArrowRight" });
+  await nextFrame();
   assert.equal(document.activeElement, explorer);
-  assert.deepEqual(selected, ["beta", "explorer"]);
+  assert.deepEqual(selected, ["beta", "notifications", "explorer"]);
 
   fireEvent.keyDown(explorer, { key: "End" });
   await nextFrame();
   assert.equal(document.activeElement, beta);
-  assert.deepEqual(selected, ["beta", "explorer", "beta"]);
+  assert.deepEqual(selected, ["beta", "notifications", "explorer", "beta"]);
 
   fireEvent.keyDown(beta, { key: "Delete" });
   assert.deepEqual(closed, ["beta"]);

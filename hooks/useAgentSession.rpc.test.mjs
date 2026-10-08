@@ -222,7 +222,7 @@ const { useAgentSession } = await jiti.import("../hooks/useAgentSession.ts");
 const { selectSessionHistory } = await jiti.import("@/lib/session-sync");
 const { publishSessionsChanged } = await jiti.import("@/lib/session-change-bus");
 const { AgentSessionWrapper } = await jiti.import("@/lib/rpc-manager");
-const { isUnknownSlashCommand, slashCommandName } = await jiti.import("@/hooks/useAgentSession-stream");
+const { isUnknownSlashCommand, slashCommandName, runHostTool } = await jiti.import("@/hooks/useAgentSession-stream");
 const { toastCalls } = await jiti.import("@/components/ui/toast");
 
 // ---------------------------------------------------------------------------
@@ -1834,6 +1834,13 @@ test("a btw follow-up asks in its topic; a refused ask keeps the composer text a
   });
   assert.deepEqual(result, { handled: true });
   assert.deepEqual(toastCalls, []);
+});
+
+test("the notify host tool lands in the notification center even without OS notification support", async () => {
+  toastCalls.length = 0;
+  const result = await runHostTool("notify", { title: "Build done", message: "All green" }, { openUrl: () => "" });
+  assert.deepEqual(result, { text: "Notification shown", isError: false });
+  assert.deepEqual(toastCalls, [["record", "info", "Build done", "All green"]]);
 });
 
 test("SSE open merges the btw history; a no-op cancel re-reads it and settles a record omp lost", async () => {

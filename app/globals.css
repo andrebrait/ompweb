@@ -3268,10 +3268,22 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
   to   { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
 }
 .toast-card {
-  animation: toast-in var(--dur-med) var(--ease-out-warm) both;
+  /* backwards, not both: a held end transform would override base-ui's inline
+     drag transform, so a swiped toast would not follow the finger. */
+  animation: toast-in var(--dur-med) var(--ease-out-warm) backwards;
   transition: transform var(--dur-fast) var(--ease-out-warm),
+              opacity var(--dur-fast) var(--ease-out-warm),
               border-color var(--dur-fast) var(--ease-out-warm),
               box-shadow var(--dur-fast) var(--ease-out-warm);
+}
+/* A swiped toast leaves from where the finger released it. */
+.toast-card[data-ending-style][data-swipe-direction="right"] {
+  transform: translateX(calc(var(--toast-swipe-movement-x) + 110%));
+  opacity: 0;
+}
+.toast-card[data-ending-style][data-swipe-direction="left"] {
+  transform: translateX(calc(var(--toast-swipe-movement-x) - 110%));
+  opacity: 0;
 }
 .toast-card:hover {
   border-color: color-mix(in srgb, var(--accent) 30%, var(--border)) !important;
@@ -3426,6 +3438,26 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
 }
 .shell-toolbar-btn:active:not(:disabled) {
   transform: scale(0.96);
+}
+/* Unread-notification count on the right-panel toggle. */
+.shell-panel-opener {
+  position: relative;
+}
+.panel-opener-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent-strong);
+  color: var(--on-accent);
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  pointer-events: none;
 }
 .right-panel-toolbar {
   --right-panel-close-width: 36px;

@@ -11,7 +11,7 @@ import { isMacPlatform, navigateShortcutHint, NAVIGATION_HISTORY_MAX_ENTRIES } f
 import { useMobileSidebarGestures } from "@/hooks/useMobileSidebarGestures";
 import { SessionSidebar } from "./SessionSidebar";
 import { ToastProvider } from "./ui/toast";
-import { toast } from "./ui/toast";
+import { toast, toastHistory, useUnreadToastCount } from "./ui/toast";
 import { ConfirmDialog } from "./ui/field";
 import { ChatWindow } from "./ChatWindow";
 import { type Tab } from "./TabBar";
@@ -339,7 +339,7 @@ export function AppShell({ appName }: { appName: string }) {
                 type="button"
                 onClick={() => {
                   setSettingsTab("system");
-                  toast.close("omp-update-available");
+                  toast.close(`omp-update-available:${version}`);
                 }}
                 style={{ padding: "3px 7px", border: "1px solid var(--accent-strong)", borderRadius: "var(--radius-control)", background: "var(--accent-strong)", color: "var(--on-accent)", cursor: "pointer", fontSize: 11, fontWeight: 600 }}
               >
@@ -347,7 +347,9 @@ export function AppShell({ appName }: { appName: string }) {
               </button>
             </div>
           </div>,
-          { id: "omp-update-available", timeout: 0, onClose: () => rememberDismissedVersion(DISMISSED_OMP_UPDATE_KEY, version) }
+          // Version in the id: re-announcing the same version keeps its
+          // notification-center read state; a newer version is a new notice.
+          { id: `omp-update-available:${version}`, timeout: 0, onClose: () => rememberDismissedVersion(DISMISSED_OMP_UPDATE_KEY, version) }
         );
       })
       .catch(() => {});
@@ -409,7 +411,7 @@ export function AppShell({ appName }: { appName: string }) {
                 type="button"
                 onClick={() => {
                   setSettingsTab("system");
-                  toast.close("app-update-available");
+                  toast.close(`app-update-available:${version}`);
                 }}
                 style={{ padding: "3px 7px", border: "1px solid var(--accent-strong)", borderRadius: "var(--radius-control)", background: "var(--accent-strong)", color: "var(--on-accent)", cursor: "pointer", fontSize: 11, fontWeight: 600 }}
               >
@@ -417,7 +419,7 @@ export function AppShell({ appName }: { appName: string }) {
               </button>
             </div>
           </div>,
-          { id: "app-update-available", timeout: 0, onClose: () => rememberDismissedVersion(DISMISSED_APP_UPDATE_KEY, version) }
+          { id: `app-update-available:${version}`, timeout: 0, onClose: () => rememberDismissedVersion(DISMISSED_APP_UPDATE_KEY, version) }
         );
       }
     }
@@ -980,7 +982,20 @@ export function AppShell({ appName }: { appName: string }) {
     }
   }, [isCompactOverlay]);
   const [rightPanelHasOpened, setRightPanelHasOpened] = useState(false);
-  const [rightView, setRightView] = useState<"explorer" | "git" | "file">("explorer");
+  const [rightView, setRightView] = useState<RightPanelView>("explorer");
+  const unreadNotifications = useUnreadToastCount();
+  // Unread entries stay highlighted while the Notifications tab is shown and
+  // become read once the user leaves it (switches tab or closes the panel).
+  const viewingNotifications = rightPanelOpen && rightView === "notifications" && !settingsTab;
+  const wasViewingNotificationsRef = useRef(false);
+  useEffect(() => {
+    if (wasViewingNotificationsRef.current && !viewingNotifications) toastHistory.markAllRead();
+    wasViewingNotificationsRef.current = viewingNotifications;
+  }, [viewingNotifications]);
+  const opensNotifications = unreadNotifications > 0 && !viewingNotifications;
+  const panelOpenerLabel = opensNotifications
+    ? t("appShell.showNotifications", { count: unreadNotifications })
+    : rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel");
   // User-chosen pixel width (null = fluid 42% default), persisted.
   const [rightPanelWidth, setRightPanelWidth] = useState<number | null>(null);
   const [rightPanelResizing, setRightPanelResizing] = useState(false);
@@ -1330,26 +1345,29 @@ export function AppShell({ appName }: { appName: string }) {
   const handleAgentEnd = useCallback(() => {
     setRefreshKey((k) => k + 1);
     setExplorerRefreshKey((k) => k + 1);
-    if (document.visibilityState !== "hidden" || !("Notification" in window)) return;
+    if (document.visibilityState !== "hidden") return;
 
     const targetSession = selectedSession;
+    const title = targetSession?.name ?? translate("appShell.sessionComplete");
+    const body = translate("appShell.taskFinished");
     const notify = () => {
-      showCompletionNotification(
-        targetSession?.name ?? translate("appShell.sessionComplete"),
-        translate("appShell.taskFinished"),
-        () => {
-          window.focus();
-          if (targetSession) handleSelectSession(targetSession);
-        },
-      );
+      toastHistory.record("info", title, body);
+      showCompletionNotification(title, body, () => {
+        window.focus();
+        if (targetSession) handleSelectSession(targetSession);
+      });
     };
-    if (Notification.permission === "granted") notify();
+    // Without OS notification support or permission, surface the completion as
+    // an in-app toast (which also lands in the notification center).
+    if (!("Notification" in window)) toast.info(title, body);
+    else if (Notification.permission === "granted") notify();
     else if (Notification.permission === "default") {
-      void Notification.requestPermission().then((permission) => { if (permission === "granted") notify(); });
+      void Notification.requestPermission().then((permission) => {
+        if (permission === "granted") notify();
+        else toast.info(title, body);
+      });
     } else {
-      // "denied": the OS blocks notifications, so surface the completion as an
-      // in-app toast instead of leaving background completions silent.
-      toast.info(targetSession?.name ?? translate("appShell.sessionComplete"), translate("appShell.taskFinished"));
+      toast.info(title, body);
     }
   }, [handleSelectSession, selectedSession]);
 
@@ -2327,14 +2345,27 @@ export function AppShell({ appName }: { appName: string }) {
             <button
               type="button"
               className="shell-toolbar-btn shell-panel-opener ui-focus-ring"
-              onClick={() => setRightPanelOpen((open) => !open)}
+              onClick={() => {
+                // Unread notifications turn the panel toggle into their shortcut.
+                if (opensNotifications) {
+                  setRightView("notifications");
+                  setRightPanelOpen(true);
+                } else {
+                  setRightPanelOpen((open) => !open);
+                }
+              }}
               aria-expanded={rightPanelOpen}
               aria-controls="workspace-file-panel"
               aria-pressed={rightPanelOpen}
-              title={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
-              aria-label={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
+              title={panelOpenerLabel}
+              aria-label={panelOpenerLabel}
             >
               <PanelRight size={16} strokeWidth={1.8} aria-hidden="true" />
+              {unreadNotifications > 0 && (
+                <span aria-hidden="true" className="panel-opener-badge">
+                  {unreadNotifications > 99 ? "99+" : unreadNotifications}
+                </span>
+              )}
             </button>
           </div>
 
