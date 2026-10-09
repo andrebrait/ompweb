@@ -38,9 +38,15 @@ interface ToastOptions {
   onClose?: () => void;
   /**
    * Runs when the card itself is clicked (anywhere but its buttons, links and
-   * expandable text), then closes the toast.
+   * expandable text), then closes the toast and marks its history entry read.
    */
   onClick?: () => void;
+  /**
+   * Re-announcing this id keeps its history entry's read state, for a notice
+   * repeated unchanged (e.g. an update toast on every tab focus). Without it a
+   * reused id is a new event and is unread again.
+   */
+  keepRead?: boolean;
 }
 
 const manager = Toast.createToastManager<ToastData>();
@@ -82,12 +88,10 @@ export const toastHistory = {
   },
   get: () => history,
   /** Add an entry without showing a toast, e.g. for a notification already delivered by the OS. */
-  record(kind: ToastKind, title: React.ReactNode, description?: React.ReactNode, options?: { id?: string; clamp?: boolean }) {
+  record(kind: ToastKind, title: React.ReactNode, description?: React.ReactNode, options?: { id?: string; clamp?: boolean; keepRead?: boolean }) {
     const id = options?.id ?? `recorded-${++recordedCount}`;
-    // A reused id replaces its toast on screen, so it replaces its history entry
-    // too. It keeps its read state: re-announcing the same notice (e.g. an
-    // update toast on every tab focus) must not re-badge it.
-    const read = history.some((e) => e.id === id && e.read);
+    // A reused id replaces its toast on screen, so it replaces its history entry too.
+    const read = !!options?.keepRead && history.some((e) => e.id === id && e.read);
     const entry: ToastHistoryEntry = { id, kind, title, description, clamp: options?.clamp, at: Date.now(), read };
     setHistory([entry, ...history.filter((e) => e.id !== id)].slice(0, TOAST_HISTORY_LIMIT));
   },
@@ -122,7 +126,7 @@ function add(kind: ToastKind, title: React.ReactNode, description?: React.ReactN
     timeout,
     ...(options?.onClose ? { onClose: options.onClose } : {}),
   });
-  toastHistory.record(kind, title, description, { id, clamp: options?.clamp });
+  toastHistory.record(kind, title, description, { id, clamp: options?.clamp, keepRead: options?.keepRead });
   return id;
 }
 export const toast = {
