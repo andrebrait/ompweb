@@ -88,6 +88,7 @@ function install(pkgArg) {
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
+  const trustedHeaderDigest = process.env.OMP_WEB_TRUSTED_HEADER_SHA256;
   const agentDir = process.env.PI_CODING_AGENT_DIR?.replace(/^~(?=\/|$)/, HOME);
 
   const asdfBin = which("asdf");
@@ -110,6 +111,7 @@ function install(pkgArg) {
     ...(disableAutoUpdate ? { OMP_WEB_DISABLE_AUTOUPDATE: disableAutoUpdate } : {}),
     ...(installName ? { OMP_WEB_NAME: installName } : {}),
     ...(passwordHash ? { OMP_WEB_PASSWORD_HASH: passwordHash } : {}),
+    ...(trustedHeaderDigest ? { OMP_WEB_TRUSTED_HEADER_SHA256: trustedHeaderDigest } : {}),
     ...(ompBin ? { OMP_WEB_OMP_BIN: ompBin } : {}),
     ...(agentDir ? { PI_CODING_AGENT_DIR: agentDir } : {}),
   };
