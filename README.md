@@ -355,13 +355,9 @@ digest:
 
 ```bash
 secret=$(openssl rand -hex 32)
-if [[ $secret =~ ^[A-Za-z0-9._~-]+$ ]]; then
-  printf 'map $ompweb_trusted $ompweb_auth {\n    1        "%s";\n    default  "";\n}\n' "$secret" \
-    | sudo install -m 0640 -o root -g www-data /dev/stdin /etc/nginx/ompweb-auth.conf
-  printf %s "$secret" | sha256sum | cut -d' ' -f1
-else
-  echo "unsupported characters: use only letters, digits, . _ ~ and -" >&2
-fi
+printf 'map $ompweb_trusted $ompweb_auth {\n    1        "%s";\n    default  "";\n}\n' "$secret" \
+  | sudo install -m 0640 -o root -g www-data /dev/stdin /etc/nginx/ompweb-auth.conf
+printf %s "$secret" | sha256sum | cut -d' ' -f1
 unset secret
 ```
 
@@ -371,12 +367,10 @@ holds only the commands, never the secret. On Windows, the tray and background
 service read it from your user or system environment, like
 `OMP_WEB_PASSWORD_HASH`.
 
-To use a secret you already have, replace the first line with `read -rs secret`
-to enter it at a hidden prompt. It must contain only letters, digits, `.`, `_`,
-`~` and `-`, because nginx would expand or reject other characters inside the
-quoted `map` value while the digest is computed from the original. The check
-above refuses any other secret before writing anything; generate a new one
-instead.
+Always generate the secret this way; do not reuse a password or another chosen
+value. omp-web stores only a fast, unsalted SHA-256 digest, which is safe only
+for a long random secret: anyone who reads the digest could recover a short or
+guessable one with a dictionary attack.
 
 With nginx, send the secret only to the address ranges you trust:
 
