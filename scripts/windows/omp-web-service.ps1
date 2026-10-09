@@ -126,16 +126,17 @@ function Start-WebServer {
     $psi.EnvironmentVariables["OMP_WEB_HOSTNAME"] = [string]$EffectiveHostname
     $psi.EnvironmentVariables["OMP_WEB_SERVICE"] = "1"
     $psi.EnvironmentVariables["PORT"] = [string]$EffectivePort
-    # Pass the password explicitly: bin/omp-web.js refuses a non-loopback bind
-    # without it, and an inherited environment block can be stale.
-    $childPassword = [Environment]::GetEnvironmentVariable("OMP_WEB_PASSWORD", "Process")
-    if ([string]::IsNullOrEmpty($childPassword)) {
-        $childPassword = [Environment]::GetEnvironmentVariable("OMP_WEB_PASSWORD", "User")
+    # Pass the password hash explicitly: bin/omp-web.js refuses a non-loopback
+    # bind without one, and an inherited environment block can be stale. A
+    # plaintext password is hashed here and never forwarded as-is.
+    $childHash = [Environment]::GetEnvironmentVariable("OMP_WEB_PASSWORD_HASH", "Process")
+    if ([string]::IsNullOrEmpty($childHash)) {
+        $childHash = [Environment]::GetEnvironmentVariable("OMP_WEB_PASSWORD_HASH", "User")
     }
-    if (![string]::IsNullOrEmpty($childPassword)) {
-        $psi.EnvironmentVariables["OMP_WEB_PASSWORD"] = $childPassword
+    if (![string]::IsNullOrEmpty($childHash)) {
+        $psi.EnvironmentVariables["OMP_WEB_PASSWORD_HASH"] = $childHash
     } else {
-        Write-ServiceLog "WARN: OMP_WEB_PASSWORD not found in the process or user environment; a non-loopback bind will be refused by bin/omp-web.js"
+        Write-ServiceLog "WARN: OMP_WEB_PASSWORD_HASH not found in the process or user environment; a non-loopback bind will be refused by bin/omp-web.js (generate one with: ompweb hash-password)"
     }
     $proc = New-Object System.Diagnostics.Process
     $proc.StartInfo = $psi

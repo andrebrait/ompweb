@@ -3,6 +3,7 @@ import { execFile } from "child_process";
 import { existsSync, promises as fs } from "fs";
 import { basename, extname, join } from "path";
 import { resolveOmpBin } from "@/lib/omp/omp-cli";
+import { createChildProcessEnvironment } from "@/lib/project-command-env";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import type {
   PluginDiagnostic,
@@ -82,7 +83,7 @@ function runOmp(
         cwd: opts.cwd,
         timeout: opts.timeout ?? 60_000,
         maxBuffer: 16 * 1024 * 1024,
-        env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+        env: createChildProcessEnvironment({ FORCE_COLOR: "0", NO_COLOR: "1" }),
         windowsHide: true,
       },
       (error, stdout, stderr) => {

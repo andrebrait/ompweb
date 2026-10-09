@@ -24,6 +24,7 @@ const {
   serializeServiceEnv,
   writeServiceEnv,
 } = require("./service-env.js");
+const { hashPassword, verifyPassword } = require("./omp-web-password-hash.js");
 
 test("service env files round-trip quoted values", () => {
   const serialized = serializeServiceEnv({
@@ -67,7 +68,8 @@ test("buildUnit points at the generated env file and keeps runtime settings out 
   assert.match(unit, /WorkingDirectory=%h/);
   assert.match(unit, /EnvironmentFile=\/home\/u\/\.omp\/agent\/web-service\.env/);
   assert.doesNotMatch(unit, /PORT=/);
-  assert.doesNotMatch(unit, /OMP_WEB_PASSWORD/);
+  assert.doesNotMatch(unit, /OMP_WEB_PASSWORD_HASH/);
+  assert.doesNotMatch(unit, /OMP_WEB_PASSWORD=/);
   assert.match(unit, /Restart=on-failure/);
   assert.match(unit, /StartLimitIntervalSec=60/);
   assert.match(unit, /StartLimitBurst=5/);
@@ -177,16 +179,67 @@ test("install creates the env file and unit with LAN settings", { skip: process.
 
     const envPath = path.join(home, ".omp", "agent", "web-service.env");
     const unitPath = path.join(home, ".config", "systemd", "user", "ompweb.service");
-    assert.deepEqual(parseServiceEnv(readFileSync(envPath, "utf8")), {
+    const written = parseServiceEnv(readFileSync(envPath, "utf8"));
+    // The installer hashes OMP_WEB_PASSWORD: only the hash may reach the env
+    // file, and omp-web refuses to start on a plaintext password (issue #239).
+    assert.match(written.OMP_WEB_PASSWORD_HASH, /^scrypt\$15\$8\$1\$[A-Za-z0-9_-]{22}\$[A-Za-z0-9_-]{43}$/);
+    assert.equal(written.OMP_WEB_PASSWORD, undefined);
+    assert.equal(verifyPassword("test-password", written.OMP_WEB_PASSWORD_HASH), true);
+    assert.equal(verifyPassword("not-the-password", written.OMP_WEB_PASSWORD_HASH), false);
+    delete written.OMP_WEB_PASSWORD_HASH;
+    assert.deepEqual(written, {
       PORT: "40123",
       OMP_WEB_HOSTNAME: "0.0.0.0",
       OMP_WEB_NO_OPEN: "0",
       OMP_WEB_DISABLE_AUTOUPDATE: "1",
       OMP_WEB_NAME: "My Box",
-      OMP_WEB_PASSWORD: "test-password",
     });
     assert.match(readFileSync(unitPath, "utf8"), /EnvironmentFile=.*web-service\.env/);
     assert.match(result.stdout, /config:.*web-service\.env/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("install writes a pre-hashed password unchanged and rejects a broken one", { skip: process.platform !== "linux" }, () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "ompweb-systemd-hash-"));
+  try {
+    const home = path.join(dir, "home");
+    const binDir = path.join(dir, "bin");
+    const fakeOmpweb = path.join(binDir, "ompweb");
+    const fakeSystemctl = path.join(binDir, "systemctl");
+    mkdirSync(home, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(fakeOmpweb, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(fakeSystemctl, "#!/bin/sh\ncase \"$*\" in *is-active*) exit 3 ;; *) exit 0 ;; esac\n", { mode: 0o755 });
+    const base = {
+      ...process.env,
+      HOME: home,
+      PATH: binDir,
+      OMP_WEB_SYSTEMD_BIN: fakeOmpweb,
+      OMP_WEB_HOSTNAME: "0.0.0.0",
+    };
+    delete base.PI_CODING_AGENT_DIR;
+    delete base.OMP_WEB_OMP_BIN;
+    delete base.OMP_WEB_PASSWORD;
+
+    const provided = hashPassword("preset-password");
+    const ok = spawnSync(process.execPath, [path.join(process.cwd(), "bin", "omp-web-systemd.js"), "install", "--no-autostart"], {
+      env: { ...base, OMP_WEB_PASSWORD_HASH: provided },
+      encoding: "utf8",
+    });
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.equal(
+      parseServiceEnv(readFileSync(path.join(home, ".omp", "agent", "web-service.env"), "utf8")).OMP_WEB_PASSWORD_HASH,
+      provided,
+    );
+
+    const broken = spawnSync(process.execPath, [path.join(process.cwd(), "bin", "omp-web-systemd.js"), "install", "--no-autostart"], {
+      env: { ...base, OMP_WEB_PASSWORD_HASH: "definitely-not-a-hash" },
+      encoding: "utf8",
+    });
+    assert.notEqual(broken.status, 0);
+    assert.match(broken.stderr, /not a valid password hash/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

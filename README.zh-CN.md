@@ -57,9 +57,37 @@ ompweb
 ```bash
 ompweb --port 8080                         # 自定义端口
 ompweb --hostname 0.0.0.0                  # 监听网络地址
-ompweb --password "your-password"          # 启用密码保护
+ompweb hash-password                      # 输出 OMP_WEB_PASSWORD_HASH 的值
 ompweb --no-open                           # 不自动打开浏览器
 ```
+
+### 密码保护
+
+omp-web **绝不读取明文密码**。设置 `OMP_WEB_PASSWORD` 或使用 `--password`
+会导致启动被拒绝：每个 `omp` 会话都会继承服务器的环境变量，智能体只要运行
+`env` 就会把密码写入会话文件并发送给模型提供商。
+
+请改用哈希：
+
+```bash
+ompweb hash-password                       # 输入两次，内容不回显
+echo "a-long-random-password" | ompweb hash-password   # 也可通过管道输入
+
+OMP_WEB_PASSWORD_HASH='scrypt$15$8$1$…' ompweb
+```
+
+`ompweb hash-password` 从标准输入读取密码（绝不作为命令行参数），因此不会
+留在 shell 历史或 `ps` 输出中。哈希使用 scrypt（N = 2^15、r = 8、p = 1）
+与 16 字节随机盐，输出格式为 `scrypt$<ln>$<r>$<p>$<salt>$<digest>`。
+即使读到哈希也无法用它登录，更无法还原出密码。
+
+会话签名不使用密码哈希。首次启动时会生成随机签名密钥并保存到
+`~/.omp/agent/omp-web/web-auth-secret.json`（权限 `0600`），再与哈希混合得到
+签名密钥：修改密码会让已有会话失效，而仅凭保存的哈希无法伪造会话。
+
+服务安装脚本（`ompweb systemd install`、`ompweb-launchd install`、Linux 托盘、
+Windows 服务）仍在安装时接受 `OMP_WEB_PASSWORD`，但在写入配置前会先做哈希，
+最终只保存哈希。
 
 ## 功能特性
 
@@ -80,7 +108,7 @@ ompweb --no-open                           # 不自动打开浏览器
 | --- | --- | --- |
 | `PORT` | 服务端口 | `30177` |
 | `OMP_WEB_HOSTNAME` | 绑定主机名 | `127.0.0.1` |
-| `OMP_WEB_PASSWORD` | 可选的 Web 访问密码 | _无（未启用验证）_ |
+| `OMP_WEB_PASSWORD_HASH` | Web 登录密码的 scrypt 哈希（由 `ompweb hash-password` 生成）。绑定非回环地址时必须设置 | _无（未启用验证）_ |
 | `OMP_WEB_NO_OPEN` | 设为 `1` 时禁止自动打开浏览器 | `0` |
 | `OMP_WEB_DISABLE_AUTOUPDATE` | 设为 `1` 时禁用更新检查和应用内更新；修改后需重启 | `0` |
 | `OMP_WEB_NAME` | 浏览器标签页和已安装应用中显示的名称。设为 `url`、`host` 或 `domain`（不区分大小写）时使用浏览器所连接的主机名（不含端口），localhost 和 IP 地址仍显示 `omp web`；其他值按原样使用。修改后需重启 | `omp web` |
