@@ -115,6 +115,7 @@ Linux トレイ、Windows サービス）はインストール時に `OMP_WEB_PA
 | `PORT` | サーバーポート | `30177` |
 | `OMP_WEB_HOSTNAME` | バインドホスト | `127.0.0.1` |
 | `OMP_WEB_PASSWORD_HASH` | Web ログイン用パスワードの scrypt ハッシュ（`ompweb hash-password` で生成）。非ループバックバインドには必須 | _なし（認証無効）_ |
+| `OMP_WEB_TRUSTED_HEADER_SHA256` | 信頼できるリバースプロキシが `X-Omp-Web-Auth` ヘッダーで送るシークレットの SHA-256 ダイジェスト（16 進）。ヘッダーのハッシュが一致したリクエストはパスワードなしで通ります。omp-web はシークレット自体を保持しません。生成方法と nginx の設定例は英語版 README の「Skipping the password on trusted networks」を参照してください | _なし（無効）_ |
 | `OMP_WEB_NO_OPEN` | `1` でブラウザ自動起動を無効化 | `0` |
 | `OMP_WEB_DISABLE_AUTOUPDATE` | `1` で更新チェックとアプリ内更新を無効化（変更後は再起動） | `0` |
 | `OMP_WEB_NAME` | ブラウザのタブとインストールしたアプリに表示する名前。`url`・`host`・`domain`（大文字小文字を区別しない）を指定すると、ブラウザが接続したホスト名（ポートなし）を使用します（localhost と IP アドレスは `omp web` のまま）。それ以外の値はそのまま使用します（変更後は再起動） | `omp web` |

@@ -25,7 +25,7 @@ const HOST_RUNTIME_NAMES: readonly string[] = ["PORT", "NODE_ENV"];
 export const OMP_WEB_SECRET_ENV_VARS: readonly string[] = [
   "OMP_WEB_PASSWORD",
   "OMP_WEB_PASSWORD_HASH",
-  "OMP_WEB_TRUSTED_HEADER_SECRET",
+  "OMP_WEB_TRUSTED_HEADER_SHA256",
 ];
 
 /** Prefixes that never reach a child process. */

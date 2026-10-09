@@ -159,6 +159,12 @@ Linux tray, and the Windows service) still accept `OMP_WEB_PASSWORD` at install
 time and hash it before writing it to their configuration. Only the hash is
 stored.
 
+On Windows, the tray and background service read `OMP_WEB_PASSWORD_HASH` from
+your user or system environment (for example `setx OMP_WEB_PASSWORD_HASH
+"scrypt$…"`) each time they start the server, not from the environment they were
+started with. Changing or removing the hash takes effect at the next server
+restart, without signing out of Windows.
+
 ### Run as a Windows Service (System Tray)
 
 Install ompweb as a Windows background service with a system tray icon and autostart at login:
@@ -318,6 +324,7 @@ host (KDE Plasma, and most Wayland/X11 desktops).
 | `PORT` | Server port | `30177` |
 | `OMP_WEB_HOSTNAME` | Server bind host | `127.0.0.1` |
 | `OMP_WEB_PASSWORD_HASH` | Optional scrypt hash of the web login password, from `ompweb hash-password`. Required for a non-loopback bind | _None (auth disabled)_ |
+| `OMP_WEB_TRUSTED_HEADER_SHA256` | SHA-256 hex digest of the secret a trusted reverse proxy sends in `X-Omp-Web-Auth` to skip the password for that request; see [Skipping the password on trusted networks](#skipping-the-password-on-trusted-networks) | _None (disabled)_ |
 | `OMP_WEB_NO_OPEN` | Set to `1` to prevent auto-opening browser | `0` |
 | `OMP_WEB_DISABLE_AUTOUPDATE` | Set to `1` to disable update checks and in-app updates; restart after changing | `0` |
 | `OMP_WEB_NAME` | Name shown in browser tabs and installed-app names. `url`, `host` or `domain` (any case) uses the hostname the browser connected to, without port; localhost and IP addresses keep `omp web`. Any other value is used as-is. Restart after changing | `omp web` |
@@ -329,6 +336,121 @@ host (KDE Plasma, and most Wayland/X11 desktops).
 | `OMP_WEB_STT_MODEL` | Optional model name for the STT endpoint | _None_ |
 
 **`OMP_WEB_NAME` and installed apps.** An installed app (PWA) is usually named after the page it was installed from. If you later change `OMP_WEB_NAME`, or reach omp-web through a different address while `OMP_WEB_NAME` is `url`, `host` or `domain`, your operating system may rename the installed app as well. Leave `OMP_WEB_NAME` empty, or set a name that identifies this omp-web server whatever domain name or address is used to reach it.
+
+## Skipping the password on trusted networks
+
+omp-web cannot see the client's address itself, so it leaves the decision to
+your reverse proxy. The proxy sends a secret in the `X-Omp-Web-Auth` header,
+and omp-web holds only that secret's SHA-256 digest in
+`OMP_WEB_TRUSTED_HEADER_SHA256`. A request whose header hashes to that digest
+is treated as signed in. Everyone else still signs in with the password whose
+hash is in `OMP_WEB_PASSWORD_HASH`; without a password there is nothing to
+skip, and the header is ignored. Keep omp-web bound to `127.0.0.1` so only the
+proxy reaches it.
+
+Generate the secret and its digest without typing the secret on a command line,
+so it never lands in your shell history. This writes a random secret straight
+into an nginx include file readable only by root and nginx, and prints only the
+digest:
+
+```bash
+secret=$(openssl rand -hex 32)
+if [[ $secret =~ ^[A-Za-z0-9._~-]+$ ]]; then
+  printf 'map $ompweb_trusted $ompweb_auth {\n    1        "%s";\n    default  "";\n}\n' "$secret" \
+    | sudo install -m 0640 -o root -g www-data /dev/stdin /etc/nginx/ompweb-auth.conf
+  printf %s "$secret" | sha256sum | cut -d' ' -f1
+else
+  echo "unsupported characters: use only letters, digits, . _ ~ and -" >&2
+fi
+unset secret
+```
+
+Use your nginx group in place of `www-data` (`nginx` on some distributions).
+Set the printed digest as `OMP_WEB_TRUSTED_HEADER_SHA256`. The command history
+holds only the commands, never the secret. On Windows, the tray and background
+service read it from your user or system environment, like
+`OMP_WEB_PASSWORD_HASH`.
+
+To use a secret you already have, replace the first line with `read -rs secret`
+to enter it at a hidden prompt. It must contain only letters, digits, `.`, `_`,
+`~` and `-`, because nginx would expand or reject other characters inside the
+quoted `map` value while the digest is computed from the original. The check
+above refuses any other secret before writing anything; generate a new one
+instead.
+
+With nginx, send the secret only to the address ranges you trust:
+
+```nginx
+# http {} context
+geo $ompweb_trusted {
+    default       0;
+    10.0.0.0/16   1;
+}
+include /etc/nginx/ompweb-auth.conf;  # the map written above
+
+# the location that proxies to omp-web
+proxy_set_header X-Omp-Web-Auth $ompweb_auth;
+```
+
+Always set the header, as above: the empty value for other clients replaces any
+`X-Omp-Web-Auth` a client sends itself. nginx only inherits `proxy_set_header`
+from outer blocks when a block sets none of its own, so put this line next to
+the location's other `proxy_set_header` lines.
+
+Serve omp-web only for its own hostname: give its `server` block an explicit
+`server_name`, and add a `default_server` block that answers every other
+hostname with `return 444;`. Otherwise a web page that a trusted browser visits
+can point its own domain name at your nginx (DNS rebinding) and have nginx add
+the secret to its requests.
+
+`geo` checks `$remote_addr`, the address that connected to nginx. When clients
+reach nginx through another proxy, use the
+[`realip` module](https://nginx.org/en/docs/http/ngx_http_realip_module.html) to
+replace it with the real client address. It does so only for connections from
+addresses you list in `set_real_ip_from`:
+
+- **Cloudflare (proxied DNS):** trust `CF-Connecting-IP`, and only from
+  Cloudflare. List every range from <https://www.cloudflare.com/ips-v4/> and
+  <https://www.cloudflare.com/ips-v6/>, and keep them up to date. Use this only
+  when Cloudflare is really in front.
+
+  ```nginx
+  set_real_ip_from 173.245.48.0/20;  # ...one line per Cloudflare range
+  real_ip_header   CF-Connecting-IP;
+  ```
+
+  Also refuse connections that come neither from Cloudflare nor from your
+  trusted ranges. `$realip_remote_addr` is the address that actually
+  connected, before `realip` replaced it:
+
+  ```nginx
+  geo $realip_remote_addr $ompweb_peer_allowed {
+      default          0;
+      173.245.48.0/20  1;  # ...every Cloudflare range
+      10.0.0.0/16      1;
+  }
+  # in the server block
+  if ($ompweb_peer_allowed = 0) { return 403; }
+  ```
+
+- **Cloudflare Tunnel (`cloudflared`):** the tunnel connects to nginx from
+  `cloudflared`'s address (`127.0.0.1` when it runs on the same machine), so
+  trust `CF-Connecting-IP` from there: `set_real_ip_from 127.0.0.1;` and
+  `real_ip_header CF-Connecting-IP;`. Any local process can then send its own
+  `CF-Connecting-IP` to nginx and claim a trusted address, and a local
+  connection without that header keeps `127.0.0.1`, so listing `127.0.0.1` in
+  `$ompweb_trusted` trusts every local process that connects to nginx.
+- **Any other proxy or load balancer:**
+
+  ```nginx
+  set_real_ip_from  <proxy address or range>;
+  real_ip_header    X-Forwarded-For;
+  real_ip_recursive on;
+  ```
+
+  `real_ip_recursive on` reads `X-Forwarded-For` from the right and skips the
+  hops listed in `set_real_ip_from`. Addresses a client adds itself are
+  ignored.
 
 ## Development
 
