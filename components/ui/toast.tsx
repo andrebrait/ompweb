@@ -94,6 +94,9 @@ export const toastHistory = {
   markAllRead: () => {
     if (history.some((e) => !e.read)) setHistory(history.map((e) => e.read ? e : { ...e, read: true }));
   },
+  markRead: (id: string) => {
+    if (history.some((e) => e.id === id && !e.read)) setHistory(history.map((e) => e.id === id ? { ...e, read: true } : e));
+  },
   remove: (id: string) => setHistory(history.filter((entry) => entry.id !== id)),
   clear: () => setHistory([]),
 };
@@ -326,6 +329,8 @@ function Toaster() {
               if (pointerClick && Math.max(from.travel, Math.hypot(event.clientX - from.x, event.clientY - from.y)) > 10) return;
               // Releasing a text selection is not a request to open anything.
               if (window.getSelection()?.isCollapsed === false) return;
+              // Following the toast is reading it.
+              toastHistory.markRead(t.id);
               manager.close(t.id);
               onClick();
             } : undefined}
@@ -334,6 +339,7 @@ function Toaster() {
             onKeyDown={t.data?.onClick ? (event) => {
               if (event.key !== "Enter" || event.target !== event.currentTarget) return;
               event.preventDefault();
+              toastHistory.markRead(t.id);
               manager.close(t.id);
               t.data?.onClick?.();
             } : undefined}
