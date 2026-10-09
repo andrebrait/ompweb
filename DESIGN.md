@@ -185,7 +185,8 @@ Deploy the frontend and API support together; no native OMP upgrade is required.
   header is the reverse proxy's job, because omp-web has no client address it
   can trust.
 - omp-web's own secrets (`OMP_WEB_PASSWORD`, `OMP_WEB_PASSWORD_HASH`,
-  `OMP_WEB_TRUSTED_HEADER_SHA256`) are stripped from every child process
+  `OMP_WEB_TRUSTED_HEADER_SHA256` and its legacy name
+  `OMP_WEB_TRUSTED_HEADER_SECRET`) are stripped from every child process
   environment through `createChildProcessEnvironment`
   (`lib/project-command-env.ts`). `OMP_WEB_*` values that are configuration
   rather than secrets (`OMP_WEB_PACKAGE_DIR`, `OMP_WEB_OMP_BIN`, ...) are kept.
