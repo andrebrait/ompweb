@@ -116,7 +116,7 @@ Open [http://127.0.0.1:30177](http://127.0.0.1:30177) in your browser.
 ```bash
 ompweb --port 8080                         # Custom port
 ompweb --hostname 0.0.0.0                  # Listen on network
-ompweb --password "your-password"          # Enable password protection
+ompweb hash-password                       # Print the value for OMP_WEB_PASSWORD_HASH
 ompweb --no-open                           # Don't auto-open the browser
 ompweb --install-tray                      # Install Windows System Tray service & Desktop shortcuts
 ompweb --uninstall-tray                    # Uninstall Windows System Tray service & shortcuts
@@ -125,6 +125,39 @@ ompweb systemd install                     # Install Linux systemd user service
 ompweb --help                              # Show help
 ompweb --version                           # Show version
 ```
+
+### Password protection
+
+omp-web **never reads a plaintext password**. A password in `OMP_WEB_PASSWORD`
+or passed as `--password` stops the server at startup, because every `omp`
+session inherits the server's environment: an agent running `env` would print
+the password into its session file and send it to the model provider.
+
+Generate a hash instead and give that to the server:
+
+```bash
+ompweb hash-password                       # asks twice, input hidden
+echo "a-long-random-password" | ompweb hash-password   # or pipe it in
+
+OMP_WEB_PASSWORD_HASH='scrypt$15$8$1$…' ompweb
+```
+
+`ompweb hash-password` reads the password from stdin — never from a command
+line argument — so it stays out of your shell history and out of `ps` output.
+The hash is scrypt (N = 2^15, r = 8, p = 1) with a fresh 16-byte salt, printed
+in the self-describing form `scrypt$<ln>$<r>$<p>$<salt>$<digest>`. Anyone who
+reads the hash cannot sign in with it, and it cannot be turned back into the
+password.
+
+Sessions are not signed with the password hash. A random signing key is created
+on first start in `~/.omp/agent/omp-web/web-auth-secret.json` (mode `0600`) and
+mixed with the hash, so changing the password still signs everyone out while the
+stored hash alone is never enough to forge a session.
+
+The service installers (`ompweb systemd install`, `ompweb-launchd install`, the
+Linux tray, and the Windows service) still accept `OMP_WEB_PASSWORD` at install
+time and hash it before writing it to their configuration. Only the hash is
+stored.
 
 ### Run as a Windows Service (System Tray)
 
@@ -169,14 +202,18 @@ As a service, the browser is **not** auto-opened by default — install with
 OMP_WEB_PASSWORD=secret npx --yes @kahme247/ompweb@latest ompweb-launchd install
 ```
 
-When binding to a non-loopback host, require authentication (`OMP_WEB_PASSWORD`
+`OMP_WEB_PASSWORD` is hashed at install time; the plist holds the hash, never
+the password. Pass `OMP_WEB_PASSWORD_HASH` to install a hash you generated with
+`ompweb hash-password`.
+
+When binding to a non-loopback host, require authentication (`OMP_WEB_PASSWORD_HASH`
 or equivalent access control) and HTTPS through a trusted reverse proxy or VPN.
 Never expose the unauthenticated web UI or send its password/session cookie over
 plaintext HTTP.
 
 Logs go to `~/Library/Logs/ompweb/ompweb.log` and the plist lives at
-`~/Library/LaunchAgents/com.kahme247.ompweb.plist` (mode 600; a configured
-password is stored there in plain text).
+`~/Library/LaunchAgents/com.kahme247.ompweb.plist` (mode 600; the password
+hash — not the password — is stored there).
 
 ### Run as a Linux Service (systemd)
 
@@ -198,6 +235,8 @@ OMP_WEB_HOSTNAME=0.0.0.0 OMP_WEB_PASSWORD='change-me' \
   npx --yes --package=@kahme247/ompweb@latest ompweb-systemd install
 ```
 
+The password is hashed before it is written to `web-service.env`.
+
 Manage it with:
 
 ```bash
@@ -209,7 +248,8 @@ npx --yes --package=@kahme247/ompweb@latest ompweb-systemd uninstall # Stop and 
 The service runs the locally installed `ompweb` binary resolved at install time
 (override with `OMP_WEB_SYSTEMD_BIN`). Runtime configuration lives in
 `~/.omp/agent/web-service.env` — the tray (or any editor) can change the port,
-hostname, and password there and just restart the service; no reinstall needed.
+hostname, and password hash there and just restart the service; no reinstall
+needed.
 Install-time [environment variables](#environment-variables) are baked into
 that file. As a service, the browser is **not** auto-opened by default. The
 unit lives at `~/.config/systemd/user/ompweb.service` and logs go to the
@@ -242,7 +282,7 @@ npx --yes @kahme247/ompweb@latest ompweb-tray --uninstall    # Remove autostart,
 **Expose to Network** rebinds the service from `127.0.0.1` to `0.0.0.0` so the
 web UI is reachable from your LAN or VPN (e.g. Tailscale). Leaving loopback
 requires a web password — the tray prompts for one via `kdialog`/`zenity` when
-needed. **Change Port…** and **Set Web Password…** edit
+needed, and stores its hash. **Change Port…** and **Set Web Password…** edit
 `~/.omp/agent/web-service.env` and restart the service. When binding to a
 non-loopback host, use HTTPS through a trusted reverse proxy or VPN for remote
 access.
@@ -277,7 +317,7 @@ host (KDE Plasma, and most Wayland/X11 desktops).
 | --- | --- | --- |
 | `PORT` | Server port | `30177` |
 | `OMP_WEB_HOSTNAME` | Server bind host | `127.0.0.1` |
-| `OMP_WEB_PASSWORD` | Optional password for web login | _None (auth disabled)_ |
+| `OMP_WEB_PASSWORD_HASH` | Optional scrypt hash of the web login password, from `ompweb hash-password`. Required for a non-loopback bind | _None (auth disabled)_ |
 | `OMP_WEB_NO_OPEN` | Set to `1` to prevent auto-opening browser | `0` |
 | `OMP_WEB_DISABLE_AUTOUPDATE` | Set to `1` to disable update checks and in-app updates; restart after changing | `0` |
 | `OMP_WEB_NAME` | Name shown in browser tabs and installed-app names. `url`, `host` or `domain` (any case) uses the hostname the browser connected to, without port; localhost and IP addresses keep `omp web`. Any other value is used as-is. Restart after changing | `omp web` |

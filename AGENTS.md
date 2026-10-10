@@ -107,6 +107,7 @@ lib/
   markdown.ts          shared markdown helpers
   npx.ts               npx runner used by skill install
   pi-types.ts          local structural types for agent/RPC objects
+  project-command-env.ts  child-process environments: strips PORT/NODE_ENV/NEXT_* and omp-web's secrets
   project-ordering.ts  pure project sort/group/activity helpers (client + tests)
   project-registry.ts  on-disk managed-project registry (~/.omp/agent/projects.json)
   notification-events.ts  shared: event/prefs types, frame→event detector, renderNotification()
@@ -115,6 +116,9 @@ lib/
   rpc-manager.ts       session registry + startRpcSession over RpcProcess
   session-reader.ts    session .jsonl parsing + path cache + buildSessionContext
   session-resume.ts    running-session list for auto-resume after a restart
+  web-auth.ts          password-hash check + session cookie signing
+  web-auth-secret.ts   per-installation session-signing key (~/.omp/agent/omp-web/web-auth-secret.json)
+  web-password-hash.ts typed view of bin/omp-web-password-hash.js (the scrypt hash format)
   web-settings.ts      omp-web server settings (~/.omp/agent/omp-web-settings.json)
   skills-service.ts    skill listing via `omp skill list --json`; pure-Node replica scan as fallback
   tool-presets.ts      PRESET_NONE/DEFAULT/FULL + getToolNamesForPreset()
@@ -256,6 +260,20 @@ wait for that commit:
 - Live entries are cleared on `agent_start`, terminal `agent_end`, prompt
   send/settlement failure — a tool must never leak into the next run.
 
+### Reasoning display ("Expand thinking blocks by default")
+- `ThinkingBlock` (`components/MessageView.tsx`) seeds `expanded` from
+  `expandThinkingByDefault`, plumbed and stored exactly like
+  `toolCallsDefaultCollapsed` (`omp-web:expand-thinking` in `AppShell`, off by
+  default). It is an initial value only: manual collapse/expand keeps working
+  per block, and a reload remounts from the preference.
+- The preference deliberately covers a **streaming** block too. A "completed
+  only" rule would have to flip the state mid-stream (fighting a manual
+  collapse), and remounts start from the preference either way, so streaming and
+  completed blocks stay consistent.
+- Auto-expanded historical blocks are `deferred` (thinking text is fetched on
+  demand), so a mount effect loads their content through the same loader the
+  click path uses — one request per mount, cached per (session, entry, block).
+
 ### Tool-result images (`lib/media-cache.ts`, `/api/media/[hash]`)
 - Tool-result images never reach the browser as base64. History (`deferMedia`)
   and live frames (`AgentSessionWrapper.emit`, which also feeds the replay
@@ -306,6 +324,16 @@ confirms. A follow-up that answers `removed: false` is retried on `steering`
 (a concurrent promotion moved it); never the reverse. Every abort is fenced to
 the prompt run id captured at the click, so it cannot kill a prompt started
 during the wait.
+- Submitting during a run defaults to **Queue follow-up**
+  (`lib/composer-prefs.ts`, `omp-web:submit-during-run`); only an explicitly
+  stored choice overrides it, and an absent key yields `queue`.
+- omp-web's own `!!` shell command (`bashRunning`, set for the whole `bash`
+  RPC) is the one state omp refuses a prompt in. The wrapper degrades instead
+  of throwing (`queueWhileShellRunning` in `lib/rpc-manager.ts`): the frame is
+  forwarded as omp's `follow_up` — never aborted, never reimplemented here —
+  and the reply reports it (`{queued:true, queue:"followUp",
+  reason:"shellRunning"}`), which the hook surfaces as a notice while rolling
+  the phantom optimistic turn back. The chip still comes from omp's snapshot.
 
 ### Running state SSE + reconciliation
 - The sidebar listens to `/api/agent/running/events`, backed by `subscribeRunningSessions()` in `lib/rpc-manager.ts`, so running badges update without polling.
@@ -713,7 +741,10 @@ every toast also lands in `toastHistory`, the last 100 kept in memory for the
 right panel's Notifications tab; OS notifications call `toastHistory.record()`
 so they appear there too). Unread entries badge the right-panel toggle, which
 then opens the Notifications tab; entries become read when the user leaves
-that tab or uses Mark all as read. Toasts and Notifications entries dismiss on
+that tab, uses Mark all as read, or runs the toast's `onClick` action
+(`toastHistory.markRead`). A reused toast id is unread again unless the toast
+passes `keepRead` (the update notices, re-announced on every tab focus).
+Toasts and Notifications entries dismiss on
 a sideways touch/pen swipe (base-ui's toast swipe; `NotificationRow` for the
 list) and carry `data-swipe-dismiss`, which the mobile sidebar gesture skips.
 `useDragClickGuard` swallows the click that ends any drag on them, judged by

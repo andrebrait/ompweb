@@ -23,6 +23,8 @@ const os = require("node:os");
 const path = require("node:path");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { getServiceEnvPath, readServiceEnv, writeServiceEnv } = require("./service-env");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { resolvePasswordHash } = require("./omp-web-hash-password");
 
 const UNIT_NAME = "ompweb";
 const UNIT = `${UNIT_NAME}.service`;
@@ -56,7 +58,8 @@ Options:
   -v, --version           Show version
 
 For LAN access, install with:
-  OMP_WEB_HOSTNAME=0.0.0.0 OMP_WEB_PASSWORD=change-me ompweb-systemd install
+  OMP_WEB_HOSTNAME=0.0.0.0 OMP_WEB_PASSWORD='change-me' ompweb-systemd install
+  (the plaintext password is hashed before it is written to the env file)
 `);
 }
 
@@ -300,7 +303,14 @@ function install(options = {}) {
     fail(error instanceof Error ? error.message : String(error));
   }
 
-  const password = process.env.OMP_WEB_PASSWORD;
+  // Only the hash reaches the env file: omp-web never reads a plaintext
+  // password, and `OMP_WEB_PASSWORD` set for this install is hashed here.
+  let passwordHash;
+  try {
+    passwordHash = resolvePasswordHash();
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
   const agentDir = process.env.PI_CODING_AGENT_DIR?.replace(/^~(?=\/|$)/, HOME);
   const envPath = getServiceEnvPath();
   const unit = buildUnit({
@@ -318,7 +328,7 @@ function install(options = {}) {
     OMP_WEB_NO_OPEN: process.env.OMP_WEB_NO_OPEN ?? "1",
     ...(process.env.OMP_WEB_DISABLE_AUTOUPDATE ? { OMP_WEB_DISABLE_AUTOUPDATE: process.env.OMP_WEB_DISABLE_AUTOUPDATE } : {}),
     ...(process.env.OMP_WEB_NAME ? { OMP_WEB_NAME: process.env.OMP_WEB_NAME } : {}),
-    ...(password ? { OMP_WEB_PASSWORD: password } : {}),
+    ...(passwordHash ? { OMP_WEB_PASSWORD_HASH: passwordHash } : {}),
     ...(ompBin ? { OMP_WEB_OMP_BIN: ompBin } : {}),
     ...(agentDir ? { PI_CODING_AGENT_DIR: agentDir } : {}),
   }, envPath);
@@ -339,7 +349,7 @@ function install(options = {}) {
   console.log(`url:       http://${hostname}:${port}`);
   console.log(`logs:      journalctl --user -u ${UNIT_NAME} -f`);
   if (options.autostart === false) console.log("note:      service is not enabled at login (--no-autostart)");
-  if (password) console.log("note:      password is stored in the env file (mode 600)");
+  if (passwordHash) console.log("note:      password hash is stored in the env file (mode 600)");
   console.log("note:      for headless servers, run: loginctl enable-linger $USER");
 }
 

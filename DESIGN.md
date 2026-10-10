@@ -170,10 +170,21 @@ Deploy the frontend and API support together; no native OMP upgrade is required.
 ## Security contract
 
 - Bind loopback-only by default. A non-loopback hostname is an explicit opt-in.
-- `OMP_WEB_PASSWORD` protects every route with a password-only sign-in screen.
+- `OMP_WEB_PASSWORD_HASH` protects every route with a password-only sign-in
+  screen. Only a scrypt hash is accepted (`ompweb hash-password`); a plaintext
+  `OMP_WEB_PASSWORD` or `--password` refuses to start, because every `omp`
+  session inherits the server's environment and an agent could print the
+  password into its transcript, session file and model-provider traffic.
   Successful sign-in creates an HTTP-only, signed cookie with a 30-day expiry;
-  changing the configured password invalidates existing sessions. Exposed
-  deployments require HTTPS through a trusted reverse proxy or VPN.
+  the signing key is a per-installation random value mixed with the hash, so a
+  copied password hash cannot forge a session and changing the password still
+  invalidates existing sessions. Exposed deployments require HTTPS through a
+  trusted reverse proxy or VPN.
+- omp-web's own secrets (`OMP_WEB_PASSWORD`, `OMP_WEB_PASSWORD_HASH`,
+  `OMP_WEB_TRUSTED_HEADER_SECRET`) are stripped from every child process
+  environment through `createChildProcessEnvironment`
+  (`lib/project-command-env.ts`). `OMP_WEB_*` values that are configuration
+  rather than secrets (`OMP_WEB_PACKAGE_DIR`, `OMP_WEB_OMP_BIN`, ...) are kept.
 - API requests are origin-checked. Do not add browser-to-host execution paths
   that bypass this boundary.
 - OMP RPC host tools are intentionally not registered. A browser request must
