@@ -729,17 +729,21 @@ function extractFirstDisplayMessageFromPrefix(content: string): string | undefin
 // message past the 4 KiB prefix; stream lines until one turns up.
 function scanFirstUserMessage(filePath: string): string {
   let text = "";
-  forEachFileLineSync(filePath, (line) => {
-    if (!line.includes('"user"')) return;
-    try {
-      const entry = JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } };
-      if (entry.type !== "message" || entry.message?.role !== "user") return;
-      text = extractTextFromContent(entry.message.content);
-      return !text;
-    } catch {
-      // Torn or hand-edited line: skip it, as parseJsonlLenient does.
-    }
-  });
+  try {
+    forEachFileLineSync(filePath, (line) => {
+      if (!line.includes('"user"')) return;
+      try {
+        const entry = JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } };
+        if (entry.type !== "message" || entry.message?.role !== "user") return;
+        text = extractTextFromContent(entry.message.content);
+        return !text;
+      } catch {
+        // Torn or hand-edited line: skip it, as parseJsonlLenient does.
+      }
+    });
+  } catch {
+    // A line past the JS string cap: keep listing the session without a first message.
+  }
   return text;
 }
 
@@ -933,7 +937,10 @@ export function scanSessionInfo(filePath: string, withStatus = true): OmpSession
     }
 
     // Cap at the prefix size: the list ships firstMessage for every session.
-    if (!firstMessage && size > SESSION_LIST_PREFIX_BYTES) firstMessage = scanFirstUserMessage(filePath).slice(0, SESSION_LIST_PREFIX_BYTES);
+    // Files past the load ceiling cannot be opened anyway, so skip reading them.
+    if (!firstMessage && size > SESSION_LIST_PREFIX_BYTES && size <= MAX_SESSION_LOAD_BYTES) {
+      firstMessage = scanFirstUserMessage(filePath).slice(0, SESSION_LIST_PREFIX_BYTES);
+    }
     firstMessage ||= extractFirstDisplayMessageFromPrefix(content) ?? "";
     const messageCount = Math.max(parsedMessageCount, countMessageMarkers(content));
     return {
