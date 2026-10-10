@@ -38,7 +38,7 @@ interface ToastOptions {
   onClose?: () => void;
   /**
    * Runs when the card itself is clicked (anywhere but its buttons, links and
-   * expandable text), then closes the toast.
+   * expandable text), then closes the toast and marks its history entry read.
    */
   onClick?: () => void;
   /** List this toast in the Notifications tab. Only for the notification types that can also be pushed. */
@@ -63,6 +63,8 @@ export interface ToastHistoryEntry {
   title: React.ReactNode;
   description?: React.ReactNode;
   clamp?: boolean;
+  /** The toast's card action, run by clicking the entry. */
+  onClick?: () => void;
   at: number;
   read: boolean;
 }
@@ -84,15 +86,18 @@ export const toastHistory = {
   },
   get: () => history,
   /** Add an entry without showing a toast, e.g. for a notification already delivered by the OS. */
-  record(kind: ToastKind, title: React.ReactNode, description?: React.ReactNode, options?: { id?: string; clamp?: boolean }) {
+  record(kind: ToastKind, title: React.ReactNode, description?: React.ReactNode, options?: { id?: string; clamp?: boolean; onClick?: () => void }) {
     const id = options?.id ?? `recorded-${++recordedCount}`;
     // A reused id (`<sessionId>:<type>`) replaces its toast on screen, so it
     // replaces its history entry too, unread again: it is a new notification.
-    const entry: ToastHistoryEntry = { id, kind, title, description, clamp: options?.clamp, at: Date.now(), read: false };
+    const entry: ToastHistoryEntry = { id, kind, title, description, clamp: options?.clamp, onClick: options?.onClick, at: Date.now(), read: false };
     setHistory([entry, ...history.filter((e) => e.id !== id)].slice(0, TOAST_HISTORY_LIMIT));
   },
   markAllRead: () => {
     if (history.some((e) => !e.read)) setHistory(history.map((e) => e.read ? e : { ...e, read: true }));
+  },
+  markRead: (id: string) => {
+    if (history.some((e) => e.id === id && !e.read)) setHistory(history.map((e) => e.id === id ? { ...e, read: true } : e));
   },
   remove: (id: string) => setHistory(history.filter((entry) => entry.id !== id)),
   clear: () => setHistory([]),
@@ -119,7 +124,7 @@ function add(kind: ToastKind, title: React.ReactNode, description?: React.ReactN
     timeout,
     ...(options?.onClose ? { onClose: options.onClose } : {}),
   });
-  if (options?.history) toastHistory.record(kind, title, description, { id, clamp: options.clamp });
+  if (options?.history) toastHistory.record(kind, title, description, { id, clamp: options.clamp, onClick: options.onClick });
   return id;
 }
 export const toast = {
@@ -326,6 +331,8 @@ function Toaster() {
               if (pointerClick && Math.max(from.travel, Math.hypot(event.clientX - from.x, event.clientY - from.y)) > 10) return;
               // Releasing a text selection is not a request to open anything.
               if (window.getSelection()?.isCollapsed === false) return;
+              // Following the toast is reading it.
+              toastHistory.markRead(t.id);
               manager.close(t.id);
               onClick();
             } : undefined}
@@ -334,6 +341,7 @@ function Toaster() {
             onKeyDown={t.data?.onClick ? (event) => {
               if (event.key !== "Enter" || event.target !== event.currentTarget) return;
               event.preventDefault();
+              toastHistory.markRead(t.id);
               manager.close(t.id);
               t.data?.onClick?.();
             } : undefined}
