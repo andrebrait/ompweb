@@ -13,6 +13,7 @@ import {
   type Stats,
 } from "fs";
 import { spawn } from "child_process";
+import { createChildProcessEnvironment } from "./project-command-env";
 import { randomUUID } from "crypto";
 import { tmpdir } from "os";
 import { dirname, join, posix, resolve, win32 } from "path";
@@ -442,6 +443,9 @@ export function commitSelfUpdate(attemptId: string, kind: Kind = "app"): { accep
       detached: true,
       stdio: "ignore",
       windowsHide: true,
+      // The worker and everything it runs inherit this environment, so the web
+      // password hash must not be in it (issue #239).
+      env: createChildProcessEnvironment(),
     });
     child.unref();
     // record worker pid

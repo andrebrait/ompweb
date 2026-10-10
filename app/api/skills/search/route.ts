@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { runNpx } from "@/lib/npx";
+import { createChildProcessEnvironment } from "@/lib/project-command-env";
 import type { SkillSearchResult } from "@/lib/api-types";
 
 export const dynamic = "force-dynamic";
@@ -100,7 +101,7 @@ export async function POST(req: Request) {
     } catch {
       const { stdout, stderr } = await runNpx(["skills", "find", query.trim()], {
         timeout: 20000,
-        env: { ...process.env, FORCE_COLOR: "0" },
+        env: createChildProcessEnvironment({ FORCE_COLOR: "0" }),
       });
 
       const results = parseSearchOutput(stdout + stderr).slice(0, limit);

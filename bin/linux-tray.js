@@ -34,6 +34,8 @@ const path = require("node:path");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { readServiceEnv, writeServiceEnv } = require("./service-env");// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { getAccessibleAddresses, isLoopbackHost } = require("./network-addresses");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { hashPassword } = require("./omp-web-password-hash");
 
 const { Interface } = dbus.interface;
 const { Variant } = dbus;
@@ -770,7 +772,7 @@ function createTrayState(config, { log = console.log } = {}) {
       case "expose": {
         const exposing = !state.exposed;
         const updates = { OMP_WEB_HOSTNAME: exposing ? "0.0.0.0" : "127.0.0.1" };
-        if (exposing && !readServiceEnv().OMP_WEB_PASSWORD) {
+        if (exposing && !readServiceEnv().OMP_WEB_PASSWORD_HASH) {
           const password = await dialogPrompt({
             tool: state.dialogTool,
             title: "ompweb",
@@ -781,7 +783,7 @@ function createTrayState(config, { log = console.log } = {}) {
             state.notify("ompweb", "Expose cancelled: a password is required to leave loopback");
             break;
           }
-          updates.OMP_WEB_PASSWORD = password;
+          updates.OMP_WEB_PASSWORD_HASH = hashPassword(password);
         }
         if (state.applyServiceEnv(updates)) {
           const urls = getAccessibleAddresses({ hostname: state.hostname, port: state.port }).entries
@@ -824,9 +826,9 @@ function createTrayState(config, { log = console.log } = {}) {
         if (password === null) break;
         const updates = {};
         if (password) {
-          updates.OMP_WEB_PASSWORD = password;
+          updates.OMP_WEB_PASSWORD_HASH = hashPassword(password);
         } else {
-          updates.OMP_WEB_PASSWORD = null;
+          updates.OMP_WEB_PASSWORD_HASH = null;
           if (!isLoopbackHost(state.hostname)) updates.OMP_WEB_HOSTNAME = "127.0.0.1";
         }
         if (state.applyServiceEnv(updates)) {

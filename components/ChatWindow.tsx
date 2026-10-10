@@ -44,6 +44,8 @@ interface Props {
   newSessionCwd: string | null;
   newSessionWorkspace?: ReactNode;
   toolCallsDefaultCollapsed?: boolean;
+  /** "Expand thinking blocks by default": open each thinking block on mount. */
+  expandThinkingByDefault?: boolean;
   /** omp `hideThinkingBlock`: omit thinking from the transcript. */
   hideThinkingBlock?: boolean;
   onAgentEnd?: () => void;
@@ -269,6 +271,7 @@ interface CommittedTranscriptProps {
   onOpenFile?: (filePath: string) => void;
   sessionId: string | undefined;
   toolCallsDefaultCollapsed: boolean;
+  expandThinkingByDefault: boolean;
   hideThinkingBlock: boolean;
   visibleCount: number;
   /** True while the viewport is near the bottom of the conversation. When
@@ -289,7 +292,7 @@ interface CommittedTranscriptProps {
 const CommittedTranscript = memo(function CommittedTranscript({
   messages, entryIds, conversationMeta, messageRefs, isStreaming, sessionBusy, externalRunActive, isNew, forkingEntryId,
   handleFork, handleNavigate, handleEditContent, modelNames, messageCwd, onOpenFile, sessionId,
-  toolCallsDefaultCollapsed, hideThinkingBlock, visibleCount, nearBottom, sentinelRef, handleLoadMoreClick,
+  toolCallsDefaultCollapsed, expandThinkingByDefault, hideThinkingBlock, visibleCount, nearBottom, sentinelRef, handleLoadMoreClick,
 }: CommittedTranscriptProps) {
   const { t } = useI18n();
   const { toolResultsMap, lastAnchorIdx, visibleRefIndexByMessage } = conversationMeta;
@@ -346,6 +349,7 @@ const CommittedTranscript = memo(function CommittedTranscript({
         prevTimestamp={idx > 0 ? (messages[idx - 1] as AgentMessage & { timestamp?: number }).timestamp : undefined}
         sessionId={sessionId}
         toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}
+        expandThinkingByDefault={expandThinkingByDefault}
         hideThinking={hideThinkingBlock}
         sourceBlockIndices={options.sourceBlockIndices}
       />
@@ -459,7 +463,7 @@ const CommittedTranscript = memo(function CommittedTranscript({
   );
 });
 
-export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCallsDefaultCollapsed = true, hideThinkingBlock = false, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, sessionInfoContainer, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onProviderUsageContextChange, onGenerationSpeedChange, onOpenFile, onOpenUrl, onOpenProviders }: Props) {
+export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCallsDefaultCollapsed = true, expandThinkingByDefault = false, hideThinkingBlock = false, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, sessionInfoContainer, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onProviderUsageContextChange, onGenerationSpeedChange, onOpenFile, onOpenUrl, onOpenProviders }: Props) {
   const { t, tn } = useI18n();
   const { playDoneSound, unlockAudio } = useAudio();
   const isMobile = useIsMobile();
@@ -1277,6 +1281,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
               onOpenFile={onOpenFile}
               sessionId={session?.id ?? sessionIdRef.current ?? undefined}
               toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}
+              expandThinkingByDefault={expandThinkingByDefault}
               hideThinkingBlock={hideThinkingBlock}
               visibleCount={visibleCount}
               nearBottom={nearBottom}
@@ -1292,6 +1297,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
                 onOpenFile={onOpenFile}
                 toolResults={toolResultsWithLive}
                 toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}
+                expandThinkingByDefault={expandThinkingByDefault}
                 hideThinking={hideThinkingBlock}
                 liveTokensPerSecond={tokensPerSecond}
               />
