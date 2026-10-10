@@ -646,6 +646,9 @@ export interface OmpSessionInfo {
 
 const SESSION_LIST_PREFIX_BYTES = 4096;
 const SESSION_LIST_SUFFIX_BYTES = 32_768;
+// Injected context (rules, skills, memory recall) can push the first user
+// message well past the 4 KiB prefix; only files lacking one there pay this.
+const SESSION_FIRST_MESSAGE_SCAN_BYTES = 256 * 1024;
 
 function decodeJsonStringFragment(value: string): string {
   const safeValue = value.endsWith("\\") ? value.slice(0, -1) : value;
@@ -722,6 +725,25 @@ function extractFirstDisplayMessageFromPrefix(content: string): string | undefin
     index = content.indexOf('"role"', index + 6);
   }
   return fallback;
+}
+
+function scanFirstUserMessage(filePath: string): string {
+  const [window, , size] = readTextSlices(filePath, SESSION_FIRST_MESSAGE_SCAN_BYTES, 0);
+  const lines = window.split("\n");
+  // The window may cut the last line; the raw-text extractor still reads its start.
+  const cutLine = size > SESSION_FIRST_MESSAGE_SCAN_BYTES ? lines.pop() : undefined;
+  for (const line of lines) {
+    if (!line.includes('"user"')) continue;
+    try {
+      const entry = JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } };
+      if (entry.type !== "message" || entry.message?.role !== "user") continue;
+      const text = extractTextFromContent(entry.message.content);
+      if (text) return text;
+    } catch {
+      // Torn or hand-edited line: skip it, as parseJsonlLenient does.
+    }
+  }
+  return (cutLine && extractFirstDisplayMessageFromPrefix(cutLine)) || "";
 }
 
 function extractTextFromContent(content: unknown): string {
@@ -913,6 +935,8 @@ export function scanSessionInfo(filePath: string, withStatus = true): OmpSession
       }
     }
 
+    // Cap at the prefix size: the list ships firstMessage for every session.
+    if (!firstMessage && size > SESSION_LIST_PREFIX_BYTES) firstMessage = scanFirstUserMessage(filePath).slice(0, SESSION_LIST_PREFIX_BYTES);
     firstMessage ||= extractFirstDisplayMessageFromPrefix(content) ?? "";
     const messageCount = Math.max(parsedMessageCount, countMessageMarkers(content));
     return {
