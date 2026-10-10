@@ -329,6 +329,7 @@ function install(options = {}) {
     ...(process.env.OMP_WEB_DISABLE_AUTOUPDATE ? { OMP_WEB_DISABLE_AUTOUPDATE: process.env.OMP_WEB_DISABLE_AUTOUPDATE } : {}),
     ...(process.env.OMP_WEB_NAME ? { OMP_WEB_NAME: process.env.OMP_WEB_NAME } : {}),
     ...(passwordHash ? { OMP_WEB_PASSWORD_HASH: passwordHash } : {}),
+    ...(process.env.OMP_WEB_TRUSTED_HEADER_SHA256 ? { OMP_WEB_TRUSTED_HEADER_SHA256: process.env.OMP_WEB_TRUSTED_HEADER_SHA256 } : {}),
     ...(ompBin ? { OMP_WEB_OMP_BIN: ompBin } : {}),
     ...(agentDir ? { PI_CODING_AGENT_DIR: agentDir } : {}),
   }, envPath);

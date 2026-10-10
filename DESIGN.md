@@ -179,8 +179,13 @@ Deploy the frontend and API support together; no native OMP upgrade is required.
   the signing key is a per-installation random value mixed with the hash, so a
   copied password hash cannot forge a session and changing the password still
   invalidates existing sessions. Exposed deployments require HTTPS through a
-  trusted reverse proxy or VPN.
+  trusted reverse proxy or VPN. With `OMP_WEB_TRUSTED_HEADER_SHA256` set, a
+  request whose `X-Omp-Web-Auth` header hashes to that digest counts as signed
+  in; omp-web never holds the secret itself. Deciding which clients get the
+  header is the reverse proxy's job, because omp-web has no client address it
+  can trust.
 - omp-web's own secrets (`OMP_WEB_PASSWORD`, `OMP_WEB_PASSWORD_HASH`,
+  `OMP_WEB_TRUSTED_HEADER_SHA256` and its legacy name
   `OMP_WEB_TRUSTED_HEADER_SECRET`) are stripped from every child process
   environment through `createChildProcessEnvironment`
   (`lib/project-command-env.ts`). `OMP_WEB_*` values that are configuration
