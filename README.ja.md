@@ -57,9 +57,43 @@ ompweb
 ```bash
 ompweb --port 8080                         # ポート番号指定
 ompweb --hostname 0.0.0.0                  # ネットワーク公開
-ompweb --password "your-password"          # パスワード認証を有効化
+ompweb hash-password                      # OMP_WEB_PASSWORD_HASH 用の値を出力
 ompweb --no-open                           # ブラウザ自動起動を無効化
 ```
+
+### パスワード保護
+
+omp-web は**平文パスワードを一切読み取りません**。`OMP_WEB_PASSWORD` や
+`--password` を指定すると起動を拒否します。すべての `omp` セッションは
+サーバーの環境変数を引き継ぐため、エージェントが `env` を実行するだけで
+パスワードがセッションファイルに記録され、モデルプロバイダーにも送信されて
+しまうからです。
+
+代わりにハッシュを生成して渡します。
+
+```bash
+ompweb hash-password                       # 二度入力（非表示）
+echo "a-long-random-password" | ompweb hash-password   # パイプでも可
+
+OMP_WEB_PASSWORD_HASH='scrypt$15$8$1$…' ompweb
+```
+
+`ompweb hash-password` はパスワードを標準入力から読み取るため（コマンドライン
+引数には決して渡しません）、シェル履歴や `ps` に残りません。ハッシュは scrypt
+（N = 2^15、r = 8、p = 1）と 16 バイトのソルトで生成し、
+`scrypt$<ln>$<r>$<p>$<salt>$<digest>` 形式で出力します。ハッシュを読んでも
+サインインには使えず、パスワードへ戻すこともできません。
+
+セッションの署名にパスワードハッシュは使いません。初回起動時に
+`~/.omp/agent/omp-web/web-auth-secret.json`（モード `0600`）へランダムな鍵を
+生成し、ハッシュと混ぜて署名鍵にします。パスワードを変更すれば既存の
+セッションは無効になりますが、保存されたハッシュだけではセッションを
+偽造できません。
+
+サービスインストーラー（`ompweb systemd install`、`ompweb-launchd install`、
+Linux トレイ、Windows サービス）はインストール時に `OMP_WEB_PASSWORD` を
+受け付け、設定ファイルへ書き込む前にハッシュ化します。保存されるのは
+ハッシュだけです。
 
 ## 主な機能
 
@@ -80,7 +114,7 @@ ompweb --no-open                           # ブラウザ自動起動を無効�
 | --- | --- | --- |
 | `PORT` | サーバーポート | `30177` |
 | `OMP_WEB_HOSTNAME` | バインドホスト | `127.0.0.1` |
-| `OMP_WEB_PASSWORD` | Web ログイン用パスワード | _なし（認証無効）_ |
+| `OMP_WEB_PASSWORD_HASH` | Web ログイン用パスワードの scrypt ハッシュ（`ompweb hash-password` で生成）。非ループバックバインドには必須 | _なし（認証無効）_ |
 | `OMP_WEB_NO_OPEN` | `1` でブラウザ自動起動を無効化 | `0` |
 | `OMP_WEB_DISABLE_AUTOUPDATE` | `1` で更新チェックとアプリ内更新を無効化（変更後は再起動） | `0` |
 | `OMP_WEB_NAME` | ブラウザのタブとインストールしたアプリに表示する名前。`url`・`host`・`domain`（大文字小文字を区別しない）を指定すると、ブラウザが接続したホスト名（ポートなし）を使用します（localhost と IP アドレスは `omp web` のまま）。それ以外の値はそのまま使用します（変更後は再起動） | `omp web` |

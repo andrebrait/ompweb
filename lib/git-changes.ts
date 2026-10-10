@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { promisify } from "util";
 import { TEXT_PREVIEW_MAX_BYTES } from "./file-types";
+import { createChildProcessEnvironment } from "./project-command-env";
 import type {
   GitCollapseReason,
   GitFileDiffResponse,
@@ -25,7 +26,7 @@ async function git(cwd: string, args: string[], maxBuffer = GIT_STATUS_MAX_BUFFE
   const pending = execFileAsync("git", ["-C", cwd, ...args], {
     timeout: GIT_TIMEOUT_MS,
     maxBuffer,
-    env: { ...process.env, LC_ALL: "C" },
+    env: createChildProcessEnvironment({ LC_ALL: "C" }),
   });
   if (input !== undefined) {
     // git may exit before reading stdin (EPIPE); that failure surfaces through `pending`.

@@ -20,6 +20,19 @@ export async function register(): Promise<void> {
     // Diagnostics are best-effort.
   }
 
+  // A password that is plaintext, truncated or otherwise unusable must be
+  // visible in the terminal, not only as a 503 in the browser (issue #239).
+  // Requests are refused either way; this is the readable half.
+  void (async () => {
+    try {
+      const { webPasswordConfigurationProblem } = await import("@/lib/web-auth");
+      const problem = webPasswordConfigurationProblem();
+      if (problem) console.error(`[omp-web] password configuration error:\n${problem}`);
+    } catch (error) {
+      console.warn(`[omp-web] password configuration check failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  })();
+
   // Warm the shared utility omp process so the first models/auth request does
   // not pay the multi-second cold spawn (measured 1.2-4s on a real install).
   // Fire-and-forget: register() must not block boot, and a missing omp binary

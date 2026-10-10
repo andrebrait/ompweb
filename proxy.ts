@@ -1,10 +1,26 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { isApiRequestOriginAllowed, shouldCheckApiRequestOrigin } from "@/lib/request-security";
-import { isValidWebSession, isWebPasswordEnabled, OMP_WEB_SESSION_COOKIE } from "@/lib/web-auth";
+import {
+  isValidWebSession,
+  isWebPasswordEnabled,
+  webPasswordConfigurationProblem,
+  OMP_WEB_SESSION_COOKIE,
+} from "@/lib/web-auth";
 
 export function proxy(request: NextRequest) {
   if (request.nextUrl.pathname.startsWith("/api/") && shouldCheckApiRequestOrigin(request) && !isApiRequestOriginAllowed(request)) {
     return NextResponse.json({ error: "Cross-origin API requests are not allowed" }, { status: 403 });
+  }
+  // A configured-but-unusable password (plaintext, or a truncated hash) must
+  // never degrade into an open server: refuse every request with the fix. The
+  // problem is also reported once at startup (instrumentation.node.ts), so this
+  // deliberately logs nothing — a doomed request loop must not flood the log.
+  const passwordProblem = webPasswordConfigurationProblem();
+  if (passwordProblem) {
+    return new NextResponse(`omp-web password configuration error\n\n${passwordProblem}\n`, {
+      status: 503,
+      headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
+    });
   }
   if (!isWebPasswordEnabled()) {
     return request.nextUrl.pathname === "/login"

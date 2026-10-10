@@ -5,6 +5,7 @@ import * as path from "path";
 import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { getAgentDir } from "./omp/paths";
+import { createChildProcessEnvironment } from "./project-command-env";
 
 const execFileAsync = promisify(execFile);
 
@@ -134,13 +135,13 @@ export function getWindowsExecutionEnv(): NodeJS.ProcessEnv {
   const mergedPath = extraPaths.length > 0
     ? `${currentPath}${path.delimiter}${extraPaths.join(path.delimiter)}`
     : currentPath;
-  return {
-    ...process.env,
+  // The spawned PowerShell child must never see omp-web's own secrets.
+  return createChildProcessEnvironment({
     SystemRoot: sysRoot,
     windir: sysRoot,
     PATH: mergedPath,
     Path: mergedPath,
-  };
+  });
 }
 
 export function getWebServiceConfigPath(): string {
