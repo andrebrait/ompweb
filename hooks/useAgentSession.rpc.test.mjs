@@ -361,6 +361,40 @@ test("the queue panel shows omp's snapshot on load and follows queue_update, not
   assert.deepEqual(w.latest.queuedMessages, { steering: [], followUp: ["later"] });
 });
 
+test("a prompt queued behind a running shell command drops the phantom turn and reports it", async () => {
+  resetWorld();
+  primeSession("bash-queue", [userMsg("u0", "q")]);
+  // The agent route answers a prompt/steer with this while a `!!` shell command
+  // owns the session (see lib/rpc-manager.ts).
+  const queuedReply = { success: true, data: { queued: true, queue: "followUp", reason: "shellRunning" } };
+  const holdReply = () => world.holds.push({
+    match: (method, _url, body) => method === "POST" && (body?.type === "prompt" || body?.type === "steer"),
+    produce: () => Promise.resolve({ value: queuedReply }),
+  });
+  holdReply();
+  holdReply();
+  const w = await mountSession("bash-queue");
+  let sending;
+  await act(async () => {
+    sending = w.latest.handleSend("after the shell finishes");
+    await sleep(30);
+  });
+  lastEs()?.open();
+  await act(async () => { await sending; });
+  assert.equal(await sending, true);
+  assert.equal(w.latest.agentRunning, false, "no turn started behind the shell command");
+  assert.deepEqual(
+    w.latest.messages.filter((message) => message.role === "user").map((message) => message.content),
+    ["q"],
+    "the text lives in omp's queue, not in an optimistic bubble",
+  );
+  const queuedNotices = () => w.latest.notices.filter((notice) => /still running, so the message was queued/.test(notice.message));
+  assert.equal(queuedNotices().length, 1, "the user is told the message was queued");
+  // A steer degrades exactly the same way instead of erroring.
+  await act(async () => { await w.latest.handleSteer("steer instead"); });
+  assert.equal(queuedNotices().length, 2);
+});
+
 test("queued cancellation reports omp's answer and leaves the chip to the snapshot", async (t) => {
   for (const outcome of [
     {

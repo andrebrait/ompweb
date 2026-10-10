@@ -52,7 +52,7 @@ import {
 export type { SubagentInfo } from "@/lib/subagent-types";
 
 // Pure helpers extracted to sibling modules (extraction only — no logic changes).
-import { EMPTY_QUEUE, readQueueSnapshot } from "./useAgentSession-queue";
+import { EMPTY_QUEUE, isQueuedWhileShellRunning, readQueueSnapshot } from "./useAgentSession-queue";
 import type { QueuedMessages } from "./useAgentSession-queue";
 import {
   NOTICE_ERROR_VISIBLE_MS,
@@ -2676,6 +2676,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
     try {
       let sentSessionId: string | null = null;
+      // The agent route degrades a prompt into omp's follow-up queue when a
+      // `!!` shell command owns the session (another tab or device started it,
+      // so this composer never saw a run). No turn starts then, and the
+      // optimistic one must not sit there spinning.
+      let queuedBehindShell = false;
       if (isNew && newSessionCwd) {
         const selectedModel = newSessionModel;
         const existingSid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
@@ -2708,11 +2713,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             const previousEntryIds = await snapshotRunEntries(sid);
             if (promptRunIdRef.current === promptRunId) runPreviousEntryIdsRef.current = previousEntryIds;
           }
-          await sendAgentCommand(sid, {
+          queuedBehindShell = isQueuedWhileShellRunning(await sendAgentCommand(sid, {
             type: "prompt",
             message,
             ...(piImages?.length ? { images: piImages } : {}),
-          });
+          }));
         }
       } else if (session) {
         sentSessionId = session.id;
@@ -2727,13 +2732,32 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (promptRunIdRef.current === promptRunId && sessionIdRef.current === session.id) {
           runPreviousEntryIdsRef.current = previousEntryIds;
         }
-        await sendAgentCommand(session.id, {
+        queuedBehindShell = isQueuedWhileShellRunning(await sendAgentCommand(session.id, {
           type: "prompt",
           message,
           ...(piImages?.length ? { images: piImages } : {}),
-        });
+        }));
       }
       if (promptRunIdRef.current === promptRunId) promptDispatchPendingRef.current = false;
+      if (queuedBehindShell) {
+        // omp accepted the text into its follow-up queue, so this turn never
+        // started: drop the optimistic bubble (the queue chip omp publishes is
+        // the message's home) without putting the text back into the composer,
+        // and say where it went instead of failing.
+        setOptimisticUserMessage(null);
+        catchUp.invalidate();
+        eventCoalescer.reset();
+        agentRunningRef.current = false;
+        setAgentRunning(false);
+        setAgentPhase(null);
+        clearLiveToolResults();
+        lastQuotaErrorRef.current = null;
+        lastRunErrorRef.current = null;
+        slashCommandRunRef.current = false;
+        dispatch({ type: "end" });
+        addNotice({ type: "info", message: translate("agentSession.queuedWhileShellRunning") });
+        return true;
+      }
       if (isSlashCommandPrompt && sentSessionId) {
         void waitForPromptSettlement(sentSessionId, promptRunId);
       }
@@ -3522,11 +3546,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (!sid) return false;
     const piImages = toPiImages(images);
     try {
-      await sendAgentCommand(sid, {
+      const reply = await sendAgentCommand(sid, {
         type: "steer",
         message,
         ...(piImages?.length ? { images: piImages } : {}),
       });
+      // A `!!` shell command owned the session: the agent route put the text
+      // into omp's follow-up queue instead of steering a (nonexistent) turn.
+      if (isQueuedWhileShellRunning(reply)) addNotice({ type: "info", message: translate("agentSession.queuedWhileShellRunning") });
       return true;
     } catch (e) {
       console.error("Failed to steer:", e);
@@ -3544,12 +3571,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (!sid) return false;
     const piImages = toPiImages(images);
     try {
-      await sendAgentCommand(sid, {
+      const reply = await sendAgentCommand(sid, {
         type: "prompt",
         message,
         streamingBehavior: behavior,
         ...(piImages?.length ? { images: piImages } : {}),
       });
+      // Same degradation as `handleSteer`: queued behind the running shell
+      // command rather than delivered into this run.
+      if (isQueuedWhileShellRunning(reply)) addNotice({ type: "info", message: translate("agentSession.queuedWhileShellRunning") });
       return true;
     } catch (e) {
       console.error("Failed to queue prompt:", e);

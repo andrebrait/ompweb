@@ -616,6 +616,63 @@ test("a deferred thinking block rendered from a block subset loads its source bl
   assert.match(requested[0], /\/entries\/e1\/thinking\?blockIndex=2$/);
 });
 
+test("thinking blocks stay collapsed by default and open with the expand preference", async () => {
+  const message = {
+    role: "assistant",
+    provider: "t",
+    model: "m",
+    content: [{ type: "thinking", thinking: "weighing the options" }, { type: "text", text: "Answer" }],
+  };
+  const html = (props) => renderToStaticMarkup(React.createElement(MessageView, { message, ...props }));
+  // Default (off): unchanged behavior — the reasoning text is not rendered.
+  assert.doesNotMatch(html({}), /weighing the options/);
+  assert.doesNotMatch(html({ expandThinkingByDefault: false }), /weighing the options/);
+  // On: the block is open on mount, so reading reasoning needs no clicks.
+  assert.match(html({ expandThinkingByDefault: true }), /weighing the options/);
+  // The same initial state covers a streaming block on purpose (see ThinkingBlock):
+  // the reasoning the preference is meant to expose is the one being written.
+  assert.match(html({ expandThinkingByDefault: true, isStreaming: true }), /weighing the options/);
+});
+
+test("an expanded thinking block collapses and re-expands by hand", async () => {
+  const message = {
+    role: "assistant",
+    provider: "t",
+    model: "m",
+    content: [{ type: "thinking", thinking: "weighing the options" }],
+  };
+  const view = render(React.createElement(MessageView, { message, expandThinkingByDefault: true }));
+  const output = () => view.container.querySelector(".thinking-output")?.textContent;
+  assert.equal(output(), "weighing the options");
+  const trigger = view.container.querySelector(".activity-row-trigger");
+  await act(async () => { fireEvent.click(trigger); });
+  assert.equal(output(), undefined);
+  await act(async () => { fireEvent.click(trigger); });
+  assert.equal(output(), "weighing the options");
+});
+
+test("a deferred thinking block auto-expanded by the preference loads its source block", async (t) => {
+  const requested = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    requested.push(String(url));
+    return new Response(JSON.stringify({ thinking: "loaded" }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  // Ids of their own: loadThinkingContent caches per (session, entry, block),
+  // and the click test above already loaded s1/e1 block 2 in this process.
+  const view = render(React.createElement(MessageView, {
+    message: { role: "assistant", provider: "t", model: "m", content: [{ type: "thinking", thinking: "", deferred: true }] },
+    sessionId: "s2",
+    entryId: "e2",
+    sourceBlockIndices: [3],
+    expandThinkingByDefault: true,
+  }));
+  await waitFor(() => assert.equal(view.container.querySelector(".thinking-output")?.textContent, "loaded"));
+  assert.equal(requested.length, 1);
+  assert.match(requested[0], /\/entries\/e2\/thinking\?blockIndex=3$/);
+});
+
 test("a running tool call shows a spinner instead of the no-result marker", () => {
   const html = renderToStaticMarkup(React.createElement(MessageView, {
     message: {

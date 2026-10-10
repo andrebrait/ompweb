@@ -1495,9 +1495,12 @@ export class AgentSessionWrapper {
 
     switch (type) {
       case "prompt": {
-        if (this.bashRunning) {
-          throw new Error("Cannot send a prompt while a shell command is running");
-        }
+        // A `!!` shell command owns the session until it exits (omp rejects a
+        // prompt then, and treating that as a hard error tore down the client's
+        // optimistic turn and lost the message). Degrade into omp's own
+        // follow-up queue instead: omp keeps owning the chips and delivers the
+        // message once the shell command releases the session.
+        if (this.bashRunning) return await this.queueWhileShellRunning(command);
         const streamingBehavior = command.streamingBehavior as "steer" | "followUp" | undefined;
         if (!streamingBehavior) {
           this.responseObserved = false;
@@ -1560,6 +1563,10 @@ export class AgentSessionWrapper {
 
       case "steer":
       case "follow_up": {
+        // `steer` has the same collision while a `!!` shell command runs — and
+        // there is no live turn to steer anyway, so it joins the follow-up
+        // queue like a prompt would.
+        if (type === "steer" && this.bashRunning) return await this.queueWhileShellRunning(command);
         await this.proc.sendCommand({
           type,
           message: command.message as string,
@@ -1826,6 +1833,27 @@ export class AgentSessionWrapper {
         throw new Error(`Unsupported command: ${type}`);
       }
     }
+  }
+
+  /**
+   * Degrade a prompt/steer frame into omp's follow-up queue while omp-web's own
+   * `!!` shell command owns the child (`bashRunning`, set for the whole `bash`
+   * RPC). omp would refuse a prompt then — and aborting or erroring loses the
+   * user's message mid-task — so the message is forwarded as `follow_up`
+   * instead: the queue stays omp-owned (its `queue_update`/`get_state`
+   * snapshots feed every client's chips) and omp delivers the message after the
+   * shell command finishes, exactly as a queued follow-up sent during a run.
+   * The reply carries the degradation so the client can tell the user their
+   * message was queued, not steered.
+   */
+  private async queueWhileShellRunning(command: Record<string, unknown>): Promise<unknown> {
+    const images = toImageContents(command.images);
+    await this.proc.sendCommand({
+      type: "follow_up",
+      message: command.message as string,
+      ...(images ? { images } : {}),
+    });
+    return { queued: true, queue: "followUp", reason: "shellRunning" };
   }
 
   destroy(): void {
