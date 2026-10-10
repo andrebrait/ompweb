@@ -400,11 +400,12 @@ export const MAX_SESSION_LOAD_BYTES = 1024 * 1024 * 1024;
  * Read a file line by line over a byte buffer. Unlike readFileSync(path,"utf8")
  * this never materializes the whole file as a single JS string, so sessions
  * past Node's ~512 MiB string cap still open. Lines exclude the newline; the
- * decoder carries multi-byte characters across chunk boundaries.
+ * decoder carries multi-byte characters across chunk boundaries. Returning
+ * false from onLine stops the read.
  */
 export function forEachFileLineSync(
   filePath: string,
-  onLine: (line: string, offset: number, length: number) => void,
+  onLine: (line: string, offset: number, length: number) => boolean | void,
 ): void {
   const fd = openSync(filePath, "r");
   try {
@@ -425,7 +426,7 @@ export function forEachFileLineSync(
         length += end - start;
         if (end < bytesRead) {
           fragments.push(decoder.end());
-          onLine(fragments.join(""), offset, length);
+          if (onLine(fragments.join(""), offset, length) === false) return;
           fragments.length = 0;
           offset += length + 1;
           length = 0;
@@ -646,9 +647,6 @@ export interface OmpSessionInfo {
 
 const SESSION_LIST_PREFIX_BYTES = 4096;
 const SESSION_LIST_SUFFIX_BYTES = 32_768;
-// Injected context (rules, skills, memory recall) can push the first user
-// message well past the 4 KiB prefix; only files lacking one there pay this.
-const SESSION_FIRST_MESSAGE_SCAN_BYTES = 256 * 1024;
 
 function decodeJsonStringFragment(value: string): string {
   const safeValue = value.endsWith("\\") ? value.slice(0, -1) : value;
@@ -727,23 +725,22 @@ function extractFirstDisplayMessageFromPrefix(content: string): string | undefin
   return fallback;
 }
 
+// Injected context (rules, skills, memory recall) can push the first user
+// message past the 4 KiB prefix; stream lines until one turns up.
 function scanFirstUserMessage(filePath: string): string {
-  const [window, , size] = readTextSlices(filePath, SESSION_FIRST_MESSAGE_SCAN_BYTES, 0);
-  const lines = window.split("\n");
-  // The window may cut the last line; the raw-text extractor still reads its start.
-  const cutLine = size > SESSION_FIRST_MESSAGE_SCAN_BYTES ? lines.pop() : undefined;
-  for (const line of lines) {
-    if (!line.includes('"user"')) continue;
+  let text = "";
+  forEachFileLineSync(filePath, (line) => {
+    if (!line.includes('"user"')) return;
     try {
       const entry = JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } };
-      if (entry.type !== "message" || entry.message?.role !== "user") continue;
-      const text = extractTextFromContent(entry.message.content);
-      if (text) return text;
+      if (entry.type !== "message" || entry.message?.role !== "user") return;
+      text = extractTextFromContent(entry.message.content);
+      return !text;
     } catch {
       // Torn or hand-edited line: skip it, as parseJsonlLenient does.
     }
-  }
-  return (cutLine && extractFirstDisplayMessageFromPrefix(cutLine)) || "";
+  });
+  return text;
 }
 
 function extractTextFromContent(content: unknown): string {
