@@ -208,6 +208,23 @@ test("the keyboard-only footer cap applies to every attached method", () => {
   }
 });
 
+test("typing an Other answer in the composer keeps the keyboard cap on the panel", () => {
+  const viewportHeight = Math.round(window.innerHeight * 0.5);
+  const restore = stubVisualViewport(viewportHeight);
+  const host = document.body.appendChild(document.createElement("div"));
+  try {
+    render(React.createElement(ExtensionDialog, { request: askRequest(), onRespond: () => {}, attached: true, askComposerHost: host }));
+    fireEvent.click(screen.getByRole("radio", { name: "Other: type your own answer" }));
+    const answer = screen.getByRole("textbox", { name: /^Answering:/ });
+    assert.ok(host.contains(answer), "the answer field lives in the composer host");
+    fireEvent.focus(answer);
+    assert.equal(screen.getByRole("dialog").style.maxHeight, `${viewportHeight - 12}px`);
+  } finally {
+    host.remove();
+    restore();
+  }
+});
+
 test("without a visible-area API the panel keeps its CSS cap", () => {
   const { responses } = renderAttached(EDITOR);
   const panel = screen.getByRole("dialog");

@@ -96,7 +96,7 @@ function isKeyboardOpen(): boolean {
  * that focused a field will raise one even before the browser has repainted.
  * A slow re-check covers mobile browsers that resize nothing on focus.
  */
-function useMobileInputOpen(panelRef: RefObject<HTMLDivElement | null>, attached: boolean) {
+function useMobileInputOpen(panelRef: RefObject<HTMLDivElement | null>, attached: boolean, composerHost?: HTMLElement | null) {
   const [open, setOpen] = useState(false);
   useEffect(() => {
     if (!attached) {
@@ -104,19 +104,19 @@ function useMobileInputOpen(panelRef: RefObject<HTMLDivElement | null>, attached
       return;
     }
     let focused = false;
+    // The ask composer is portaled outside the panel but answers the same request.
+    const inRequest = (node: EventTarget | null) =>
+      node instanceof Node && Boolean(panelRef.current?.contains(node) || composerHost?.contains(node));
     const update = () => {
       const isOpen = focused && (isKeyboardOpen() || touchPointer());
       setOpen((current) => (current === isOpen ? current : isOpen));
     };
     const onFocusIn = (event: FocusEvent) => {
-      const panel = panelRef.current;
-      focused = Boolean(panel && event.target instanceof Node && panel.contains(event.target));
+      focused = inRequest(event.target);
       update();
     };
     const onFocusOut = (event: FocusEvent) => {
-      const panel = panelRef.current;
-      const next = event.relatedTarget;
-      focused = Boolean(next instanceof Node && panel && panel.contains(next));
+      focused = inRequest(event.relatedTarget);
       update();
     };
     update();
@@ -132,7 +132,7 @@ function useMobileInputOpen(panelRef: RefObject<HTMLDivElement | null>, attached
       window.visualViewport?.removeEventListener("resize", update);
       clearInterval(poll);
     };
-  }, [attached, panelRef]);
+  }, [attached, panelRef, composerHost]);
   return open;
 }
 
@@ -272,7 +272,7 @@ export function ExtensionDialog({
     // A composer-attached request is a regular in-flow panel, not a modal.
     active: !attached,
   });
-  const keyboardOpen = useMobileInputOpen(panelRef, attached);
+  const keyboardOpen = useMobileInputOpen(panelRef, attached, askComposerHost);
   // While the keyboard is up the panel fills the visible area instead of the
   // taller layout-viewport cap, so the footer with Cancel / Submit stays in
   // reach (#236).
