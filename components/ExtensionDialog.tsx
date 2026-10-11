@@ -500,6 +500,11 @@ export function ExtensionDialog({
                         aria-label={t("chatWindow.askOther")}
                         placeholder={t("chatWindow.askOther")}
                         value={draft.other}
+                        // Going back into kept text means answering with it again.
+                        onFocus={() => {
+                          if (draft.otherChosen || !draft.other.trim()) return;
+                          updateAskDraft(index, (current) => ({ ...current, selected: question.multi ? current.selected : [], otherChosen: true }));
+                        }}
                         rows={1}
                         onChange={(e) => {
                           const other = e.target.value;

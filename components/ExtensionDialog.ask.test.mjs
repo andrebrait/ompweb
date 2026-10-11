@@ -116,6 +116,19 @@ test("the Other text stays when another option is chosen and counts again when O
   assert.deepEqual(responses.pop(), { answers: [{ id: "color", selectedOptions: [], customInput: "Teal" }] });
 });
 
+test("going back into the kept Other text chooses Other again", async () => {
+  const user = userEvent.setup();
+  const responses = renderAsk([color]);
+  const field = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
+  await user.type(field, "Teal");
+  await user.click(screen.getByRole("radio", { name: "Red" }));
+  await user.click(field);
+  assert.equal(screen.getByRole("radio", { name: "Other: type your own answer" }).checked, true);
+  assert.equal(screen.getByRole("radio", { name: "Red" }).checked, false);
+  await user.click(screen.getByRole("button", { name: "Submit" }));
+  assert.deepEqual(responses, [{ answers: [{ id: "color", selectedOptions: [], customInput: "Teal" }] }]);
+});
+
 test("a chosen but blank Other blocks single-select Submit, and clearing the text unchooses it", async () => {
   const user = userEvent.setup();
   renderAsk([size]);
