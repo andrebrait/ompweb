@@ -168,6 +168,18 @@ test("the composer edits one Other answer at a time and keeps the others", async
   assert.deepEqual(responses, [{ answers: [{ id: "color", selectedOptions: [], customInput: "Teal" }, { id: "extras", selectedOptions: [] }] }]);
 });
 
+test("leaving a blank Other for another question unchecks it instead of blocking Submit", async () => {
+  const user = userEvent.setup();
+  renderAsk([color, extras]);
+  const colorOther = within(group(/Pick a color/)).getByRole("radio", { name: OTHER });
+  await user.click(colorOther);
+  await user.click(within(group(/Extras\\?/)).getByRole("checkbox", { name: OTHER }));
+  assert.equal(colorOther.checked, false);
+  await user.click(screen.getByRole("radio", { name: /Green/ }));
+  await user.type(composer(), "Pickles");
+  assert.equal(screen.getByRole("button", { name: "Send" }).disabled, false);
+});
+
 test("Cancel answers cancelled", async () => {
   const user = userEvent.setup();
   const { responses } = renderAsk([color]);

@@ -252,6 +252,10 @@ export function ExtensionDialog({
       cancelOther();
       return;
     }
+    // A blank Other left behind would silently keep Submit disabled.
+    if (typingIndex !== null && typingIndex !== index && !askDraftAt(typingIndex).other?.trim()) {
+      updateAskDraft(typingIndex, (draft) => ({ ...draft, other: null }));
+    }
     if (!chosen) updateAskDraft(index, (draft) => ({ selected: multi ? draft.selected : [], other: "" }));
     setTypingIndex(index);
   };
