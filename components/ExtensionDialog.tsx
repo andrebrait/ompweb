@@ -237,7 +237,12 @@ export function ExtensionDialog({
     return () => onAskComposerChange(false);
   }, [askComposerActive, onAskComposerChange]);
 
+  // Answering another question while the composer holds a blank Other drops
+  // it: left behind, it would silently keep Submit disabled.
+  const leavingBlankOther = (index: number) =>
+    typingIndex !== null && typingIndex !== index && !askDraftAt(typingIndex).other?.trim();
   const chooseOption = (index: number, multi: boolean | undefined, label: string) => {
+    if (leavingBlankOther(index)) cancelOther();
     if (!multi && typingIndex === index) setTypingIndex(null);
     updateAskDraft(index, (draft) => multi
       ? { ...draft, selected: draft.selected.includes(label) ? draft.selected.filter((current) => current !== label) : [...draft.selected, label] }
@@ -252,10 +257,7 @@ export function ExtensionDialog({
       cancelOther();
       return;
     }
-    // A blank Other left behind would silently keep Submit disabled.
-    if (typingIndex !== null && typingIndex !== index && !askDraftAt(typingIndex).other?.trim()) {
-      updateAskDraft(typingIndex, (draft) => ({ ...draft, other: null }));
-    }
+    if (leavingBlankOther(index)) cancelOther();
     if (!chosen) updateAskDraft(index, (draft) => ({ selected: multi ? draft.selected : [], other: "" }));
     setTypingIndex(index);
   };

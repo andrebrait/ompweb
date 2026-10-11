@@ -173,11 +173,15 @@ test("leaving a blank Other for another question unchecks it instead of blocking
   renderAsk([color, extras]);
   const colorOther = within(group(/Pick a color/)).getByRole("radio", { name: OTHER });
   await user.click(colorOther);
-  await user.click(within(group(/Extras\\?/)).getByRole("checkbox", { name: OTHER }));
-  assert.equal(colorOther.checked, false);
+  const extrasOther = within(group(/Extras\?/)).getByRole("checkbox", { name: OTHER });
+  await user.click(extrasOther);
+  assert.equal(colorOther.checked, false, "leaving through another Other");
+
+  // Leaving through a regular option of another question does the same.
   await user.click(screen.getByRole("radio", { name: /Green/ }));
-  await user.type(composer(), "Pickles");
-  assert.equal(screen.getByRole("button", { name: "Send" }).disabled, false);
+  assert.equal(extrasOther.checked, false, "leaving through a regular option");
+  assert.equal(composer(), null);
+  assert.equal(footerSubmit().disabled, false);
 });
 
 test("Cancel answers cancelled", async () => {
