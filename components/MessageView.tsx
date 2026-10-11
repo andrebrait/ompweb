@@ -980,7 +980,7 @@ const ToolCallBlock = memo(function ToolCallBlock({
             .join("\n"))
     : null;
   const passiveWrapper = result?.passiveContext ? parseLeadingWrapper(result.passiveContext) : null;
-  const passiveContextText = result?.passiveContext ? contextLine(result.passiveContext, t) : null;
+  const passiveContextText = result?.passiveContext ? contextLine(result.passiveContext, passiveWrapper, t) : null;
   const resultImages = result && Array.isArray(result.content)
     ? result.content.filter((b): b is ImageContent => b.type === "image")
     : [];
@@ -1200,7 +1200,7 @@ const ToolCallBlock = memo(function ToolCallBlock({
                   // Nested like a developer message: the wrapper as a header, its body below.
                   <div className="tool-call-context-card">
                     <div className="tool-call-context-title"><span aria-hidden>↳ </span>{wrapperTitle(passiveWrapper)}</div>
-                    <div className="tool-call-context-body">{passiveWrapper.body}</div>
+                    {passiveWrapper.body && <div className="tool-call-context-body">{passiveWrapper.body}</div>}
                   </div>
                 ) : (
                   <><span aria-hidden>↳ </span>{passiveContextText}</>
@@ -1332,8 +1332,11 @@ function wrapperTitle(wrapper: { tag: string; attrs: [string, string][] }): stri
 }
 
 /** "Context (system-reminder · rule=ts-set-map · …): body" for a wrapped passive context, plain otherwise. */
-function contextLine(text: string, t: (key: string, params?: Record<string, string>) => string): string {
-  const wrapper = parseLeadingWrapper(text);
+function contextLine(
+  text: string,
+  wrapper: { tag: string; attrs: [string, string][]; body: string } | null,
+  t: (key: string, params?: Record<string, string>) => string,
+): string {
   return wrapper
     ? t("messageView.passiveContextLabeled", { label: wrapperTitle(wrapper), text: wrapper.body })
     : t("messageView.passiveContext", { text });
