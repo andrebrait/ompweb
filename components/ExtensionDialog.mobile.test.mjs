@@ -2,7 +2,6 @@ import "../tests/setup-dom.mjs";
 import assert from "node:assert/strict";
 import test, { afterEach, beforeEach } from "node:test";
 import React from "react";
-import { readFile } from "node:fs/promises";
 import { renderToStaticMarkup } from "react-dom/server";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react/pure.js";
 import { createJiti } from "jiti";
@@ -10,7 +9,6 @@ import { createJiti } from "jiti";
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
 const { ExtensionDialog, shouldDeferAttachedFocus } = await jiti.import("./ExtensionDialog.tsx");
 const { MOBILE_QUERY } = await jiti.import("@/hooks/useIsMobile");
-const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 
 const OPTIONS = [
   { label: "Red" },
@@ -127,11 +125,10 @@ test("the option row, its text and its preview cannot push past the panel edge",
   assert.doesNotMatch(html, /overflow-x:auto/);
 });
 
-test("the panel, its scroller and the Other textarea can shrink inside the column", () => {
+test("the panel and its scroller can shrink inside the column", () => {
   const html = staticMarkup();
   assert.match(html, /role="dialog"[^>]*style="[^"]*box-sizing:border-box;min-width:0/);
   assert.match(html, /class="extension-dialog-content" style="[^"]*min-width:0/);
-  assert.match(html, /aria-label="Other: type your own answer"[\s\S]{0,400}box-sizing:border-box;min-width:0/);
 });
 
 // ---- #235: composer-attached focus --------------------------------------------
@@ -170,27 +167,25 @@ test("a composer-attached request on a touch device does not open the keyboard",
   try {
     renderAttached();
     await new Promise((resolve) => requestAnimationFrame(resolve));
-    const other = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
-    assert.notEqual(document.activeElement, other);
+    assert.equal(screen.getByRole("dialog").contains(document.activeElement), false);
   } finally {
     restore();
   }
 });
 
-// ---- #236: the submit affordance ----------------------------------------------
+// ---- #236: the footer stays reachable --------------------------------------
 
-test("an open keyboard caps the panel to the visible area and reveals the send button", () => {
+const EDITOR = { type: "extension_ui_request", id: "editor-1", method: "editor", title: "Notes" };
+
+test("an open keyboard caps the panel to the visible area", () => {
   const viewportHeight = Math.round(window.innerHeight * 0.5);
   const restore = stubVisualViewport(viewportHeight);
   try {
-    renderAttached();
+    renderAttached(EDITOR);
     const panel = screen.getByRole("dialog");
     assert.equal(panel.style.maxHeight, "min(420px, 60dvh)", "no keyboard: the CSS cap stands");
-    assert.equal(screen.queryByRole("button", { name: "Submit answer" }), null);
-
-    fireEvent.focus(screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea"));
+    fireEvent.focus(screen.getByRole("textbox", { name: "Notes" }));
     assert.equal(panel.style.maxHeight, `${viewportHeight - 12}px`, "the footer must stay inside the visible area");
-    assert.ok(screen.getByRole("button", { name: "Submit answer" }), "the answer can be sent from the keyboard");
   } finally {
     restore();
   }
@@ -213,63 +208,13 @@ test("the keyboard-only footer cap applies to every attached method", () => {
   }
 });
 
-test("the inline send button submits the same answer as the footer", () => {
-  const restore = stubVisualViewport(Math.round(window.innerHeight * 0.5));
-  try {
-    const { responses } = renderAttached();
-    const other = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
-    fireEvent.focus(other);
-    fireEvent.change(other, { target: { value: " Teal " } });
-    fireEvent.click(screen.getByRole("button", { name: "Submit answer" }));
-    assert.deepEqual(responses, [{ answers: [{ id: "color", selectedOptions: [], customInput: "Teal" }] }]);
-  } finally {
-    restore();
-  }
-});
-
-test("the inline send button keeps the footer's canSubmit rule", () => {
-  const restore = stubVisualViewport(Math.round(window.innerHeight * 0.5));
-  try {
-    const { responses } = renderAttached(askRequest([{ id: "size", question: "Pick a size", options: [{ label: "S" }, { label: "M" }] }]));
-    fireEvent.focus(screen.getByRole("group", { name: /Pick a size/ }).querySelector("textarea"));
-    const send = screen.getByRole("button", { name: "Submit answer" });
-    assert.equal(send.disabled, true);
-    fireEvent.click(send);
-    assert.deepEqual(responses, [], "an unanswered single-select question cannot be submitted");
-    assert.equal(screen.getByRole("button", { name: "Submit" }).disabled, true, "the footer agrees");
-  } finally {
-    restore();
-  }
-});
-
 test("without a visible-area API the panel keeps its CSS cap", () => {
-  const { responses } = renderAttached();
+  const { responses } = renderAttached(EDITOR);
   const panel = screen.getByRole("dialog");
+  const textarea = screen.getByRole("textbox", { name: "Notes" });
+  fireEvent.focus(textarea);
+  fireEvent.change(textarea, { target: { value: "Teal" } });
   assert.equal(panel.style.maxHeight, "min(420px, 60dvh)");
-  const other = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
-  fireEvent.focus(other);
-  fireEvent.change(other, { target: { value: "Teal" } });
-  assert.equal(panel.style.maxHeight, "min(420px, 60dvh)");
-  assert.equal(screen.queryByRole("button", { name: "Submit answer" }), null, "no keyboard signal, no extra control");
   fireEvent.click(screen.getByRole("button", { name: "Submit" }));
-  assert.deepEqual(responses, [{ answers: [{ id: "color", selectedOptions: [], customInput: "Teal" }] }]);
-});
-
-// ---- touch targets (globals.css) ----------------------------------------------
-
-function ruleBody(selector) {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
-}
-
-test("the dialog footer and inline send button scale with the touch-target preference", () => {
-  assert.match(
-    ruleBody('html[data-touch-targets="accessible"] :is(.extension-dialog-footer > button, .extension-dialog-send)'),
-    /min-height:\s*44px/,
-  );
-  assert.match(ruleBody('html[data-touch-targets="accessible"] .extension-dialog-send'), /min-width:\s*44px/);
-  assert.match(
-    css,
-    /@media \(max-width: 640px\) and \(pointer: coarse\) and \(hover: none\) \{\s*html:not\(\[data-touch-targets="compact"\]\):not\(\[data-touch-targets="accessible"\]\) :is\(\.extension-dialog-footer > button, \.extension-dialog-send\) \{\s*min-height: 40px;/,
-  );
+  assert.deepEqual(responses, [{ value: "Teal" }]);
 });
