@@ -352,13 +352,16 @@ during the wait.
   for terminal states) fed by the same `subagent_lifecycle`/`subagent_progress`
   SSE frames; clicking a chip opens the transcript dialog. `TodoList` keeps a
   non-collapsible default (`collapsible` prop) for SSR tests.
-- **Ask "Other" answers are typed in the composer, never in the panel.**
-  `ExtensionDialog` owns the ask drafts and portals `ComposerAskAnswer`
-  (textarea + Send only, Escape/× cancels) into a host `ChatWindow` places
-  where the composer sits; `onAskComposerChange` hides `ChatInput` meanwhile.
-  `ChatInput` stays mounted (`display: none`) so the user's draft, attachments
-  and recording survive. The panel's footer **Submit** is hidden while the
-  composer answers, so only one send control is ever on screen.
+- **Ask "Other" answers: a field per question on desktop, the composer on a
+  phone** (`useIsMobile`). The Other text lives as long as the question
+  (`otherChosen` toggles; the text stays). On a phone `ExtensionDialog`
+  portals `ComposerAskAnswer` (textarea + one button, Escape/× leaves) into a
+  host `ChatWindow` places where the composer sits; `onAskComposerChange`
+  hides `ChatInput` meanwhile. `ChatInput` stays mounted (`display: none`) so
+  the user's draft, attachments and recording survive. The panel footer is
+  hidden while the composer answers, so there is one set of controls. With
+  several questions the composer button is **Done** (back to the panel), never
+  submit-all: preselected answers must be reviewed before **Submit**.
 
 ### Side questions (`/btw`, `lib/btw.ts`, `hooks/useBtw.ts`, `components/BtwPanel.tsx`)
 - `btw` / `btw_cancel` / `get_btw_history` are passthrough RPC commands;

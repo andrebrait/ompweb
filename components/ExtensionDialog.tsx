@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import type { ExtensionUiRequest } from "@/lib/types";
 import type { RpcAskDialogAnswer } from "@/lib/pi-types";
 import { useI18n } from "@/lib/i18n";
 import { useModalDialog } from "@/hooks/useModalDialog";
 import { useTouchTargets } from "@/hooks/useTouchTargets";
-import { matchMobileViewport } from "@/hooks/useIsMobile";
+import { matchMobileViewport, useIsMobile } from "@/hooks/useIsMobile";
 import { ComposerAskAnswer } from "./ComposerAskAnswer";
 
 export type ExtensionDialogRequest = Extract<
@@ -21,9 +21,10 @@ export type ExtensionDialogResponse =
   | { cancelled: true }
   | { answers: RpcAskDialogAnswer[] };
 
-// `other` is null until the question's "Other" option is chosen.
-type AskDraft = { selected: string[]; other: string | null };
-const EMPTY_ASK_DRAFT: AskDraft = { selected: [], other: null };
+// The Other text lives as long as the question: picking a regular option only
+// unchooses it, so coming back to Other finds what was typed.
+type AskDraft = { selected: string[]; other: string; otherChosen: boolean };
+const EMPTY_ASK_DRAFT: AskDraft = { selected: [], other: "", otherChosen: false };
 
 // Keyboard-aware panel height. The on-screen keyboard shrinks the visible
 // area, so a panel sized against the layout viewport alone keeps its footer
@@ -163,7 +164,7 @@ function initialAskDrafts(request: ExtensionDialogRequest): AskDraft[] {
   if (request.method !== "ask") return [];
   return request.questions.map((question) => {
     const recommended = question.multi || question.recommended === undefined ? undefined : question.options[question.recommended];
-    return { selected: recommended ? [recommended.label] : [], other: null };
+    return { selected: recommended ? [recommended.label] : [], other: "", otherChosen: false };
   });
 }
 
@@ -188,8 +189,8 @@ export function ExtensionDialog({
   onRespond: (request: ExtensionDialogRequest, response: ExtensionDialogResponse) => void;
   /** Render as a composer panel instead of a full-chat overlay. */
   attached?: boolean;
-  /** Where the composer sits. Choosing an ask question's "Other" option types
-   * its answer there; without a host the option is not offered. */
+  /** Where the composer sits. On a phone, choosing an ask question's "Other"
+   * option types its answer there; elsewhere it is typed in the panel. */
   askComposerHost?: HTMLElement | null;
   /** Tells the host to hide its own composer while the answer is typed there. */
   onAskComposerChange?: (active: boolean) => void;
@@ -199,8 +200,12 @@ export function ExtensionDialog({
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const requestIdRef = useRef(request.id);
   const [askDrafts, setAskDrafts] = useState(() => initialAskDrafts(request));
-  // The question whose "Other" answer the composer is editing.
+  // The question whose "Other" answer the composer is editing (phones only).
   const [typingIndex, setTypingIndex] = useState<number | null>(null);
+  // Desktop keeps a text field per question in the panel; on a phone the
+  // field and its keyboard would cover the panel, so the composer takes it.
+  const isMobile = useIsMobile();
+  const composerHost = isMobile ? askComposerHost : null;
   const viewportMaxHeight = useViewportMaxHeight();
   const { touchTargets } = useTouchTargets();
 
@@ -221,12 +226,12 @@ export function ExtensionDialog({
   // multi-select may stay empty.
   const canSubmit = request.method === "ask"
     ? request.questions.every((question, index) => {
-      const { selected, other } = askDraftAt(index);
-      const typed = other !== null && other.trim() !== "";
-      return (other === null || typed) && (question.multi || selected.length > 0 || typed);
+      const { selected, other, otherChosen } = askDraftAt(index);
+      const typed = otherChosen && other.trim() !== "";
+      return (!otherChosen || typed) && (question.multi || selected.length > 0 || typed);
     })
     : request.method !== "select" || selectedOption !== null;
-  const askComposerActive = request.method === "ask" && typingIndex !== null && Boolean(askComposerHost);
+  const askComposerActive = request.method === "ask" && typingIndex !== null && Boolean(composerHost);
   const title = request.method === "ask" ? t("chatWindow.askTitle") : request.title;
 
   const cancel = () => onRespond(request, { cancelled: true });
@@ -237,33 +242,37 @@ export function ExtensionDialog({
     return () => onAskComposerChange(false);
   }, [askComposerActive, onAskComposerChange]);
 
-  // Answering another question while the composer holds a blank Other drops
-  // it: left behind, it would silently keep Submit disabled.
+  // Answering another question while the composer holds a blank Other
+  // unchooses it: left behind, it would silently keep Submit disabled.
   const leavingBlankOther = (index: number) =>
-    typingIndex !== null && typingIndex !== index && !askDraftAt(typingIndex).other?.trim();
+    typingIndex !== null && typingIndex !== index && !askDraftAt(typingIndex).other.trim();
   const chooseOption = (index: number, multi: boolean | undefined, label: string) => {
     if (leavingBlankOther(index)) cancelOther();
     if (!multi && typingIndex === index) setTypingIndex(null);
     updateAskDraft(index, (draft) => multi
       ? { ...draft, selected: draft.selected.includes(label) ? draft.selected.filter((current) => current !== label) : [...draft.selected, label] }
-      : { selected: [label], other: null });
+      : { ...draft, selected: [label], otherChosen: false });
   };
-  // Choosing Other hands typing to the composer. A checked Other whose answer
-  // the composer is not editing (another question took it) is re-activated by
-  // a click; a multi-select Other being edited is unchecked by one.
+  // A click on Other checks it. On a phone it also hands typing to the
+  // composer: a checked Other the composer is not editing (another question
+  // took it) is re-activated by a click, and a multi-select Other being edited
+  // is unchecked by one. On desktop it focuses the question's field.
   const chooseOther = (index: number, multi: boolean | undefined) => {
-    const chosen = askDraftAt(index).other !== null;
-    if (chosen && multi && typingIndex === index) {
-      cancelOther();
+    const chosen = askDraftAt(index).otherChosen;
+    if (chosen && multi && (!composerHost || typingIndex === index)) {
+      updateAskDraft(index, (draft) => ({ ...draft, otherChosen: false }));
+      if (typingIndex === index) setTypingIndex(null);
       return;
     }
     if (leavingBlankOther(index)) cancelOther();
-    if (!chosen) updateAskDraft(index, (draft) => ({ selected: multi ? draft.selected : [], other: "" }));
-    setTypingIndex(index);
+    if (!chosen) updateAskDraft(index, (draft) => ({ ...draft, selected: multi ? draft.selected : [], otherChosen: true }));
+    if (composerHost) setTypingIndex(index);
+    else document.getElementById(`ask-${request.id}-${index}-other`)?.focus();
   };
+  // Leaves the composer and unchooses its Other; the text stays for later.
   function cancelOther() {
     if (typingIndex === null) return;
-    updateAskDraft(typingIndex, (draft) => ({ ...draft, other: null }));
+    updateAskDraft(typingIndex, (draft) => ({ ...draft, otherChosen: false }));
     setTypingIndex(null);
   }
 
@@ -314,7 +323,7 @@ export function ExtensionDialog({
       onRespond(request, {
         answers: request.questions.map((question, index) => {
           const draft = askDraftAt(index);
-          const customInput = draft.other?.trim();
+          const customInput = draft.otherChosen ? draft.other.trim() : "";
           return {
             id: question.id,
             selectedOptions: question.options.map((option) => option.label).filter((label) => draft.selected.includes(label)),
@@ -475,12 +484,13 @@ export function ExtensionDialog({
                       )}
                       <span style={{ whiteSpace: "pre-wrap" }}>{question.question}</span>
                     </legend>
-                    {/* `null` is the "Other" row: its answer is typed in the composer. */}
-                    {[...question.options, ...(askComposerHost ? [null] : [])].map((option, optionIndex) => {
-                      const checked = option ? draft.selected.includes(option.label) : draft.other !== null;
+                    {/* `null` is the "Other" row. */}
+                    {[...question.options, null].map((option, optionIndex) => {
+                      const checked = option ? draft.selected.includes(option.label) : draft.otherChosen;
+                      const typingHere = !option && typingIndex === index && askComposerActive;
                       return (
+                        <Fragment key={option ? `option:${option.label}` : "other"}>
                         <label
-                          key={option ? `option:${option.label}` : "other"}
                           style={{
                             display: "flex",
                             alignItems: "flex-start",
@@ -489,6 +499,8 @@ export function ExtensionDialog({
                             padding: "8px 10px",
                             borderRadius: 7,
                             border: `1px solid ${checked ? "var(--accent)" : "var(--border)"}`,
+                            // The row the composer is typing into reads as linked to it.
+                            boxShadow: typingHere ? "0 0 0 1px var(--accent)" : undefined,
                             background: checked ? "color-mix(in srgb, var(--accent) 10%, var(--bg-panel))" : "var(--bg-panel)",
                             color: "var(--text)",
                             cursor: "pointer",
@@ -522,13 +534,51 @@ export function ExtensionDialog({
                           ) : (
                             <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>
                               {t("chatWindow.askOther")}
-                              {/* While the composer edits it the text is down there; otherwise show it. */}
-                              {draft.other && typingIndex !== index && (
-                                <span style={{ display: "block", marginTop: 2, color: "var(--text-muted)", fontSize: 12, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{draft.other}</span>
+                              {typingHere && (
+                                <span style={{ marginLeft: 6, color: "var(--accent)", fontSize: 11, fontWeight: 600 }}>{t("chatWindow.askTypingBelow")}</span>
+                              )}
+                              {/* On a phone the text is typed in the composer; show it here, per question. */}
+                              {composerHost && draft.other.trim() && (
+                                <span style={{ display: "block", marginTop: 2, color: checked ? "var(--text)" : "var(--text-muted)", fontSize: 12, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{draft.other}</span>
                               )}
                             </span>
                           )}
                         </label>
+                        {!option && !composerHost && (
+                          <textarea
+                            id={`ask-${request.id}-${index}-other`}
+                            aria-label={t("chatWindow.askOther")}
+                            placeholder={t("chatWindow.askOther")}
+                            value={draft.other}
+                            rows={2}
+                            onChange={(e) => {
+                              const other = e.target.value;
+                              // Typing chooses Other, and on single-select replaces the choice.
+                              updateAskDraft(index, (current) => other.trim()
+                                ? { selected: question.multi ? current.selected : [], other, otherChosen: true }
+                                : { ...current, other });
+                            }}
+                            onKeyDown={(e) => {
+                              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submitValue();
+                            }}
+                            style={{
+                              width: "100%",
+                              boxSizing: "border-box",
+                              minWidth: 0,
+                              padding: "8px 10px",
+                              borderRadius: 7,
+                              border: "1px solid var(--border)",
+                              background: "var(--bg-panel)",
+                              color: checked ? "var(--text)" : "var(--text-muted)",
+                              outline: "none",
+                              resize: "vertical",
+                              fontSize: "var(--chat-font-size)",
+                              lineHeight: 1.55,
+                              fontFamily: "inherit",
+                            }}
+                          />
+                        )}
+                        </Fragment>
                       );
                     })}
                   </fieldset>
@@ -539,6 +589,9 @@ export function ExtensionDialog({
         </div>
         </div>
 
+        {/* While the composer answers, its × and Send are the only controls:
+            the footer would be a second, hard-to-reach set (#236). */}
+        {!askComposerActive && (
         <div className="extension-dialog-footer" style={{ display: "flex", flexShrink: 0, justifyContent: "flex-end", gap: 8, padding: "10px 14px", borderTop: "1px solid var(--border)", background: "var(--bg-panel)" }}>
           <button
             onClick={cancel}
@@ -575,7 +628,7 @@ export function ExtensionDialog({
             >
               {t("chatWindow.confirm")}
             </button>
-          ) : (request.method === "select" && attached) || (request.method === "ask" && !askComposerActive) ? (
+          ) : (request.method === "select" && attached) || request.method === "ask" ? (
             <button
               onClick={submitValue}
               disabled={!canSubmit}
@@ -592,7 +645,7 @@ export function ExtensionDialog({
             >
               {request.method === "ask" ? t("chatWindow.submit") : t("chatWindow.next")}
             </button>
-          ) : request.method !== "select" && request.method !== "ask" ? (
+          ) : request.method !== "select" ? (
             <button
               onClick={submitValue}
               style={{
@@ -612,18 +665,25 @@ export function ExtensionDialog({
             </button>
           ) : null}
         </div>
+        )}
       </div>
-      {askComposerActive && typingIndex !== null && askComposerHost && request.method === "ask" && createPortal(
+      {askComposerActive && typingIndex !== null && composerHost && request.method === "ask" && createPortal(
         <ComposerAskAnswer
           key={typingIndex}
           question={request.questions[typingIndex]?.question ?? ""}
-          value={askDraftAt(typingIndex).other ?? ""}
-          canSend={canSubmit}
+          position={request.questions.length > 1
+            ? t("chatWindow.askQuestionPosition", { index: typingIndex + 1, total: request.questions.length })
+            : undefined}
+          value={askDraftAt(typingIndex).other}
           onChange={(other) => updateAskDraft(typingIndex, (draft) => ({ ...draft, other }))}
-          onSend={submitValue}
+          // One question: Send answers it. Several: Done keeps this answer and
+          // returns to the panel, so the others are reviewed before Submit.
+          {...(request.questions.length > 1
+            ? { sendLabel: t("chatWindow.askDone"), canSend: askDraftAt(typingIndex).other.trim() !== "", onSend: () => setTypingIndex(null) }
+            : { sendLabel: t("chatInput.send"), canSend: canSubmit, onSend: submitValue })}
           onCancel={cancelOther}
         />,
-        askComposerHost,
+        composerHost,
       )}
     </div>
   );

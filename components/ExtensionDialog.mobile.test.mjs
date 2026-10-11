@@ -211,6 +211,7 @@ test("the keyboard-only footer cap applies to every attached method", () => {
 test("typing an Other answer in the composer keeps the keyboard cap on the panel", () => {
   const viewportHeight = Math.round(window.innerHeight * 0.5);
   const restore = stubVisualViewport(viewportHeight);
+  const restorePhone = stubMedia({ narrow: true });
   const host = document.body.appendChild(document.createElement("div"));
   try {
     render(React.createElement(ExtensionDialog, { request: askRequest(), onRespond: () => {}, attached: true, askComposerHost: host }));
@@ -221,6 +222,7 @@ test("typing an Other answer in the composer keeps the keyboard cap on the panel
     assert.equal(screen.getByRole("dialog").style.maxHeight, `${viewportHeight - 12}px`);
   } finally {
     host.remove();
+    restorePhone();
     restore();
   }
 });

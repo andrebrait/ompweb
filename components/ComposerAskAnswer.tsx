@@ -1,27 +1,33 @@
 "use client";
 
 import { useLayoutEffect, useRef, type KeyboardEvent } from "react";
-import { X } from "lucide-react";
+import { MessageCircleQuestion, X } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { CHAT_COLUMN_MAX_WIDTH } from "@/lib/chat-layout";
 
 /**
- * The composer while an ask question's "Other" option is chosen: the typed
- * answer goes here instead of into a text field in the question panel, and
- * Send submits the panel's answers. Rendered in place of `ChatInput` (which
- * stays mounted, hidden, so the user's own draft is untouched).
+ * The composer while an ask question's "Other" option is chosen on a phone:
+ * the typed answer goes here instead of into a text field in the question
+ * panel. Rendered in place of `ChatInput` (which stays mounted, hidden, so the
+ * user's own draft is untouched). The send button submits a one-question ask
+ * or, with several questions, returns to the panel (`sendLabel` says which).
  */
 export function ComposerAskAnswer({
   question,
+  position,
   value,
+  sendLabel,
   canSend,
   onChange,
   onSend,
   onCancel,
 }: {
   question: string;
+  /** "Question 2 of 3" when the ask has several questions. */
+  position?: string;
   value: string;
+  sendLabel: string;
   canSend: boolean;
   onChange: (value: string) => void;
   onSend: () => void;
@@ -59,17 +65,22 @@ export function ComposerAskAnswer({
           style={{
             display: "flex",
             flexDirection: "column",
-            background: "var(--bg)",
-            border: "1px solid var(--accent)",
+            // Accent-tinted shell: this box answers one question, not the agent.
+            background: "color-mix(in srgb, var(--accent) 7%, var(--bg))",
+            border: "1.5px solid var(--accent)",
             borderRadius: "var(--radius-card)",
             padding: "8px 12px 10px",
             boxShadow: "var(--shadow-card)",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, color: "var(--text-muted)", fontSize: 12 }}>
-            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {t("chatWindow.askAnswering", { question })}
-            </span>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6 }}>
+            <MessageCircleQuestion size={15} strokeWidth={1.8} aria-hidden="true" style={{ flexShrink: 0, marginTop: 2, color: "var(--accent)" }} />
+            <div style={{ flex: 1, minWidth: 0, fontSize: 12, lineHeight: 1.45 }}>
+              <div style={{ color: "var(--accent)", fontWeight: 600 }}>{position ?? t("chatWindow.askYourAnswer")}</div>
+              <div style={{ color: "var(--text-muted)", overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflowWrap: "anywhere" }}>
+                {question}
+              </div>
+            </div>
             <button
               type="button"
               onClick={onCancel}
@@ -77,12 +88,12 @@ export function ComposerAskAnswer({
               aria-label={t("chatWindow.askCancelAnswer")}
               style={{
                 display: "flex", alignItems: "center", justifyContent: "center",
-                width: 24, height: 24, padding: 0, flexShrink: 0,
+                width: 28, height: 28, padding: 0, flexShrink: 0,
                 background: "none", border: "none", borderRadius: 6,
                 color: "var(--text-muted)", cursor: "pointer",
               }}
             >
-              <X size={14} strokeWidth={1.8} aria-hidden="true" />
+              <X size={15} strokeWidth={1.8} aria-hidden="true" />
             </button>
           </div>
           <textarea
@@ -121,7 +132,7 @@ export function ComposerAskAnswer({
               className="composer-primary-action"
               onClick={onSend}
               disabled={!canSend}
-              title={t("chatInput.send")}
+              title={sendLabel}
               style={{
                 display: "flex", alignItems: "center", gap: 6,
                 background: canSend ? "var(--accent-strong)" : "var(--bg-panel)",
@@ -138,7 +149,7 @@ export function ComposerAskAnswer({
                 <line x1="2" y1="7" x2="11" y2="7" />
                 <polyline points="7.5 3 12 7 7.5 11" />
               </svg>
-              {t("chatInput.send")}
+              {sendLabel}
             </button>
           </div>
         </div>
