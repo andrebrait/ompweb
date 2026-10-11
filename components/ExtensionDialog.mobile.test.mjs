@@ -2,6 +2,7 @@ import "../tests/setup-dom.mjs";
 import assert from "node:assert/strict";
 import test, { afterEach, beforeEach } from "node:test";
 import React from "react";
+import { readFile } from "node:fs/promises";
 import { renderToStaticMarkup } from "react-dom/server";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react/pure.js";
 import { createJiti } from "jiti";
@@ -9,6 +10,7 @@ import { createJiti } from "jiti";
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
 const { ExtensionDialog, shouldDeferAttachedFocus } = await jiti.import("./ExtensionDialog.tsx");
 const { MOBILE_QUERY } = await jiti.import("@/hooks/useIsMobile");
+const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 
 const OPTIONS = [
   { label: "Red" },
@@ -125,10 +127,11 @@ test("the option row, its text and its preview cannot push past the panel edge",
   assert.doesNotMatch(html, /overflow-x:auto/);
 });
 
-test("the panel and its scroller can shrink inside the column", () => {
+test("the panel, its scroller and the Other textarea can shrink inside the column", () => {
   const html = staticMarkup();
   assert.match(html, /role="dialog"[^>]*style="[^"]*box-sizing:border-box;min-width:0/);
   assert.match(html, /class="extension-dialog-content" style="[^"]*min-width:0/);
+  assert.match(html, /<textarea [^>]*style="flex:1;min-width:0/);
 });
 
 // ---- #235: composer-attached focus --------------------------------------------
@@ -167,24 +170,24 @@ test("a composer-attached request on a touch device does not open the keyboard",
   try {
     renderAttached();
     await new Promise((resolve) => requestAnimationFrame(resolve));
-    assert.equal(screen.getByRole("dialog").contains(document.activeElement), false);
+    const other = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
+    assert.notEqual(document.activeElement, other);
   } finally {
     restore();
   }
 });
 
-// ---- #236: the footer stays reachable --------------------------------------
-
-const EDITOR = { type: "extension_ui_request", id: "editor-1", method: "editor", title: "Notes" };
+// ---- #236: the submit affordance ----------------------------------------------
 
 test("an open keyboard caps the panel to the visible area", () => {
   const viewportHeight = Math.round(window.innerHeight * 0.5);
   const restore = stubVisualViewport(viewportHeight);
   try {
-    renderAttached(EDITOR);
+    renderAttached();
     const panel = screen.getByRole("dialog");
     assert.equal(panel.style.maxHeight, "min(420px, 60dvh)", "no keyboard: the CSS cap stands");
-    fireEvent.focus(screen.getByRole("textbox", { name: "Notes" }));
+
+    fireEvent.focus(screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea"));
     assert.equal(panel.style.maxHeight, `${viewportHeight - 12}px`, "the footer must stay inside the visible area");
   } finally {
     restore();
@@ -208,32 +211,29 @@ test("the keyboard-only footer cap applies to every attached method", () => {
   }
 });
 
-test("typing an Other answer in the composer keeps the keyboard cap on the panel", () => {
-  const viewportHeight = Math.round(window.innerHeight * 0.5);
-  const restore = stubVisualViewport(viewportHeight);
-  const restorePhone = stubMedia({ narrow: true });
-  const host = document.body.appendChild(document.createElement("div"));
-  try {
-    render(React.createElement(ExtensionDialog, { request: askRequest(), onRespond: () => {}, attached: true, askComposerHost: host }));
-    fireEvent.click(screen.getByRole("radio", { name: "Other: type your own answer" }));
-    const answer = screen.getByRole("textbox", { name: /^Answering:/ });
-    assert.ok(host.contains(answer), "the answer field lives in the composer host");
-    fireEvent.focus(answer);
-    assert.equal(screen.getByRole("dialog").style.maxHeight, `${viewportHeight - 12}px`);
-  } finally {
-    host.remove();
-    restorePhone();
-    restore();
-  }
-});
-
 test("without a visible-area API the panel keeps its CSS cap", () => {
-  const { responses } = renderAttached(EDITOR);
+  const { responses } = renderAttached();
   const panel = screen.getByRole("dialog");
-  const textarea = screen.getByRole("textbox", { name: "Notes" });
-  fireEvent.focus(textarea);
-  fireEvent.change(textarea, { target: { value: "Teal" } });
+  assert.equal(panel.style.maxHeight, "min(420px, 60dvh)");
+  const other = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
+  fireEvent.focus(other);
+  fireEvent.change(other, { target: { value: "Teal" } });
   assert.equal(panel.style.maxHeight, "min(420px, 60dvh)");
   fireEvent.click(screen.getByRole("button", { name: "Submit" }));
-  assert.deepEqual(responses, [{ value: "Teal" }]);
+  assert.deepEqual(responses, [{ answers: [{ id: "color", selectedOptions: [], customInput: "Teal" }] }]);
+});
+
+// ---- touch targets (globals.css) ----------------------------------------------
+
+function ruleBody(selector) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+}
+
+test("the dialog footer scales with the touch-target preference", () => {
+  assert.match(ruleBody('html[data-touch-targets="accessible"] .extension-dialog-footer > button'), /min-height:\s*44px/);
+  assert.match(
+    css,
+    /@media \(max-width: 640px\) and \(pointer: coarse\) and \(hover: none\) \{\s*html:not\(\[data-touch-targets="compact"\]\):not\(\[data-touch-targets="accessible"\]\) \.extension-dialog-footer > button \{\s*min-height: 40px;/,
+  );
 });

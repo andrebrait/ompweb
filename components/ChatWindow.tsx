@@ -893,8 +893,6 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
   // The extension dialog renders inside the collapsible composer wrapper;
   // never let a pending approval prompt sit hidden behind the minimized pill.
   useEffect(() => { if (extensionDialog) setComposerMinimized(false); }, [extensionDialog]);
-  const [askComposerHost, setAskComposerHost] = useState<HTMLDivElement | null>(null);
-  const [askComposing, setAskComposing] = useState(false);
   const messageCwd = session?.cwd ?? newSessionCwd ?? undefined;
   const activeBtwRecord = btw.records.find((record) => record.id === btw.activeId);
   const btwPanel: BtwPanelProps | null = activeBtwRecord ? {
@@ -1422,8 +1420,6 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
                   request={extensionDialog}
                   onRespond={respondToExtensionUi}
                   attached
-                  askComposerHost={askComposerHost}
-                  onAskComposerChange={setAskComposing}
                 />
               </div>
             )}
@@ -1437,10 +1433,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
             <ExtensionWidgets widgets={belowEditorWidgets} />
           </div>
         </div>
-        {/* An ask "Other" answer is typed in a composer the dialog portals in
-            here; the regular one stays mounted (draft, recording) but hidden. */}
-        <div ref={setAskComposerHost} style={{ display: "contents" }} />
-        <div style={{ display: askComposing ? "none" : "contents" }}>{chatInputElement}</div>
+        {chatInputElement}
       </div>
       </>
       )}
