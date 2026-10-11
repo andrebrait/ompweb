@@ -56,6 +56,7 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 ### Fixes & Improvements
 
+- **Passive tool context shows its wrapper.** Context wrapped in a tag such as `<system-reminder source="graphify">` now names the tag and every attribute on the tool card's `↳ Context (system-reminder · source=graphify): …` line. Expanding the card shows the context as a small nested card with that header and the body below, like developer reminders. Before, the tag name and attribute keys were dropped, so a graphify nudge looked like unlabelled text.
 - `ompweb hash-password` in a terminal finishes when you press Enter. The hidden prompt waited for a newline, but a terminal in raw mode sends Enter as a carriage return, so the prompt never ended.
 - The Notifications tab now tells unread notifications from read ones: an unread notification has an accent dot before it and a bold title on a tinted row, and read notifications are dimmed. The tab also lists only the notifications that can also be pushed (task finished, input needed, error, model switch). Confirmations such as "Saved", copy results, update notices and agent `notify` calls still show as toasts but no longer fill the tab. A session's next notification of the same type is unread again instead of inheriting the earlier one's read state.
 - Fit the agent's question panel on a phone. A long question, header or option preview no longer widens the panel past the screen and clips the answer text at the right edge, and previews wrap instead of scrolling sideways.
