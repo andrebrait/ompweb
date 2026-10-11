@@ -1433,7 +1433,10 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
             <ExtensionWidgets widgets={belowEditorWidgets} />
           </div>
         </div>
-        {chatInputElement}
+        {/* An open ask is answered (or cancelled) in its panel; hiding the
+            composer leaves no doubt where to type. Kept mounted so the
+            draft, attachments and a recording survive. */}
+        <div style={{ display: extensionDialog?.method === "ask" ? "none" : "contents" }}>{chatInputElement}</div>
       </div>
       </>
       )}
