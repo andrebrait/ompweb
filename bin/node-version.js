@@ -1,6 +1,6 @@
 "use strict";
 
-const MIN_NODE_VERSION = "22.19.0";
+const MIN_NODE_VERSION = "24.0.0";
 
 function parseNodeVersion(version) {
   const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(version);

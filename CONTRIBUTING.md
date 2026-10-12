@@ -4,7 +4,7 @@ Thanks for your interest in contributing!
 
 ## Setup
 
-- Node.js 22.19.0 or newer
+- Node.js 24 or newer
 - The [omp](https://github.com/can1357/oh-my-pi) binary on your `PATH` (or set `OMP_WEB_OMP_BIN`)
 
 ```bash
