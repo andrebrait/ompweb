@@ -6,9 +6,11 @@ import { act, cleanup, render } from "@testing-library/react/pure.js";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tryNative: false, tsconfigPaths: true });
-const { NotificationList } = await jiti.import("./NotificationList.tsx");
-const { notificationHistory } = await jiti.import("../lib/notification-history.ts");
-const { OPEN_SESSION_EVENT } = await jiti.import("../lib/notification-client.ts");
+// Same specifiers as NotificationList's own imports: on Windows a relative path
+// can load a second copy of the module, whose list the component never sees.
+const { NotificationList } = await jiti.import("@/components/NotificationList");
+const { notificationHistory } = await jiti.import("@/lib/notification-history");
+const { OPEN_SESSION_EVENT } = await jiti.import("@/lib/notification-client");
 
 before(() => {
   window.Element.prototype.setPointerCapture = () => {};
