@@ -90,28 +90,33 @@ Ids are strings of at most 256 characters, at most 100 per request, and the
 request body is size-bounded; anything else returns 400. Unknown ids are
 ignored. All queries use bound parameters.
 
-## Client (`components/ui/toast.tsx`, `hooks/useNotifications.ts`)
+## Client (`lib/notification-history.ts`)
 
 Session notifications are the only producer of history (`history: true` toasts
-and `toastHistory.record` calls in `useNotifications`), so the whole history
-becomes server-backed.
+and `toastHistory.record` calls in `useNotifications`), so the history moves
+out of the generic toast primitive into a notification-specific client store.
 
-- `toastHistory` keeps its interface (`subscribe`, `get`, `record`,
-  `markRead`, `markAllRead`, `remove`, `clear`) and becomes a local mirror of
-  the server list.
-- Entries hold the `NotificationEvent` and are rendered with
-  `renderNotification` in the viewer's locale when displayed; clicking an entry
-  opens `event.sessionId`. The mirror stores no React nodes or closures from
-  other devices.
+- `lib/notification-history.ts` exports `notificationHistory` (`subscribe`,
+  `get`, `load`, `add`, `markRead`, `markAllRead`, `remove`, `clear`) and the
+  hooks `useNotificationHistory` and `useUnreadNotificationCount`. It is a
+  local mirror of the server list; its entries have the server shape
+  `{ id, event, at, read }`.
+- `NotificationList` renders each entry with `renderNotification` in the
+  viewer's locale; clicking an entry marks it read and opens
+  `event.sessionId` through the existing `OPEN_SESSION_EVENT`. The mirror
+  stores no React nodes or closures.
 - The mirror loads from `GET` on mount and on `visibilitychange` to visible,
   which is how read marks and removals made on another device arrive.
-- Events arriving over the notification SSE stream, and pushes the service
-  worker reports while the tab is open, are inserted locally without a refetch
-  (the server has already recorded them).
+- Events arriving over the notification SSE stream are added locally without
+  a refetch (the server has already recorded them). A push the service worker
+  reports while the tab is open carries only rendered text, so it triggers a
+  `load()` instead.
 - Mark read, remove, and clear update the mirror at once and then send the
   request. A failed request triggers a reload from the server, so the mirror
   never stays out of sync.
-- Toasts without `history: true` are unchanged and never stored.
+- `toast.tsx` loses its `history` option and `toastHistory`; a notification
+  toast's click handler marks its entry read itself. Other toasts are
+  unchanged and never stored.
 
 ## Removed or replaced
 
