@@ -73,10 +73,14 @@ fresh keys, as it does today for a corrupt file.
 
 ## Recording
 
-`publishNotification(event)` records the event in `history` before routing it,
-whether or not any tab or push receives it. Notifications sent while no tab was
-open therefore appear in the Notifications tab later. A failed history write is
-logged and does not block delivery.
+`publishNotification(event)` records the event in `history` before routing it
+when at least one device has notifications on for its type, whether or not any
+tab or push receives it: the list holds what someone asked to be told about,
+as the in-memory list did. Notifications sent while no tab was open therefore
+appear in the Notifications tab later. An event for a conversation a visible tab
+is showing is recorded as already read: the user watched it happen. A store
+that cannot be opened or written is logged and never blocks delivery or the
+caller's frame handling.
 
 ## HTTP API (`app/api/notifications/history/route.ts`)
 
@@ -85,12 +89,15 @@ Behind the same authentication as every other `/api` route (`proxy.ts`).
 - `GET` returns `{ entries: [{ id, event, at, read }] }`, newest first.
 - `PATCH` with `{ ids: string[] }` marks entries read. "Mark all as read" in
   a tab sends the ids it shows, so a notification that reached the server
-  after the tab loaded stays unread.
-- `DELETE` with `{ id }` removes one entry; with no body it clears the history.
+  after the tab loaded stays unread. The body is read with
+  `parseJsonWithinLimit` (32 KiB): larger bodies get 413 without being
+  buffered.
+- `DELETE ?id=<id>` removes one entry; `DELETE ?all=1` clears the history. A
+  DELETE carries no body (proxies may drop one), and one without either
+  parameter returns 400, so a lost id never clears everything.
 
-Ids are strings of at most 256 characters, at most 100 per request, and the
-request body is size-bounded; anything else returns 400. Unknown ids are
-ignored. All queries use bound parameters.
+Ids are strings of 1 to 256 characters, at most 100 per request; anything
+else returns 400. Unknown ids are ignored. All queries use bound parameters.
 
 ## Client (`lib/notification-history.ts`)
 

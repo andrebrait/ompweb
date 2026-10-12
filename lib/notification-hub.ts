@@ -3,7 +3,6 @@ import en from "./i18n/locales/en.json";
 import ja from "./i18n/locales/ja.json";
 import zhCN from "./i18n/locales/zh-CN.json";
 import {
-  NOTIFICATION_TYPES,
   renderNotification,
   type NotificationEvent,
   type RenderedNotification,
@@ -91,6 +90,12 @@ export function attachNotificationClient(clientId: string, send: Send): () => vo
 
 // ---------------------------------------------------------------- routing
 
+/** A visible tab is showing the event's conversation (under any of its ids). */
+function isOnScreen(event: NotificationEvent, presence: NotificationPresence[]): boolean {
+  const viewedAs = new Set([event.sessionId, ...(event.aliases ?? [])]);
+  return presence.some((tab) => tab.visible && tab.sessionId !== null && viewedAs.has(tab.sessionId));
+}
+
 /**
  * Decide where one event goes. `reachable` holds the tabs with an open stream.
  * 1. A visible tab is showing the session: nothing, for every device.
@@ -101,8 +106,7 @@ export function attachNotificationClient(clientId: string, send: Send): () => vo
  */
 export function routeNotification(event: NotificationEvent, presence: NotificationPresence[], reachable: ReadonlySet<string>, devices: NotificationDevice[]): Delivery[] {
   if (event.type === "test") return [];
-  const viewedAs = new Set([event.sessionId, ...(event.aliases ?? [])]);
-  if (presence.some((tab) => tab.visible && tab.sessionId !== null && viewedAs.has(tab.sessionId))) return [];
+  if (isOnScreen(event, presence)) return [];
   const active = presence.filter((tab) => tab.visible && reachable.has(tab.clientId));
   const deliveries: Delivery[] = [];
   for (const device of devices) {
@@ -156,19 +160,27 @@ async function sendPush(device: NotificationDevice, event: NotificationEvent): P
   }
 }
 
+/** Never throws: callers publish from the RPC frame path, and a store failure must not cost them the frame. */
 export function publishNotification(event: NotificationEvent): void {
   const state = hub();
-  const devices = listDevices();
-  // Recorded whoever receives it, so the Notifications tab lists it later; history never blocks delivery.
-  if ((NOTIFICATION_TYPES as readonly string[]).includes(event.type)) {
+  let devices: NotificationDevice[] = [];
+  try {
+    devices = listDevices();
+  } catch (error) {
+    console.warn("[notifications] store unavailable:", error);
+  }
+  const presence = livePresence(Date.now());
+  // The Notifications tab lists what a device asked for, received or not; one the user watched happen is already read.
+  const { type } = event;
+  if (type !== "test" && devices.some((device) => device.prefs.enabled && device.prefs.types[type])) {
     try {
-      recordHistory(event);
+      recordHistory(event, { read: isOnScreen(event, presence) });
     } catch (error) {
       console.warn("[notifications] history write failed:", error);
     }
   }
   const reachable = new Set(state.streams.keys());
-  for (const delivery of routeNotification(event, livePresence(Date.now()), reachable, devices)) {
+  for (const delivery of routeNotification(event, presence, reachable, devices)) {
     if (delivery.kind === "push") {
       const device = devices.find((entry) => entry.deviceId === delivery.deviceId);
       if (device) void sendPush(device, event);

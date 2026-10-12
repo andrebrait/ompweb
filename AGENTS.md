@@ -68,7 +68,7 @@ app/api/
   notifications/devices/route.ts  GET VAPID key + subscribed | PUT { deviceId, prefs, subscription? }
   notifications/presence/route.ts POST { clientId, deviceId, visible, sessionId, seq }
   notifications/test/route.ts     POST { deviceId } send a test push (502 on push-service refusal)
-  notifications/history/route.ts  GET entries | PATCH { ids } mark read | DELETE { id } remove, no body clears
+  notifications/history/route.ts  GET entries | PATCH { ids } mark read | DELETE ?id= remove one, ?all=1 clear
   auth/**                         provider list, login/logout, API keys (via RPC)
   cwd/validate/route.ts           POST validate/select a cwd
   default-cwd/route.ts            POST create ~/omp-cwd-YYYYMMDD
@@ -764,9 +764,10 @@ motion: --dur-fast (150ms) --dur-med (220ms) --dur-slow (320ms) --ease-out-warm
 ConfirmDialog), `toast.tsx` (`toast.success/error/info`, mounted in AppShell).
 Toasts are not stored. The right panel's Notifications tab lists the server's
 notification history (`lib/notification-history.ts`, a mirror of
-`/api/notifications/history`): `publishNotification` records every pushable
-notification (completed, input, error, model switch) whether or not any tab or
-push receives it, the newest 100, so entries survive reloads and restarts and
+`/api/notifications/history`): `publishNotification` records every
+notification type some device has turned on (completed, input, error, model
+switch), whether or not any tab or push receives it, already read when a
+visible tab shows that session; the newest 100, so entries survive reloads and restarts and
 every device sees the same list. The mirror loads on mount and when the tab
 becomes visible (read marks and removals from other devices), adds events this
 tab receives over SSE without a refetch, and reloads when the service worker

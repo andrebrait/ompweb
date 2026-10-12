@@ -118,33 +118,48 @@ function db(): DatabaseSync {
   const path = join(dir, "notifications.db");
   const cached = globalThis.__ompNotificationStore;
   if (cached?.path === path) return cached.db;
+  const database = open(dir, path);
+  // Only a working store replaces the cached one; a failed open leaves it usable.
   cached?.db.close();
+  globalThis.__ompNotificationStore = { path, db: database };
+  return database;
+}
+
+function open(dir: string, path: string): DatabaseSync {
   mkdirSync(dir, { recursive: true });
   // Owner-only before SQLite opens it: it holds the VAPID private key. SQLite gives its -wal/-shm files the same mode.
   closeSync(openSync(path, "a", 0o600));
   chmodSync(path, 0o600);
   const database = new DatabaseSync(path);
-  database.exec("PRAGMA busy_timeout = 5000");
-  // Switching a new database to WAL takes an exclusive lock that ignores busy_timeout; another omp-web may hold it.
-  for (let attempt = 0; ; attempt++) {
-    try {
-      database.exec("PRAGMA journal_mode = WAL");
-      break;
-    } catch (error) {
-      if (!isRecord(error) || error.errcode !== 5 || attempt >= 250) throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  try {
+    database.exec("PRAGMA busy_timeout = 5000");
+    // Switching a new database to WAL takes an exclusive lock that ignores busy_timeout; another omp-web may hold it.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        database.exec("PRAGMA journal_mode = WAL");
+        break;
+      } catch (error) {
+        if (!isRecord(error) || error.errcode !== 5 || attempt >= 250) throw error;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+      }
     }
+    // NORMAL is the documented safe pairing with WAL: no corruption, only the last commits can be lost on power failure.
+    database.exec("PRAGMA synchronous = NORMAL");
+    const legacy = join(dir, "notifications.json");
+    const imported = transaction(database, () => {
+      database.exec(SCHEMA);
+      return importLegacy(database, legacy);
+    });
+    if (imported) {
+      // Make the import durable before its source goes: losing the VAPID keys breaks every push subscription.
+      database.exec("PRAGMA wal_checkpoint(FULL)");
+      rmSync(legacy, { force: true });
+    }
+    return database;
+  } catch (error) {
+    database.close();
+    throw error;
   }
-  // NORMAL is the documented safe pairing with WAL: no corruption, only the last commits can be lost on power failure.
-  database.exec("PRAGMA synchronous = NORMAL");
-  const legacy = join(dir, "notifications.json");
-  const imported = transaction(database, () => {
-    database.exec(SCHEMA);
-    return importLegacy(database, legacy);
-  });
-  if (imported) rmSync(legacy, { force: true });
-  globalThis.__ompNotificationStore = { path, db: database };
-  return database;
 }
 
 // ---------------------------------------------------------------- VAPID keys
@@ -226,16 +241,16 @@ export function listHistory(): NotificationHistoryEntry[] {
   });
 }
 
-/** A reused id (`<sessionId>:<type>`) replaces its entry, unread again: it is a new notification. */
-export function recordHistory(event: NotificationEvent, at = Date.now()): NotificationHistoryEntry {
+/** A reused id (`<sessionId>:<type>`) replaces its entry: it is a new notification, unread unless `read` says it was seen. */
+export function recordHistory(event: NotificationEvent, { at = Date.now(), read = false }: { at?: number; read?: boolean } = {}): NotificationHistoryEntry {
   const database = db();
   const id = `${event.sessionId}:${event.type}`;
   transaction(database, () => {
     database.prepare("DELETE FROM history WHERE id = ?").run(id);
-    database.prepare("INSERT INTO history (id, event, at, read) VALUES (?, ?, ?, 0)").run(id, JSON.stringify(event), at);
+    database.prepare("INSERT INTO history (id, event, at, read) VALUES (?, ?, ?, ?)").run(id, JSON.stringify(event), at, read ? 1 : 0);
     database.prepare("DELETE FROM history WHERE rowid NOT IN (SELECT rowid FROM history ORDER BY at DESC, rowid DESC LIMIT ?)").run(MAX_HISTORY);
   });
-  return { id, event, at, read: false };
+  return { id, event, at, read };
 }
 
 export function markHistoryRead(ids: string[]): void {
