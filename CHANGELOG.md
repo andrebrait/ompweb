@@ -10,6 +10,10 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 - **omp-web now requires Node.js 24 or newer** (the current LTS). `ompweb` and its service and tray commands (`ompweb-systemd`, `ompweb-launchd`, `ompweb-tray`, `ompweb-tray-linux`) refuse older versions before doing anything.
 
+### Notifications
+
+- **The Notifications tab keeps its list across reloads, restarts and devices.** omp-web now records every notification (task finished, waiting for input, run failed, model switched) on the server, including ones sent while no tab was open, and every browser shows the same list and read state. Entries appear in the language of the browser showing them. Notification settings, push subscriptions and keys move into a SQLite store in omp-web's data directory; the first start imports them from the old `notifications.json`, so existing push subscriptions keep working.
+
 ---
 
 ## [v0.5.2] - 2026-10-11
