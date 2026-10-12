@@ -14,6 +14,10 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 - **The Notifications tab keeps its list across reloads, restarts and devices.** omp-web now records the notifications you turned on (task finished, waiting for input, run failed, model switched) on the server, including ones sent while no tab was open, and every browser shows the same list and read state. A notification for the session you are looking at is listed as already read. Entries appear in the language of the browser showing them. Notification settings, push subscriptions and keys move into a SQLite store in omp-web's data directory, using the SQLite module built into Node.js 24; the first start imports them from the old `notifications.json`, so existing push subscriptions keep working.
 
+### Fixed
+
+- On a phone, the first tap on **Submit** (or **Cancel**) in a question panel now acts on it while you are typing in **Other**. It used to only close the keyboard and resize the panel, which moved the button out from under the tap.
+
 ---
 
 ## [v0.5.2] - 2026-10-11
