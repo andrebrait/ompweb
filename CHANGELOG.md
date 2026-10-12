@@ -8,7 +8,7 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 ### Breaking changes
 
-- **omp-web now requires Node.js 24 or newer** (the current LTS); the `ompweb` launcher refuses older versions. Node.js 24 ships the built-in SQLite module (`node:sqlite`) that omp-web will use for its own data, without a new dependency.
+- **omp-web now requires Node.js 24 or newer** (the current LTS); the `ompweb` launcher refuses older versions.
 
 ---
 
