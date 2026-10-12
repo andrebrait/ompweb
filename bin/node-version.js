@@ -28,8 +28,16 @@ function getUnsupportedNodeVersionMessage(version) {
   ].join("\n");
 }
 
+/** First statement of every published executable: npm treats `engines` as advisory. */
+function exitIfUnsupportedNode() {
+  if (isNodeVersionSupported(process.versions.node)) return;
+  console.error(getUnsupportedNodeVersionMessage(process.versions.node));
+  process.exit(1);
+}
+
 module.exports = {
   MIN_NODE_VERSION,
+  exitIfUnsupportedNode,
   getUnsupportedNodeVersionMessage,
   isNodeVersionSupported,
 };
