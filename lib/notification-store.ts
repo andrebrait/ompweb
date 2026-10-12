@@ -227,12 +227,8 @@ export function recordHistory(event: NotificationEvent, at = Date.now()): Notifi
   return { id, event, at, read: false };
 }
 
-export function markHistoryRead(ids: string[] | "all"): void {
+export function markHistoryRead(ids: string[]): void {
   const database = db();
-  if (ids === "all") {
-    database.prepare("UPDATE history SET read = 1").run();
-    return;
-  }
   const mark = database.prepare("UPDATE history SET read = 1 WHERE id = ?");
   transaction(database, () => {
     for (const id of ids) mark.run(id);

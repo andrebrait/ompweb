@@ -28,13 +28,11 @@ export async function GET() {
   return NextResponse.json({ entries: listHistory() });
 }
 
-/** PATCH /api/notifications/history { ids } | { all: true } — mark entries read. */
+/** PATCH /api/notifications/history { ids } — mark entries read. A client marks what it shows, never entries it has not seen. */
 export async function PATCH(req: Request) {
   const body = await readBody(req);
-  if (!isRecord(body)) return invalid();
-  if (body.all === true) markHistoryRead("all");
-  else if (Array.isArray(body.ids) && body.ids.length <= MAX_IDS && body.ids.every(isId)) markHistoryRead(body.ids);
-  else return invalid();
+  if (!isRecord(body) || !Array.isArray(body.ids) || body.ids.length > MAX_IDS || !body.ids.every(isId)) return invalid();
+  markHistoryRead(body.ids);
   return NextResponse.json({ ok: true });
 }
 
