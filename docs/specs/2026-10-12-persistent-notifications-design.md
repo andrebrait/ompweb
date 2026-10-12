@@ -54,7 +54,7 @@ only, so `node:sqlite` never reaches a client bundle.
   - Recording an event upserts its row with `read = 0` and `at = now`: a
     reused tag replaces its entry and makes it unread again.
   - After each insert, only the newest 100 rows are kept.
-  - Mark read (some ids, or all), remove one, clear all.
+  - Mark read (by ids), remove one, clear all.
 - `lib/notification-hub.ts` replaces `loadStore`/`saveStore` with these
   functions; its exported API (`getVapidPublicKey`, `getNotificationDevice`,
   `saveNotificationDevice`, ...) keeps its signatures. Presence and SSE streams
@@ -83,7 +83,9 @@ logged and does not block delivery.
 Behind the same authentication as every other `/api` route (`proxy.ts`).
 
 - `GET` returns `{ entries: [{ id, event, at, read }] }`, newest first.
-- `PATCH` with `{ ids: string[] }` or `{ all: true }` marks entries read.
+- `PATCH` with `{ ids: string[] }` marks entries read. "Mark all as read" in
+  a tab sends the ids it shows, so a notification that reached the server
+  after the tab loaded stays unread.
 - `DELETE` with `{ id }` removes one entry; with no body it clears the history.
 
 Ids are strings of at most 256 characters, at most 100 per request, and the
