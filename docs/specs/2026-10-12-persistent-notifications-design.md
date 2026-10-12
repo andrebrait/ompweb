@@ -55,9 +55,9 @@ only, so `node:sqlite` never reaches a client bundle.
     reused tag replaces its entry and makes it unread again.
   - After each insert, only the newest 100 rows are kept.
   - Mark read (by ids), remove one, clear all.
-- `lib/notification-hub.ts` replaces `loadStore`/`saveStore` with these
-  functions; its exported API (`getVapidPublicKey`, `getNotificationDevice`,
-  `saveNotificationDevice`, ...) keeps its signatures. Presence and SSE streams
+- `lib/notification-hub.ts` drops `loadStore`/`saveStore`; device routes call
+  the store directly (`getDevice`, `saveDevice`, `parsePushSubscription`), and
+  the hub keeps `getVapidPublicKey`, routing and push. Presence and SSE streams
   stay in memory: they describe live tabs and expire by design.
 
 ### Migration from the JSON file

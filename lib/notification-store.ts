@@ -124,8 +124,19 @@ function db(): DatabaseSync {
   closeSync(openSync(path, "a", 0o600));
   chmodSync(path, 0o600);
   const database = new DatabaseSync(path);
+  database.exec("PRAGMA busy_timeout = 5000");
+  // Switching a new database to WAL takes an exclusive lock that ignores busy_timeout; another omp-web may hold it.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      database.exec("PRAGMA journal_mode = WAL");
+      break;
+    } catch (error) {
+      if (!isRecord(error) || error.errcode !== 5 || attempt >= 250) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
   // NORMAL is the documented safe pairing with WAL: no corruption, only the last commits can be lost on power failure.
-  database.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
+  database.exec("PRAGMA synchronous = NORMAL");
   const legacy = join(dir, "notifications.json");
   const imported = transaction(database, () => {
     database.exec(SCHEMA);
