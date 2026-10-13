@@ -42,6 +42,11 @@ export interface StreamingState {
 export type StreamAction =
   | { type: "start" }
   | { type: "update"; message: Partial<AgentMessage> }
+  /** A finished reply stays on screen until the saved transcript shows it:
+   * dropping it first empties that space for a moment, so the chat jumps up
+   * and back down. `release` (or a new stream) takes it away. */
+  | { type: "hold"; message: Partial<AgentMessage> }
+  | { type: "release"; committed: readonly AgentMessage[] }
   | { type: "end" }
   | { type: "reset" };
 
@@ -51,7 +56,19 @@ export function streamReducer(state: StreamingState, action: StreamAction): Stre
       return { isStreaming: true, streamingMessage: null };
     case "update":
       return { isStreaming: true, streamingMessage: action.message };
+    case "hold":
+      return { isStreaming: false, streamingMessage: action.message };
+    case "release": {
+      const held = state.isStreaming ? null : state.streamingMessage;
+      if (!held) return state;
+      // No timestamp to match: drop it now, as before holding existed.
+      const saved = held.timestamp === undefined
+        || action.committed.some((message) => message.role === "assistant" && message.timestamp === held.timestamp);
+      return saved ? { isStreaming: false, streamingMessage: null } : state;
+    }
     case "end":
+      // The run is over, but a held reply waits for its saved copy.
+      return state.isStreaming ? { isStreaming: false, streamingMessage: null } : state;
     case "reset":
       return { isStreaming: false, streamingMessage: null };
     default:

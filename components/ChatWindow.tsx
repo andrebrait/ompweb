@@ -1309,7 +1309,9 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
               sentinelRef={sentinelRef}
               handleLoadMoreClick={handleLoadMoreClick}
             />
-            {streamState.isStreaming && streamState.streamingMessage && (
+            {/* Also while held: a finished reply stays until its saved row
+                replaces it in the same render (useAgentSession-stream). */}
+            {streamState.streamingMessage && (
               <MessageView
                 key={streamState.streamingMessage.timestamp ?? "stream"}
                 message={streamState.streamingMessage as AgentMessage}

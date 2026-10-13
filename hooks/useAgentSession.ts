@@ -474,6 +474,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setData((current) => current ? { ...current, context } : current);
         if (metadata) syncActionsRef.current?.metadata(context, metadata.version, metadata.hasLive);
         if (!agentRunningRef.current) setTodoPhases(context.todoPhases ?? []);
+        // Hand a held reply over to its saved copy in the same render.
+        dispatch({ type: "release", committed: context.messages });
         setActiveLeafId(leafId);
         const previous = runPreviousEntryIdsRef.current && new Set(runPreviousEntryIdsRef.current);
         if (previous && context.messages.some((message, i) => message.role === "user" && !previous.has(context.entryIds[i]))) {
@@ -2263,7 +2265,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             }, 1000);
           }
         }
-        dispatch({ type: "reset" });
+        // A finished reply stays until the catch-up above commits its saved
+        // copy (history callback). Tool-call turns still clear at once: their
+        // rows and status line come from the live tool state instead.
+        const finishedReply = completed?.role === "assistant"
+          && hasVisibleAssistantContent(completed)
+          && !(Array.isArray(completed.content) && completed.content.some((block) => block?.type === "toolCall"));
+        dispatch(finishedReply ? { type: "hold", message: normalizeToolCalls(completed) } : { type: "reset" });
         setAgentPhase({ kind: "waiting_model" });
         break;
       }

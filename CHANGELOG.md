@@ -18,6 +18,7 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 - On a phone, the first tap on an option, **Submit** or **Cancel** in a question panel now acts on it. It used to only close the keyboard or resize the panel, which moved the target out from under the tap. The message box's keyboard now closes as soon as the question appears (the message box is hidden then anyway), the panel no longer resizes when an option or button takes focus, and while you type in **Other** a touch or pen tap elsewhere in the panel no longer moves focus first. Choosing an option then closes the keyboard; tapping back into the kept **Other** text chooses it again. **Submit** closes the keyboard at once instead of after the server confirms the answer, and collapsing the keyboard while typing in **Other** no longer makes the next tap raise it again for a moment. A mouse, including one on a touchscreen laptop, keeps its usual behavior.
 - On a phone, opening the keyboard at the end of a conversation no longer hides the newest messages under it: the chat stays scrolled to the bottom. The same holds when the message box or a question panel grows. A conversation you scrolled up in stays where it is.
+- When the agent finishes a reply, the chat no longer jumps up to the start of the reply and back down. The finished reply used to disappear for a moment until its saved copy was loaded; it now stays on screen and the saved copy replaces it in place.
 
 ---
 

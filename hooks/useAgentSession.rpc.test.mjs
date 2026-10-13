@@ -1050,6 +1050,28 @@ test("full run over fake SSE: optimistic bubble, coalesced streaming, terminal r
   );
 });
 
+test("a finished reply stays on screen until its saved copy replaces it", async () => {
+  resetWorld();
+  primeSession("s1", [userMsg("u0", "loaded question")]);
+  const { w, es } = await startRun("s1", "hello agent");
+  const reply = { ...assistantMsg("a1", "hello world"), timestamp: 42 };
+  await act(async () => { es.emit({ type: "agent_start" }); await Promise.resolve(); });
+  await act(async () => { es.emit({ type: "message_update", message: reply }); await Promise.resolve(); });
+  await settle(90);
+  // The catch-up read after message_end is slow, as on a phone.
+  saveSession("s1", [userMsg("u0", "loaded question"), userMsg("u1", "hello agent"), reply]);
+  const releaseSync = holdNextSync("s1", syncSnapshot("s1"));
+  await act(async () => { es.emit({ type: "message_end", message: reply }); await Promise.resolve(); });
+  // Dropping the reply before its saved copy arrives empties that space: the
+  // chat jumps up to where the reply started, then back down.
+  assert.equal(w.latest.streamState.streamingMessage?.content?.[0]?.text, "hello world", "the reply stays while the save is read");
+  assert.equal(w.latest.messages.some((m) => m.timestamp === 42), false);
+  await act(async () => { releaseSync(); });
+  await settle();
+  assert.equal(w.latest.messages.filter((m) => m.timestamp === 42).length, 1, "the saved copy is shown once");
+  assert.equal(w.latest.streamState.streamingMessage, null, "the held reply gives way to its saved copy");
+});
+
 test("provider error on the assistant message is shown instead of ending silently", async () => {
   resetWorld();
   primeSession("s1", [userMsg("u0", "q")]);
