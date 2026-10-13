@@ -4,7 +4,7 @@ import test, { afterEach, beforeEach } from "node:test";
 import React from "react";
 import { readFile } from "node:fs/promises";
 import { renderToStaticMarkup } from "react-dom/server";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react/pure.js";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react/pure.js";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
@@ -223,13 +223,50 @@ test("without a visible-area API the panel keeps its CSS cap", () => {
   assert.deepEqual(responses, [{ answers: [{ id: "color", selectedOptions: [], customInput: "Teal" }] }]);
 });
 
-test("a footer press leaves focus in the Other text box", () => {
-  renderAttached();
-  // A focus change on press closes the phone keyboard and drops the panel's
-  // keyboard cap before the click, so the click misses the moved button.
-  for (const name of ["Cancel", "Submit"]) {
-    assert.equal(fireEvent.mouseDown(screen.getByRole("button", { name })), false, `${name} must not take focus`);
+test("on touch, while Other is being typed, a press elsewhere in the panel keeps focus there", async () => {
+  const restore = stubMedia({ coarse: true });
+  const composer = document.body.appendChild(document.createElement("textarea"));
+  try {
+    renderAttached();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const other = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
+    const red = screen.getByRole("radio", { name: "Red" });
+    const targets = [red, red.closest("label"), screen.getByRole("button", { name: "Cancel" }), screen.getByRole("button", { name: "Submit" })];
+    // No text box of the panel focused: no keyboard of ours to protect.
+    for (const target of targets) assert.equal(fireEvent.mouseDown(target), true);
+    act(() => composer.focus());
+    for (const target of targets) assert.equal(fireEvent.mouseDown(target), true, "a field outside the panel is not ours to keep");
+    act(() => red.focus());
+    assert.equal(fireEvent.mouseDown(screen.getByRole("button", { name: "Submit" })), true, "a focused radio raises no keyboard");
+
+    act(() => other.focus());
+    // A focus change on press closes the phone keyboard and resizes the panel
+    // before the click, so the click misses the option or button it aimed at.
+    for (const target of targets) assert.equal(fireEvent.mouseDown(target), false, `${target.textContent} must not take focus`);
+    assert.equal(fireEvent.mouseDown(other), true, "the text box itself still takes the press");
+  } finally {
+    composer.remove();
+    restore();
   }
+});
+
+test("with a mouse, a press in the panel moves focus as usual", () => {
+  renderAttached();
+  act(() => screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea").focus());
+  // Text selection and radio arrow keys need the press to act normally.
+  assert.equal(fireEvent.mouseDown(screen.getByText("Red")), true);
+});
+
+test("tapping back into kept Other text chooses it even though focus never left", () => {
+  renderAttached();
+  const other = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
+  fireEvent.change(other, { target: { value: "Teal" } });
+  fireEvent.click(screen.getByRole("radio", { name: "Red" }));
+  assert.equal(screen.getByRole("radio", { name: /Other/ }).checked, false);
+  // On touch the option tap kept focus in the box, so no focus event follows.
+  fireEvent.click(other);
+  assert.equal(screen.getByRole("radio", { name: /Other/ }).checked, true);
+  assert.equal(screen.getByRole("radio", { name: "Red" }).checked, false);
 });
 
 // ---- touch targets (globals.css) ----------------------------------------------

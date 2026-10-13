@@ -23,6 +23,8 @@ export type ExtensionDialogResponse =
 // unchooses it, so the text is still in its row when Other is chosen again.
 type AskDraft = { selected: string[]; other: string; otherChosen: boolean };
 const EMPTY_ASK_DRAFT: AskDraft = { selected: [], other: "", otherChosen: false };
+// Fields that raise the on-screen keyboard: every input but a radio/checkbox.
+const TEXT_ENTRY = "input:not([type=radio]):not([type=checkbox]), textarea";
 
 // Keyboard-aware panel height. The on-screen keyboard shrinks the visible
 // area, so a panel sized against the layout viewport alone keeps its footer
@@ -248,7 +250,7 @@ export function ExtensionDialog({
       // selects that option, which silently overwrites what the user typed in
       // "Other". Prefer the first text entry, then any button.
       const target = panel.querySelector<HTMLElement>(
-        "input:not([type=radio]):not([type=checkbox]), textarea, button:not([disabled])",
+        `${TEXT_ENTRY}, button:not([disabled])`,
       );
       (target ?? panel).focus();
     });
@@ -303,6 +305,18 @@ export function ExtensionDialog({
         aria-modal={attached ? undefined : "true"}
         aria-label={title}
         tabIndex={-1}
+        // While a text box in the panel has focus, a tap elsewhere in it (an
+        // option, Cancel, Submit) must not move focus on press: the phone
+        // keyboard would close and the panel resize before the click, so the
+        // tap misses its target. A tapped option label still focuses its radio
+        // once the click lands, so the keyboard closes after the choice.
+        // Touch only: a mouse keeps text selection and radio arrow keys.
+        onMouseDown={(event) => {
+          const target = event.target as Element;
+          if (touchPointer() && document.activeElement?.matches(TEXT_ENTRY) && event.currentTarget.contains(document.activeElement) && !target.closest(TEXT_ENTRY)) {
+            event.preventDefault();
+          }
+        }}
         className={attached ? undefined : "animate-scale-in"}
         style={{
           width: attached ? "100%" : "min(560px, 100%)",
@@ -416,6 +430,10 @@ export function ExtensionDialog({
             <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16 }}>
               {request.questions.map((question, index) => {
                 const draft = askDraftAt(index);
+                const chooseKeptOther = () => {
+                  if (draft.otherChosen || !draft.other.trim()) return;
+                  updateAskDraft(index, (current) => ({ ...current, selected: question.multi ? current.selected : [], otherChosen: true }));
+                };
                 return (
                   <fieldset key={question.id} style={{ margin: 0, padding: 0, border: "none", minWidth: 0, display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 8 }}>
                     <legend style={{ padding: 0, marginBottom: 8, color: "var(--text)", fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>
@@ -501,10 +519,10 @@ export function ExtensionDialog({
                         placeholder={t("chatWindow.askOther")}
                         value={draft.other}
                         // Going back into kept text means answering with it again.
-                        onFocus={() => {
-                          if (draft.otherChosen || !draft.other.trim()) return;
-                          updateAskDraft(index, (current) => ({ ...current, selected: question.multi ? current.selected : [], otherChosen: true }));
-                        }}
+                        // A tap counts too: picking an option no longer takes focus
+                        // from this box, so tapping back into it fires no focus event.
+                        onFocus={chooseKeptOther}
+                        onClick={chooseKeptOther}
                         rows={1}
                         onChange={(e) => {
                           const other = e.target.value;
@@ -543,14 +561,7 @@ export function ExtensionDialog({
         </div>
         </div>
 
-        <div
-          className="extension-dialog-footer"
-          // A footer tap must not take focus from the Other text box: that
-          // closes the phone keyboard and drops the keyboard height cap before
-          // the click lands, so the click misses the moved button.
-          onMouseDown={(event) => event.preventDefault()}
-          style={{ display: "flex", flexShrink: 0, justifyContent: "flex-end", gap: 8, padding: "10px 14px", borderTop: "1px solid var(--border)", background: "var(--bg-panel)" }}
-        >
+        <div className="extension-dialog-footer" style={{ display: "flex", flexShrink: 0, justifyContent: "flex-end", gap: 8, padding: "10px 14px", borderTop: "1px solid var(--border)", background: "var(--bg-panel)" }}>
           <button
             onClick={cancel}
             style={{
