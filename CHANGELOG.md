@@ -16,7 +16,7 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 
 ### Fixed
 
-- On a phone, the first tap on an option, **Submit** or **Cancel** in a question panel now acts on it while you are typing in **Other**. It used to only close the keyboard and resize the panel, which moved the target out from under the tap. Tapping an option still closes the keyboard, but only after the option is chosen; tapping back into the kept **Other** text chooses it again.
+- On a phone, the first tap on an option, **Submit** or **Cancel** in a question panel now acts on it. It used to only close the keyboard and resize the panel, which moved the target out from under the tap. The message box's keyboard now closes as soon as the question appears (the message box is hidden then anyway), and while you type in **Other** a tap elsewhere in the panel no longer moves focus first. Tapping an option still closes the keyboard, but only after the option is chosen; tapping back into the kept **Other** text chooses it again.
 
 ---
 
