@@ -1,10 +1,11 @@
 "use client";
+import { withStorageNamespace } from "@/lib/browser-storage.js";
 
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 
 export type FontSizePreference = "sm" | "md" | "lg" | "xl";
 
-export const STORAGE_KEY = "omp-font-size";
+export const STORAGE_KEY = withStorageNamespace("omp-font-size");
 export const DEFAULT_FONT_SIZE: FontSizePreference = "md";
 export const FONT_SIZE_CHANGE_EVENT = "omp-font-size-change";
 

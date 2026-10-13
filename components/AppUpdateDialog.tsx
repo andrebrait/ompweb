@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, Circle, Download, Info, LoaderCircle, RotateCcw } from "lucide-react";
@@ -102,7 +103,7 @@ export async function loadAppUpdateReleaseNotes(
   signal: AbortSignal,
   fetcher: typeof fetch = fetch,
 ): Promise<AppUpdateReleaseNotes | null> {
-  const response = await fetcher("/api/app-update/notes", { signal });
+  const response = await fetcher(withBasePath("/api/app-update/notes"), { signal });
   if (!response.ok || response.status === 204) return null;
 
   let value: unknown;

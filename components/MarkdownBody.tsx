@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { Children, cloneElement, isValidElement, useMemo, type ComponentProps, type MouseEvent, type ReactElement, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -29,7 +30,7 @@ export function MarkdownBody({ children, className, isStreaming, cwd, onOpenFile
       if (suppressImages) return alt ?? null;
       const filePath = typeof src === "string" ? resolveLocalFileHref(src, cwd) : null;
       const imageSrc = filePath
-        ? `/api/files/${encodeFilePathForApi(filePath)}?type=read`
+        ? withBasePath(`/api/files/${encodeFilePathForApi(filePath)}?type=read`)
         : src;
       // Dynamic local paths are served directly by the file API.
       return <ClickableImage src={imageSrc} alt={alt ?? ""} loading="lazy" {...imgProps} />;
@@ -109,7 +110,7 @@ export function MarkdownBody({ children, className, isStreaming, cwd, onOpenFile
       }
 
       const anchor = (
-        <a href={href} {...props} target="_blank" rel="noopener noreferrer">
+        <a href={href === undefined ? href : withBasePath(href)} {...props} target="_blank" rel="noopener noreferrer">
           {textParts}
         </a>
       );

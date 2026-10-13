@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { useEffect, useRef, useState, type ImgHTMLAttributes } from "react";
 import { createPortal } from "react-dom";
@@ -37,7 +38,7 @@ export function ClickableImage({ src, alt, ...imgProps }: ClickableImageProps) {
     return () => URL.revokeObjectURL(url);
   }, [src]);
 
-  const resolvedSrc = typeof src === "string" ? src : objectUrl ?? "";
+  const resolvedSrc = typeof src === "string" ? withBasePath(src) : objectUrl ?? "";
 
   // Never render a broken clickable thumbnail for a missing source.
   if (!resolvedSrc) return null;

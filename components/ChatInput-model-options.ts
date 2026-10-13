@@ -1,3 +1,4 @@
+import { withStorageNamespace } from "@/lib/browser-storage.js";
 import { formatCompactNumber } from "@/lib/format";
 
 export interface ModelOption {
@@ -6,7 +7,7 @@ export interface ModelOption {
   name: string;
 }
 
-export const COMPOSER_MODELS_STORAGE_KEY = "omp-composer-models";
+export const COMPOSER_MODELS_STORAGE_KEY = withStorageNamespace("omp-composer-models");
 
 export function readVisibleModelKeys(): Set<string> | null {
   try {

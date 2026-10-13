@@ -1,4 +1,5 @@
 "use client";
+import { withStorageNamespace } from "../browser-storage.js";
 
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import en from "./locales/en.json";
@@ -13,7 +14,7 @@ export const LOCALES: Array<{ value: Locale; label: string }> = [
   { value: "ja", label: "日本語" },
 ];
 
-const STORAGE_KEY = "omp-lang";
+const STORAGE_KEY = withStorageNamespace("omp-lang");
 
 const dictionaries: Record<Locale, Record<string, string>> = {
   en: en as Record<string, string>,

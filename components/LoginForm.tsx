@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { LockKeyhole } from "lucide-react";
 import { FormEvent, useState } from "react";
@@ -13,7 +14,7 @@ export function LoginForm() {
     setSubmitting(true);
     setError(null);
     try {
-      const response = await fetch("/api/web-auth/session", {
+      const response = await fetch(withBasePath("/api/web-auth/session"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password }),
@@ -24,7 +25,7 @@ export function LoginForm() {
       }
       // Full reload so the new auth cookie is picked up by middleware
       // and server components — SPA navigation alone may keep stale state.
-      window.location.replace("/");
+      window.location.replace(withBasePath("/"));
     } catch {
       setError("Could not sign in. Please check your connection and try again.");
     } finally {

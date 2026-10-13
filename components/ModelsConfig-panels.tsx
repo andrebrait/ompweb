@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { useState, useEffect, useRef, type CSSProperties } from "react";
 import { useI18n } from "@/lib/i18n";
@@ -89,7 +90,7 @@ export function RetryFallbackDetail({ models }: { models: RuntimeModelEntry[] })
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/omp-settings")
+    fetch(withBasePath("/api/omp-settings"))
       .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
       .then((data: { settings?: RetrySettings }) => setSettings(data.settings ?? {}))
       .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
@@ -113,7 +114,7 @@ export function RetryFallbackDetail({ models }: { models: RuntimeModelEntry[] })
           const snapshot = latestRef.current;
           latestRef.current = null;
           try {
-            const response = await fetch("/api/omp-settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings: snapshot }) });
+            const response = await fetch(withBasePath("/api/omp-settings"), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings: snapshot }) });
             const data = await response.json() as { settings?: RetrySettings; error?: string };
             if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
             if (latestRef.current === null) setSettings(data.settings ?? snapshot);
@@ -171,7 +172,7 @@ export function NativeRegistryDetail({ models, connectedProviders, onChanged }: 
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    fetch("/api/omp-settings")
+    fetch(withBasePath("/api/omp-settings"))
       .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
       .then((data: { settings?: NativeRegistrySettings }) => setSettings(data.settings ?? {}))
       .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
@@ -196,7 +197,7 @@ export function NativeRegistryDetail({ models, connectedProviders, onChanged }: 
           const snapshot = latestRef.current;
           latestRef.current = null;
           try {
-            const response = await fetch("/api/omp-settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings: snapshot }) });
+            const response = await fetch(withBasePath("/api/omp-settings"), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings: snapshot }) });
             const data = await response.json() as { settings?: NativeRegistrySettings; error?: string };
             if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
             if (latestRef.current === null) setSettings(data.settings ?? snapshot);
@@ -258,7 +259,7 @@ export function ModelRolesDetail({ models }: { models: RuntimeModelEntry[] }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/model-roles")
+    fetch(withBasePath("/api/model-roles"))
       .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
       .then((data: { roles?: Record<string, string> }) => setRoles(data.roles ?? {}))
       .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
@@ -269,7 +270,7 @@ export function ModelRolesDetail({ models }: { models: RuntimeModelEntry[] }) {
     setSaving(true);
     setError(null);
     try {
-      const response = await fetch("/api/model-roles", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ roles }) });
+      const response = await fetch(withBasePath("/api/model-roles"), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ roles }) });
       const data = await response.json() as { error?: string };
       if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
       toast.success(t("modelsConfig.rolesSaved"));

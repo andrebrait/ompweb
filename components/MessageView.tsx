@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { memo, useState, useRef, useEffect, useMemo, useCallback, type ComponentProps } from "react";
 import { Copy, Check, GitFork, CornerUpLeft, ChevronRight, ChevronDown, Brain, EyeOff, CircleAlert, CircleSlash, LoaderCircle, FileText, Search, FileEdit, Terminal, CheckSquare, Bot, Code2, Globe, Wrench } from "lucide-react";
@@ -158,7 +159,7 @@ function loadThinkingContent(sessionId: string, entryId: string, blockIndex: num
   }
 
   const request = fetch(
-    `/api/sessions/${encodeURIComponent(sessionId)}/entries/${encodeURIComponent(entryId)}/thinking?blockIndex=${blockIndex}`,
+    withBasePath(`/api/sessions/${encodeURIComponent(sessionId)}/entries/${encodeURIComponent(entryId)}/thinking?blockIndex=${blockIndex}`),
   ).then(async (response) => {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json() as { thinking?: unknown };
@@ -1680,7 +1681,7 @@ function BashExecutionView({ message, sessionId }: { message: BashExecutionMessa
     const gen = fullOutputGenRef.current;
     setFullOutput({ phase: "loading" });
     try {
-      const res = await fetch(`/api/agent/${encodeURIComponent(sessionId)}/bash-output?path=${encodeURIComponent(message.fullOutputPath)}`);
+      const res = await fetch(withBasePath(`/api/agent/${encodeURIComponent(sessionId)}/bash-output?path=${encodeURIComponent(message.fullOutputPath)}`));
       const data = await res.json() as { success?: boolean; data?: { output?: string }; error?: string };
       if (fullOutputGenRef.current !== gen) return;
       if (!res.ok || !data.success) throw new Error(data.error ?? `HTTP ${res.status}`);
@@ -1692,7 +1693,7 @@ function BashExecutionView({ message, sessionId }: { message: BashExecutionMessa
   }, [message.fullOutputPath, sessionId, fullOutput?.phase]);
 
   const downloadUrl = message.fullOutputPath && sessionId
-    ? `/api/agent/${encodeURIComponent(sessionId)}/bash-output?path=${encodeURIComponent(message.fullOutputPath)}&download=1`
+    ? withBasePath(`/api/agent/${encodeURIComponent(sessionId)}/bash-output?path=${encodeURIComponent(message.fullOutputPath)}&download=1`)
     : null;
 
   return (

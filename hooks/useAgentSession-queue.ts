@@ -1,3 +1,4 @@
+import { withStorageNamespace } from "@/lib/browser-storage.js";
 // Queued-prompt tracking and sessionStorage persistence helpers
 // extracted from useAgentSession (pure logic only — no hook state).
 
@@ -11,7 +12,7 @@ export const EMPTY_QUEUE: QueuedMessages = { steering: [], followUp: [] };
 // omp reports only queuedMessageCount over RPC; the queued texts live in React
 // state and would vanish on reload. Mirror them into sessionStorage (per
 // session, best-effort, size-bounded) so a reload can restore the queue panel.
-export const QUEUE_STORAGE_PREFIX = "omp-queue-";
+export const QUEUE_STORAGE_PREFIX = withStorageNamespace("omp-queue-");
 export const QUEUE_STORAGE_MAX_CHARS = 50_000;
 
 export function isEmptyQueue(queue: QueuedMessages): boolean {

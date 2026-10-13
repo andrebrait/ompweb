@@ -1,4 +1,6 @@
 "use client";
+import { withStorageNamespace } from "@/lib/browser-storage.js";
+import { withBasePath } from "@/lib/base-path";
 
 import { useState, useCallback, useRef, useEffect, useLayoutEffect } from "react";
 import dynamic from "next/dynamic";
@@ -73,8 +75,8 @@ const RightPanel = dynamic(() => import("./RightPanel").then((m) => m.RightPanel
   loading: () => <PanelLoadingFallback />,
 });
 
-const TOOL_CALLS_COLLAPSED_STORAGE_KEY = "omp-web:tool-calls-collapsed";
-const PROVIDER_USAGE_VISIBLE_STORAGE_KEY = "omp-web:provider-usage-visible";
+const TOOL_CALLS_COLLAPSED_STORAGE_KEY = withStorageNamespace("omp-web:tool-calls-collapsed");
+const PROVIDER_USAGE_VISIBLE_STORAGE_KEY = withStorageNamespace("omp-web:provider-usage-visible");
 
 const CommandPalette = dynamic(() => import("./CommandPalette").then((m) => m.CommandPalette), {
   ssr: false,
@@ -239,7 +241,7 @@ export function AppShell() {
   }, [sidebarOpen, mobileSidebarReady]);
   useEffect(() => {
     const controller = new AbortController();
-    void fetch("/api/omp-update", {
+    void fetch(withBasePath("/api/omp-update"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "check" }),
@@ -299,7 +301,7 @@ export function AppShell() {
   }, []);
   const refreshAppUpdate = useCallback(async (force = false, autoOpen = false): Promise<AppUpdateInfo | null> => {
     const data = await fetchAppUpdateJson<AppUpdateInfo>(
-      force ? "/api/app-update?force=1" : "/api/app-update",
+      force ? withBasePath("/api/app-update?force=1") : withBasePath("/api/app-update"),
       { cache: "no-store" },
     );
     if (
@@ -363,7 +365,7 @@ export function AppShell() {
     if (existing) return existing;
     const request = (async () => {
       try {
-        const response = await fetch("/api/app-update", {
+        const response = await fetch(withBasePath("/api/app-update"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "acknowledge", attemptId }),
@@ -393,7 +395,7 @@ export function AppShell() {
   }, []);
 
   const submitAppUpdateCommit = useCallback((attemptId: string) => {
-    void fetchAppUpdateJson<{ error?: string }>("/api/app-update", {
+    void fetchAppUpdateJson<{ error?: string }>(withBasePath("/api/app-update"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "commit", attemptId }),
@@ -546,7 +548,7 @@ export function AppShell() {
     setAppUpdatePhase("preparing");
     setAppUpdateError(null);
     try {
-      const prepared = await fetchAppUpdateJson<{ attemptId?: string; targetVersion?: string }>("/api/app-update", {
+      const prepared = await fetchAppUpdateJson<{ attemptId?: string; targetVersion?: string }>(withBasePath("/api/app-update"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "prepare" }),
@@ -941,7 +943,7 @@ export function AppShell() {
     setInitialCwdStatus("validating");
     setInitialCwdError(null);
 
-    void fetch("/api/cwd/validate", {
+    void fetch(withBasePath("/api/cwd/validate"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cwd: requestedCwd }),
@@ -1057,7 +1059,7 @@ export function AppShell() {
   // handleCwdChange relies on. Hydrate it from the session list so switching
   // worktrees right after creating a session doesn't close the chat.
   const hydrateSelectedSession = useCallback((sessionId: string) => {
-    void fetch("/api/sessions")
+    void fetch(withBasePath("/api/sessions"))
       .then((r) => (r.ok ? (r.json() as Promise<{ sessions: SessionInfo[] }>) : null))
       .then((d) => {
         const full = d?.sessions.find((s) => s.id === sessionId);
@@ -1110,7 +1112,7 @@ export function AppShell() {
     setAutoNameStatus({ kind: "naming" });
 
     try {
-      const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/auto-name`, {
+      const response = await fetch(withBasePath(`/api/sessions/${encodeURIComponent(sessionId)}/auto-name`), {
         method: "POST",
       });
       const body = (await response.json().catch(() => ({}))) as { title?: string; error?: string; code?: string };
@@ -1193,7 +1195,7 @@ export function AppShell() {
     const selectRestoredSession = async (attemptsLeft = 5): Promise<void> => {
       if (activeSessionIdRef.current !== sessionAtRestoreStart) return;
       try {
-        const res = await fetch("/api/sessions");
+        const res = await fetch(withBasePath("/api/sessions"));
         if (res.ok) {
           const data = (await res.json()) as { sessions?: SessionInfo[] };
           const found = data.sessions?.find((s) => s.id === sessionId);
@@ -1275,7 +1277,7 @@ export function AppShell() {
   const handleDownloadActiveFile = useCallback(() => {
     if (!activeFileTab) return;
     const link = document.createElement("a");
-    link.href = `/api/files/${encodeFilePathForApi(activeFileTab.filePath)}?type=download`;
+    link.href = withBasePath(`/api/files/${encodeFilePathForApi(activeFileTab.filePath)}?type=download`);
     link.download = activeFileTab.label;
     document.body.appendChild(link);
     link.click();
@@ -1320,7 +1322,7 @@ export function AppShell() {
   const handleViewFullHistory = useCallback(() => {
     if (!selectedSession) return;
     window.open(
-      `/api/sessions/${encodeURIComponent(selectedSession.id)}/export?inline=1`,
+      withBasePath(`/api/sessions/${encodeURIComponent(selectedSession.id)}/export?inline=1`),
       "_blank",
       "noopener,noreferrer",
     );
@@ -1380,7 +1382,7 @@ export function AppShell() {
             handleNewSession(`palette-${Date.now()}`, activeCwd);
             return;
           }
-          void fetch("/api/default-cwd", { method: "POST" })
+          void fetch(withBasePath("/api/default-cwd"), { method: "POST" })
             .then(async (response) => {
               if (!response.ok) throw new Error(`HTTP ${response.status}`);
               const data = (await response.json()) as { cwd?: string };
@@ -1637,15 +1639,11 @@ export function AppShell() {
               <div
                 className="shell-topbar-center"
                 style={{
-                  position: "absolute",
-                  left: "50%",
-                  transform: "translateX(-50%)",
+                  flex: 1,
+                  minWidth: 0,
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  maxWidth: "min(460px, calc(100% - 380px))",
-                  pointerEvents: "none",
-                  zIndex: 10,
                 }}
               >
                 <div
@@ -1664,7 +1662,6 @@ export function AppShell() {
                     whiteSpace: "nowrap",
                     minWidth: 0,
                     maxWidth: "min(400px, 30vw)",
-                    pointerEvents: "auto",
                     flexShrink: 1,
                   }}
                 >

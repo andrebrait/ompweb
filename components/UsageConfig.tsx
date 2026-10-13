@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, ChevronDown, Loader2, RefreshCw } from "lucide-react";
@@ -65,7 +66,7 @@ export function UsageConfig() {
         });
         if (isRefresh) params.set("refresh", "true");
 
-        const res = await fetch(`/api/usage?${params.toString()}`, { signal });
+        const res = await fetch(withBasePath(`/api/usage?${params.toString()}`), { signal });
         if (!res.ok) {
           throw new Error(`Failed to fetch usage: ${res.statusText}`);
         }

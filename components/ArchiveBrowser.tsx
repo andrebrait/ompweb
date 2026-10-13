@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useI18n } from "@/lib/i18n";
@@ -218,7 +219,7 @@ export function ArchiveBrowser({ open, onClose, onRestored }: ArchiveBrowserProp
     setError(null);
 
     try {
-      const res = await fetch("/api/sessions/archive");
+      const res = await fetch(withBasePath("/api/sessions/archive"));
       if (!res.ok) {
         const payload = await res.json().catch(() => ({})) as { error?: string; code?: string };
         throw new Error(formatApiError(payload, `errors.http${res.status}`));
@@ -307,7 +308,7 @@ export function ArchiveBrowser({ open, onClose, onRestored }: ArchiveBrowserProp
       setRestoringKey(archive.key);
 
       try {
-        const res = await fetch("/api/sessions/archive", {
+        const res = await fetch(withBasePath("/api/sessions/archive"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

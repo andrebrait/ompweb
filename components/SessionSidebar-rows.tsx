@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { memo, useCallback, useRef, useState, type Dispatch, type ReactNode, type RefObject, type SetStateAction } from "react";
 import type { AgentMessage, ManagedProject, ProjectLaunchConfig, SessionInfo } from "@/lib/types";
@@ -877,7 +878,7 @@ const SessionItem = memo(function SessionItem({
     setRenaming(false);
     if (name === (session.name ?? "")) return;
     try {
-      const response = await fetch(`/api/sessions/${encodeURIComponent(session.id)}`, {
+      const response = await fetch(withBasePath(`/api/sessions/${encodeURIComponent(session.id)}`), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
@@ -893,7 +894,7 @@ const SessionItem = memo(function SessionItem({
  setConfirmArchive(false);
  setDeleting(true);
  try {
- const response = await fetch(`/api/sessions/${encodeURIComponent(session.id)}/archive`, { method: "POST" });
+ const response = await fetch(withBasePath(`/api/sessions/${encodeURIComponent(session.id)}/archive`), { method: "POST" });
  if (!response.ok) throw new Error("Session archive failed");
  onDeleted?.(session.id);
  } catch {
@@ -906,7 +907,7 @@ const SessionItem = memo(function SessionItem({
     setConfirmDelete(false);
     setDeleting(true);
     try {
-      const response = await fetch(`/api/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" });
+      const response = await fetch(withBasePath(`/api/sessions/${encodeURIComponent(session.id)}`), { method: "DELETE" });
       if (!response.ok) throw new Error("Session deletion failed");
       onDeleted?.(session.id);
     } catch {
@@ -919,7 +920,7 @@ const SessionItem = memo(function SessionItem({
     if (copyingTranscript) return;
     setCopyingTranscript(true);
     try {
-      const response = await fetch(`/api/sessions/${encodeURIComponent(session.id)}`);
+      const response = await fetch(withBasePath(`/api/sessions/${encodeURIComponent(session.id)}`));
       if (!response.ok) throw new Error("Session transcript fetch failed");
       const data = await response.json() as { context?: { messages?: AgentMessage[] }; info?: { cwd?: string } };
       const markdown = transcriptToMarkdown(data.context?.messages ?? [], { title, cwd: data.info?.cwd ?? session.cwd });

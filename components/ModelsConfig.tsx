@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -512,7 +513,7 @@ function ModelDetail({
     if (!model.id.trim() || testState.phase === "testing") return;
     setTestState({ phase: "testing" });
     try {
-      const res = await fetch("/api/models-config/test", {
+      const res = await fetch(withBasePath("/api/models-config/test"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ providerName, provider, model }),
@@ -809,7 +810,7 @@ function OAuthDetail({ provider, onRefresh }: { provider: OAuthProvider; onRefre
     setLoginState({ phase: "connecting" });
     setInputValue("");
 
-    const es = new EventSource(`/api/auth/login/${encodeURIComponent(provider.id)}`);
+    const es = new EventSource(withBasePath(`/api/auth/login/${encodeURIComponent(provider.id)}`));
     eventSourceRef.current = es;
 
     es.onmessage = (e) => {
@@ -863,7 +864,7 @@ function OAuthDetail({ provider, onRefresh }: { provider: OAuthProvider; onRefre
 
   const handleLogout = useCallback(async () => {
     try {
-      const res = await fetch(`/api/auth/logout/${encodeURIComponent(provider.id)}`, { method: "POST" });
+      const res = await fetch(withBasePath(`/api/auth/logout/${encodeURIComponent(provider.id)}`), { method: "POST" });
       const d = await res.json().catch(() => ({})) as { error?: string; code?: string };
       if (!res.ok || d.error) {
         // omp has no logout RPC/CLI surface; the route returns 501 with guidance.
@@ -881,7 +882,7 @@ function OAuthDetail({ provider, onRefresh }: { provider: OAuthProvider; onRefre
     if (!code.trim()) return;
     setLoginState({ phase: "progress", message: t("modelsConfig.verifying") });
     try {
-      const res = await fetch(`/api/auth/login/${encodeURIComponent(provider.id)}`, {
+      const res = await fetch(withBasePath(`/api/auth/login/${encodeURIComponent(provider.id)}`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, code: code.trim() }),
@@ -901,7 +902,7 @@ function OAuthDetail({ provider, onRefresh }: { provider: OAuthProvider; onRefre
   const submitSelection = useCallback(async (token: string, value: string) => {
     setLoginState({ phase: "progress", message: t("modelsConfig.continuing") });
     try {
-      const res = await fetch(`/api/auth/login/${encodeURIComponent(provider.id)}`, {
+      const res = await fetch(withBasePath(`/api/auth/login/${encodeURIComponent(provider.id)}`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, code: value }),
@@ -1085,7 +1086,7 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
   const [parseError, setParseError] = useState<{ message: string; path?: string } | null>(null);
 
   const loadOAuthProviders = useCallback(() => {
-    fetch("/api/auth/providers")
+    fetch(withBasePath("/api/auth/providers"))
       .then((r) => r.json())
       .then((d: { providers?: OAuthProvider[] }) => {
         if (Array.isArray(d.providers)) setOauthProviders(d.providers);
@@ -1094,7 +1095,7 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
   }, []);
 
   const loadApiKeyProviders = useCallback(() => {
-    fetch("/api/auth/all-providers")
+    fetch(withBasePath("/api/auth/all-providers"))
       .then((r) => r.json())
       .then((d: { providers?: ApiKeyProvider[] }) => {
         if (Array.isArray(d.providers)) setApiKeyProviders(d.providers);
@@ -1105,7 +1106,7 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
   const loadRuntimeModels = useCallback(async () => {
     setRuntimeModelsLoading(true);
     try {
-      const response = await fetch("/api/models", { cache: "no-store" });
+      const response = await fetch(withBasePath("/api/models"), { cache: "no-store" });
       const data = response.ok ? await response.json() as { modelList?: RuntimeModelEntry[]; connectedProviders?: ConnectedProvider[] } : null;
       setRuntimeModels(data?.modelList ?? []);
       setConnectedProviders(data?.connectedProviders ?? []);
@@ -1119,7 +1120,7 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
 
   const loadConfig = useCallback(() => {
     setLoading(true);
-    fetch("/api/models-config")
+    fetch(withBasePath("/api/models-config"))
       .then((r) => r.json())
       .then((d: ModelsFileData & { parseError?: string; code?: string; path?: string }) => {
         if (d.parseError) {
@@ -1187,7 +1188,7 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
 
 
   const enableConnectedProvider = useCallback(async (provider: string) => {
-    const response = await fetch("/api/providers/enable", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider }) });
+    const response = await fetch(withBasePath("/api/providers/enable"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider }) });
     const data = await response.json() as { error?: string };
     if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
     await loadRuntimeModels();
@@ -1289,7 +1290,7 @@ export function ModelsConfig({ onClose, onSelectTab, onSaved, embedded = false }
     setSavedOk(false);
     try {
       const saveableConfig = omitUntouchedModelDrafts(config);
-      const res = await fetch("/api/models-config", {
+      const res = await fetch(withBasePath("/api/models-config"), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(saveableConfig),

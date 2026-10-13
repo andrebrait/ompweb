@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
@@ -22,7 +23,7 @@ interface BrowseResponse {
 
 async function loadDirectories(directory?: string): Promise<BrowseResponse> {
   const query = directory ? `?path=${encodeURIComponent(directory)}` : "";
-  const response = await fetch(`/api/cwd/browse${query}`);
+  const response = await fetch(withBasePath(`/api/cwd/browse${query}`));
   const data = await response.json() as BrowseResponse;
   if (!response.ok || data.error) {
     throw new Error(formatApiError({ ...data, error: data.error ?? `HTTP ${response.status}` }));

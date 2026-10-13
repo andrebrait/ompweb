@@ -1,4 +1,5 @@
 "use client";
+import { withStorageNamespace } from "@/lib/browser-storage.js";
 
 import { useState } from "react";
 import { ChevronRight, Gauge } from "lucide-react";
@@ -17,7 +18,7 @@ const WINDOWS: WindowDef[] = [
   { short: "30D", pick: (r) => r.monthly },
 ];
 
-const COLLAPSED_STORAGE_KEY = "omp-web:provider-usage-collapsed";
+const COLLAPSED_STORAGE_KEY = withStorageNamespace("omp-web:provider-usage-collapsed");
 
 function worstWindow(report: ProviderUsageReport): { short: string; window: ProviderUsageWindow } | null {
   let best: { short: string; window: ProviderUsageWindow } | null = null;

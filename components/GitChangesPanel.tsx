@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AtSign, Check, ExternalLink, GitBranch, RefreshCw, Search, X } from "lucide-react";
@@ -24,7 +25,7 @@ interface Props {
 
 async function fetchStatus(cwd: string): Promise<GitStatusResponse> {
   const params = new URLSearchParams({ cwd });
-  const res = await fetch(`/api/git/status?${params.toString()}`);
+  const res = await fetch(withBasePath(`/api/git/status?${params.toString()}`));
   if (!res.ok) {
     throw new Error(translate("gitChanges.loadFailed", { status: res.status }));
   }
@@ -33,7 +34,7 @@ async function fetchStatus(cwd: string): Promise<GitStatusResponse> {
 
 async function fetchPatch(cwd: string, filePath: string): Promise<GitFileDiffResponse> {
   const params = new URLSearchParams({ cwd, path: filePath });
-  const res = await fetch(`/api/git/diff?${params.toString()}`);
+  const res = await fetch(withBasePath(`/api/git/diff?${params.toString()}`));
   if (!res.ok) {
     throw new Error(translate("gitChanges.diffLoadFailed", { status: res.status }));
   }

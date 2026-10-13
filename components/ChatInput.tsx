@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import React, { useRef, useState, useCallback, useEffect, useLayoutEffect, useImperativeHandle, forwardRef, memo, KeyboardEvent } from "react";
 import { ChevronDown, ListChecks, Loader2, Mic, Paperclip, Plus, Shrink, Sparkles, Wrench, Zap } from "lucide-react";
@@ -6,6 +7,7 @@ import { getSubmitDuringRunBehavior } from "@/lib/composer-prefs";
 import type { BuiltinSlashCommandResult, CompactResultInfo, QueuedMessages, SlashCommandInfo } from "@/hooks/useAgentSession";
 import type { ActiveGoal, ActivePlan } from "@/lib/web-mode-state";
 import { toast } from "@/components/ui/toast";
+import { ConfirmDialog } from "@/components/ui/field";
 import { useDictation } from "@/hooks/useDictation";
 import type { GenerationSpeedInfo, SessionStatsInfo } from "@/lib/pi-types";
 import { formatCompactNumber, formatPercent } from "@/lib/format";
@@ -120,9 +122,9 @@ interface Props {
   modelCapacity?: { contextWindow?: number; maxTokens?: number } | null;
   /** Generation speed shown in the context ring popover. */
   generationSpeed?: GenerationSpeedInfo | null;
-  /** Remove one queued message from the queue panel (Edit/Delete/Steer). */
+  /** Remove one queued message from the queue panel (Edit/Delete). */
   onRemoveQueuedMessage?: (text: string) => void;
-  /** Relabel the first queued follow-up as a steering message. */
+  /** Promote the first matching native follow-up into steering. */
   onPromoteQueuedToSteer?: (text: string) => void;
   slashCommands?: SlashCommandInfo[];
   slashCommandsLoading?: boolean;
@@ -267,6 +269,11 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     [locale],
   );
   const [value, setValue] = useState(() => (draftKey ? getDraft(draftKey)?.value ?? "" : ""));
+  const [queuedDeleteTarget, setQueuedDeleteTarget] = useState<{
+    text: string;
+    draftKey: string | undefined;
+    queue: Props["queuedMessages"];
+  } | null>(null);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [thinkingDropdownOpen, setThinkingDropdownOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
@@ -596,6 +603,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     // validation banner along with the old draft.
     attachmentRevisionRef.current += 1;
     setAttachError(null);
+    setQueuedDeleteTarget(null);
 
     if (previousDraftKey) {
       setDraft(previousDraftKey, {
@@ -685,7 +693,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   useEffect(() => {
     if (slashQuery === null || !cwd) return;
     const controller = new AbortController();
-    void fetch(`/api/skills?cwd=${encodeURIComponent(cwd)}`, { signal: controller.signal })
+    void fetch(withBasePath(`/api/skills?cwd=${encodeURIComponent(cwd)}`), { signal: controller.signal })
       .then((response) => response.ok ? response.json() as Promise<{ skills?: Array<{ name?: string; disableModelInvocation?: boolean }> }> : null)
       .then((data) => {
         if (!data) return;
@@ -791,7 +799,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     const fetchCwd = cwd;
     const query = atQueryText;
     const timer = setTimeout(() => {
-      fetch(`/api/file-index?cwd=${encodeURIComponent(fetchCwd)}&q=${encodeURIComponent(query)}`)
+      fetch(withBasePath(`/api/file-index?cwd=${encodeURIComponent(fetchCwd)}&q=${encodeURIComponent(query)}`))
         .then((res) => {
           if (!res.ok) throw new Error(`file search failed: ${res.status}`);
           return res.json() as Promise<{ matches?: FileIndexEntry[] }>;
@@ -838,7 +846,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     // a newer one has taken over.
     const controller = new AbortController();
     setFileIndexLoading(true);
-    fetch(`/api/file-index?cwd=${encodeURIComponent(fetchCwd)}`, { signal: controller.signal })
+    fetch(withBasePath(`/api/file-index?cwd=${encodeURIComponent(fetchCwd)}`), { signal: controller.signal })
       .then((res) => {
         if (!res.ok) throw new Error(`file index failed: ${res.status}`);
         return res.json() as Promise<{ files?: string[]; truncated?: boolean }>;
@@ -1017,6 +1025,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const queuedCount = queuedEntries.length;
 
   const [queueExpanded, setQueueExpanded] = useState(false);
+  // Invalidate confirmation if delivery or navigation changes the queue.
+  const activeDeleteTarget = queuedDeleteTarget?.draftKey === draftKey
+    && queuedDeleteTarget?.queue === queuedMessages ? queuedDeleteTarget : null;
 
   const handleItemEdit = useCallback((text: string) => {
     onRemoveQueuedMessage?.(text);
@@ -1034,8 +1045,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   }, [onRemoveQueuedMessage]);
 
   const handleItemDelete = useCallback((text: string) => {
-    onRemoveQueuedMessage?.(text);
-  }, [onRemoveQueuedMessage]);
+    setQueuedDeleteTarget({ text, draftKey, queue: queuedMessages });
+  }, [draftKey, queuedMessages]);
 
   const handleItemSteer = useCallback((entry: { kind: "follow-up" | "steer"; text: string }) => {
     if (entry.kind === "follow-up") {
@@ -1237,7 +1248,9 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         return;
       }
 
-      if (e.key === "Enter" && !e.shiftKey) {
+      // Soft keyboards rarely offer Shift+Enter; on the mobile breakpoint Enter
+      // inserts a newline and the Send button submits.
+      if (e.key === "Enter" && !e.shiftKey && !isMobile) {
         e.preventDefault();
         if (isStreaming && (onSteer || onFollowUp)) {
           // Submit-during-run behavior comes from Settings (Steer current run
@@ -1250,7 +1263,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         }
       }
     },
-    [isStreaming, onSteer, onFollowUp, onAbort, onMinimize, slashMenuOpen, slashQuery, filteredSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, historyMenuOpen, inputHistory, historyActiveIndex, applyHistoryInput, value, isRecording, isTranscribing, cancelDictation, stopDictation, toggleDictation]
+    [isMobile, isStreaming, onSteer, onFollowUp, onAbort, onMinimize, slashMenuOpen, slashQuery, filteredSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, historyMenuOpen, inputHistory, historyActiveIndex, applyHistoryInput, value, isRecording, isTranscribing, cancelDictation, stopDictation, toggleDictation]
   );
 
   const handleInput = useCallback(() => {
@@ -1440,6 +1453,27 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
          padding: "0 16px calc(8px + env(safe-area-inset-bottom))",
       }}
     >
+      <ConfirmDialog
+        open={activeDeleteTarget !== null}
+        onOpenChange={(open) => { if (!open) setQueuedDeleteTarget(null); }}
+        title={t("chatInput.queuedDeleteTitle")}
+        description={(
+          <>
+            {t("chatInput.queuedDeleteConfirmBody")}
+            <span style={{ display: "block", marginTop: 12, maxHeight: 180, overflowY: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+              {activeDeleteTarget?.text}
+            </span>
+          </>
+        )}
+        confirmLabel={t("chatInput.queuedDelete")}
+        cancelLabel={t("chatInput.cancel")}
+        danger
+        onConfirm={() => {
+          if (!activeDeleteTarget) return;
+          setQueuedDeleteTarget(null);
+          onRemoveQueuedMessage?.(activeDeleteTarget.text);
+        }}
+      />
       {/* Hidden file input */}
       <input
         ref={fileInputRef}
@@ -2009,9 +2043,11 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 <QueuedActionButton onClick={handleQueuedDelete} title={t("chatInput.queuedDeleteTitle")}>
                   {t("chatInput.queuedDelete")}
                 </QueuedActionButton>
-                <QueuedActionButton onClick={handleQueuedSteer} title={t("chatInput.queuedSteerTitle")} accent>
-                  {t("chatInput.queuedSteerAction")}
-                </QueuedActionButton>
+                {firstQueued?.kind === "follow-up" && (
+                  <QueuedActionButton onClick={handleQueuedSteer} title={t("chatInput.queuedSteerTitle")} accent>
+                    {t("chatInput.queuedSteerAction")}
+                  </QueuedActionButton>
+                )}
               </div>
             ) : (
               <div>

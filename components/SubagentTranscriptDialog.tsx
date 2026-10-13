@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { sendAgentCommand } from "@/lib/agent-client";
@@ -207,7 +208,7 @@ export function SubagentTranscriptDialog({ subagent, sessionId, transcriptVersio
 
   const fetchCompletion = useCallback(async (): Promise<{ completion: string | null; truncated: boolean }> => {
     if (!sessionId || !subagent?.id) throw new Error("No session");
-    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(subagent.id)}?mode=completion`);
+    const res = await fetch(withBasePath(`/api/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(subagent.id)}?mode=completion`));
     if (res.status === 404) return { completion: null, truncated: false };
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json() as { completion: string | null; truncated: boolean };
@@ -218,7 +219,7 @@ export function SubagentTranscriptDialog({ subagent, sessionId, transcriptVersio
   const fetchTranscriptPage = useCallback(async (startByte: number, preferDisk: boolean): Promise<SubagentMessagesPage> => {
     if (!sessionId || !subagent?.id) throw new Error("No session");
     if (preferDisk) {
-      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(subagent.id)}?fromByte=${startByte}`);
+      const res = await fetch(withBasePath(`/api/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(subagent.id)}?fromByte=${startByte}`));
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return await res.json() as SubagentMessagesPage;
     }

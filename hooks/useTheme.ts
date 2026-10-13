@@ -1,4 +1,5 @@
 "use client";
+import { withStorageNamespace } from "@/lib/browser-storage.js";
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 
@@ -70,7 +71,7 @@ const VALID_PREFERENCES: Record<string, true> = {
   system: true,
 };
 
-const STORAGE_KEY = "omp-theme";
+const STORAGE_KEY = withStorageNamespace("omp-theme");
 const listeners = new Set<() => void>();
 
 function subscribe(cb: () => void): () => void {

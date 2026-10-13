@@ -1,7 +1,8 @@
+import { withStorageNamespace } from "@/lib/browser-storage.js";
 import type { AppUpdateInfo } from "./AppUpdateDialog";
 
-export const DISMISSED_APP_UPDATE_KEY = "omp-web:dismissed-app-update";
-export const COMPLETED_APP_UPDATE_KEY = "omp-web:completed-app-update";
+export const DISMISSED_APP_UPDATE_KEY = withStorageNamespace("omp-web:dismissed-app-update");
+export const COMPLETED_APP_UPDATE_KEY = withStorageNamespace("omp-web:completed-app-update");
 export const APP_UPDATE_POLL_MS = 500;
 export const APP_UPDATE_STOPPING_POLL_MS = 200;
 export const APP_UPDATE_TIMEOUT_MS = 15 * 60 * 1_000;

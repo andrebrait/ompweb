@@ -1,4 +1,6 @@
 "use client";
+import { withStorageNamespace } from "@/lib/browser-storage.js";
+import { withBasePath } from "@/lib/base-path";
 
 import { useCallback, useEffect, useState } from "react";
 import { Check, Plus, RefreshCw, Trash2 } from "lucide-react";
@@ -59,12 +61,12 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
         // chat-switch effect reads): without it a spawn here plants a
         // non-advisor child that a concurrent prompt then reuses.
         try {
-          if (localStorage.getItem(`omp-advisor-enabled:${sessionId}`) === "true") params.set("advisor", "1");
+          if (localStorage.getItem(withStorageNamespace(`omp-advisor-enabled:${sessionId}`)) === "true") params.set("advisor", "1");
         } catch {
           // Private mode: omit the opinion, spawn defaults apply.
         }
       }
-      const response = await fetch(`/api/mcp?${params}`);
+      const response = await fetch(withBasePath(`/api/mcp?${params}`));
       const data = await response.json() as { servers?: McpServer[]; user?: McpUserConfig; inventory?: McpLiveServer[]; liveServers?: McpLiveServer[]; liveError?: string; path?: string; error?: string };
       if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
       setServers(data.servers ?? []);
@@ -113,7 +115,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
     if (!server) return;
     setSaving(true);
     try {
-      const response = await fetch("/api/mcp", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, server }) });
+      const response = await fetch(withBasePath("/api/mcp"), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, server }) });
       const data = await response.json() as { message?: string; error?: string };
       if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
       setMessage(data.message ?? t("mcpConfig.validConfig"));
@@ -130,7 +132,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
     if (!server) return;
     setSaving(true);
     try {
-      const response = await fetch("/api/mcp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd, name, previousName: selected ?? undefined, server }) });
+      const response = await fetch(withBasePath("/api/mcp"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd, name, previousName: selected ?? undefined, server }) });
       const data = await response.json() as { error?: string };
       if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
       setSelected(name);
@@ -148,7 +150,7 @@ export function McpConfig({ cwd, sessionId }: { cwd: string | null; sessionId?: 
     if (!selected) return;
     setSaving(true);
     try {
-      const response = await fetch("/api/mcp", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd, name: selected }) });
+      const response = await fetch(withBasePath("/api/mcp"), { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd, name: selected }) });
       const data = await response.json() as { error?: string };
       if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
       add();

@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, JetBrains_Mono, Noto_Sans_Mono, Noto_Serif_SC, Source_Serif_4 } from "next/font/google";
+import { withStorageNamespace } from "@/lib/browser-storage.js";
 import "./globals.css";
 
 const geist = Geist({
@@ -55,11 +56,16 @@ export const metadata: Metadata = {
 
 // theme-color adapts to light/dark so the browser chrome / iOS status bar
 // matches the active theme. `viewportFit: cover` lets us honor safe-area-inset
-// (used by DirectoryPicker footer) on notched devices.
+// (used by DirectoryPicker footer) on notched devices. `interactiveWidget:
+// resizes-content` makes the soft keyboard shrink the layout viewport (and
+// 100dvh) instead of only the visual one: the flex layout then keeps the
+// composer above the keyboard, rather than the browser panning the page on
+// every keystroke to reveal the caret.
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
+  interactiveWidget: "resizes-content",
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#FAF9F6" },
     { media: "(prefers-color-scheme: dark)", color: "#1B1916" },
@@ -79,22 +85,22 @@ export default function RootLayout({
             of the wrong theme. Matches html.dark / html.omp selectors in globals.css. */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var t=localStorage.getItem("omp-theme"),d=matchMedia("(prefers-color-scheme: dark)").matches;var dt={"dark":1,"omp":1,"dracula":1,"harbor":1,"one-dark-pro":1,"rose-pine":1,"catppuccin-mocha":1,"gruvbox-dark":1,"nord":1,"tokyo-night":1};var lt={"light":1,"one-light":1,"catppuccin-latte":1,"rose-pine-dawn":1};var res=t==="system"?(d?"dark":"light"):(!t?"omp":t);if(!dt[res]&&!lt[res]&&res!=="omp")res="omp";var dark=!!dt[res]&&res!=="omp";if(dark)document.documentElement.classList.add("dark");if(res==="omp"){document.documentElement.classList.add("omp")}else{document.documentElement.classList.add("theme-"+res)}document.documentElement.setAttribute("data-theme",res);}catch(e){}})();`,
+            __html: `(function(){try{var t=localStorage.getItem(${JSON.stringify(withStorageNamespace("omp-theme"))}),d=matchMedia("(prefers-color-scheme: dark)").matches;var dt={"dark":1,"omp":1,"dracula":1,"harbor":1,"one-dark-pro":1,"rose-pine":1,"catppuccin-mocha":1,"gruvbox-dark":1,"nord":1,"tokyo-night":1};var lt={"light":1,"one-light":1,"catppuccin-latte":1,"rose-pine-dawn":1};var res=t==="system"?(d?"dark":"light"):(!t?"omp":t);if(!dt[res]&&!lt[res]&&res!=="omp")res="omp";var dark=!!dt[res]&&res!=="omp";if(dark)document.documentElement.classList.add("dark");if(res==="omp"){document.documentElement.classList.add("omp")}else{document.documentElement.classList.add("theme-"+res)}document.documentElement.setAttribute("data-theme",res);}catch(e){}})();`,
           }}
         />
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var l=localStorage.getItem("omp-lang");if(l!=="en"&&l!=="zh-CN"&&l!=="ja"){var n=(navigator.language||"").toLowerCase();l=n.indexOf("zh")===0?"zh-CN":n.indexOf("ja")===0?"ja":"en"}document.documentElement.lang=l}catch(e){}})();`,
+            __html: `(function(){try{var l=localStorage.getItem(${JSON.stringify(withStorageNamespace("omp-lang"))});if(l!=="en"&&l!=="zh-CN"&&l!=="ja"){var n=(navigator.language||"").toLowerCase();l=n.indexOf("zh")===0?"zh-CN":n.indexOf("ja")===0?"ja":"en"}document.documentElement.lang=l}catch(e){}})();`,
           }}
         />
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var f=localStorage.getItem("omp-font-size");if(f==="sm"||f==="md"||f==="lg"||f==="xl")document.documentElement.setAttribute("data-font-size",f)}catch(e){}})();`,
+            __html: `(function(){try{var f=localStorage.getItem(${JSON.stringify(withStorageNamespace("omp-font-size"))});if(f==="sm"||f==="md"||f==="lg"||f==="xl")document.documentElement.setAttribute("data-font-size",f)}catch(e){}})();`,
           }}
         />
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var s=localStorage.getItem("omp-ui-scale");if(s==="compact"||s==="standard"||s==="comfortable"||s==="large")document.documentElement.setAttribute("data-ui-scale",s)}catch(e){}})();`,
+            __html: `(function(){try{var s=localStorage.getItem(${JSON.stringify(withStorageNamespace("omp-ui-scale"))});if(s==="compact"||s==="standard"||s==="comfortable"||s==="large")document.documentElement.setAttribute("data-ui-scale",s)}catch(e){}})();`,
           }}
         />
       </head>

@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 import { registerAbortHandler } from "@/hooks/useKeyboardShortcuts";
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import { ChevronDown, ChevronUp, Layers, Paperclip, Square } from "lucide-react";
@@ -105,7 +106,7 @@ function OmpRuntimeVersion() {
   const [version, setVersion] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/omp-version")
+    fetch(withBasePath("/api/omp-version"))
       .then((res) => (res.ok ? res.json() : null))
       .then((data: { version: string | null } | null) => {
         // omp reports "omp/17.1.3"; show just the number next to the label.
@@ -904,7 +905,7 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
       return;
     }
     const controller = new AbortController();
-    fetch("/api/model-roles", { signal: controller.signal })
+    fetch(withBasePath("/api/model-roles"), { signal: controller.signal })
       .then((response) => response.ok ? response.json() as Promise<{ roles?: Record<string, string> }> : null)
       .then((data) => setAdvisorRoleSelector(data?.roles?.advisor ?? null))
       .catch(() => {});
@@ -1269,10 +1270,14 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
         />
       )}
 
-      {/* Full composer - always mounted; hidden when minimized to preserve ref + state */}
-      <div className="relative" style={{ flexShrink: 0, display: composerMinimized ? "none" : undefined }}>
+      {/* Full composer - always mounted; hidden when minimized to preserve ref + state.
+          A flex column that may shrink: when the panels + widgets + input are
+          taller than the viewport (soft keyboard up, Tasks expanded), the
+          panels block below scrolls and the input stays reachable instead of
+          being clipped off the bottom. */}
+      <div className="relative" style={{ display: composerMinimized ? "none" : "flex", flexDirection: "column", minHeight: 0 }}>
         {/* Minimize chevron above the composer area */}
-        <div style={{ padding: `0 ${CHAT_COLUMN_PADDING}px` }}>
+        <div style={{ padding: `0 ${CHAT_COLUMN_PADDING}px`, flexShrink: 0 }}>
           <div style={{ maxWidth: CHAT_COLUMN_MAX_WIDTH, margin: "0 auto", display: "flex", justifyContent: "center" }}>
             <button
               type="button"
@@ -1298,6 +1303,8 @@ export function ChatWindow({ session, newSessionCwd, toolCallsDefaultCollapsed =
         <div
           style={{
             padding: `0 ${CHAT_COLUMN_PADDING}px`,
+            minHeight: 0,
+            overflowY: "auto",
           }}
         >
           <div style={{ maxWidth: CHAT_COLUMN_MAX_WIDTH, margin: "0 auto" }}>
@@ -1348,7 +1355,7 @@ function ExtensionStatusBar({ statuses }: { statuses: Array<{ key: string; text:
           }}
         >
           <span style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{status.key}</span>
-          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{status.text}</span>
+          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{renderAnsiLine(status.text, status.key)}</span>
         </div>
       ))}
     </div>
@@ -1360,23 +1367,21 @@ function ExtensionWidgets({ widgets }: { widgets: Array<{ key: string; lines: st
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
       {widgets.map((widget) => (
-        <div
+        <pre
           key={widget.key}
           className="ui-compact-surface"
-          style={{
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-control)",
-            background: "var(--bg-panel)",
-            overflow: "hidden",
-          }}
+          role="group"
+          aria-label={widget.key}
+          title={widget.key}
+          style={{ margin: 0, padding: "8px 9px", fontSize: 12, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "var(--font-mono)" }}
         >
-          <div style={{ padding: "5px 9px", borderBottom: "1px solid var(--border)", color: "var(--text-dim)", fontSize: 11, fontFamily: "var(--font-mono)" }}>
-            {widget.key}
-          </div>
-          <pre style={{ margin: 0, padding: "8px 9px", color: "var(--text-muted)", fontSize: 12, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "var(--font-mono)" }}>
-            {widget.lines.join("\n")}
-          </pre>
-        </div>
+          {widget.lines.map((line, index, allLines) => (
+            <Fragment key={index}>
+              {renderAnsiLine(line, `${widget.key}-${index}`)}
+              {index < allLines.length - 1 ? "\n" : null}
+            </Fragment>
+          ))}
+        </pre>
       ))}
     </div>
   );

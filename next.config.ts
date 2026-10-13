@@ -4,6 +4,7 @@ import { join } from "path";
 import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
 
 const { version } = JSON.parse(readFileSync(join(__dirname, "package.json"), "utf8")) as { version: string };
+const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
 // Function form: `phase` is authoritative even when the host environment
 // carries a stray NODE_ENV (e.g. NODE_ENV=production inherited by `next dev`
@@ -14,6 +15,7 @@ const { version } = JSON.parse(readFileSync(join(__dirname, "package.json"), "ut
 const nextConfig = (phase: string): NextConfig => {
   const isDev = phase === PHASE_DEVELOPMENT_SERVER;
   return {
+    basePath,
     // Keep standalone/server tracing inside this package. Without this explicit
     // root, Next can choose a parent lockfile on Windows and traverse protected
     // user-profile junctions while compiling.
@@ -107,6 +109,7 @@ const nextConfig = (phase: string): NextConfig => {
       return [globalRule, fileRule, staticImmutableRule, rootNoCacheRule];
     },
     env: {
+      NEXT_PUBLIC_BASE_PATH: basePath,
       NEXT_PUBLIC_APP_VERSION: version,
       NEXT_PUBLIC_OMP_WEB_VERSION: version,
     },

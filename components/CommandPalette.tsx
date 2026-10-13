@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -38,7 +39,7 @@ export const CommandPalette = memo(function CommandPalette({ onSelectSession, on
     // #1 clobber #2 or drop the spinner early.
     const seq = ++loadSeqRef.current;
     setLoading(true);
-    void fetch("/api/sessions")
+    void fetch(withBasePath("/api/sessions"))
       .then((response) => response.ok ? response.json() as Promise<{ sessions?: SessionInfo[] }> : Promise.reject(new Error("request failed")))
       .then((data) => {
         if (seq !== loadSeqRef.current) return;

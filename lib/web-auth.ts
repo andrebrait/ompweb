@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { BASE_PATH } from "./base-path";
 
-export const OMP_WEB_SESSION_COOKIE = "omp_web_session";
+export const OMP_WEB_SESSION_COOKIE = `omp_web_session${BASE_PATH ? `_${encodeURIComponent(BASE_PATH)}` : ""}`;
 export const OMP_WEB_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 
 function hash(value: string): Buffer {

@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { memo, useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo, useDeferredValue } from "react";
 import type { ManagedProject, ProjectLaunchConfig, SessionInfo } from "@/lib/types";
@@ -140,7 +141,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
       if (showLoading) setLoading(true);
       const headers: Record<string, string> = {};
       if (sessionsEtagRef.current) headers["If-None-Match"] = sessionsEtagRef.current;
-      const res = await fetch("/api/sessions", { headers, signal: controller.signal });
+      const res = await fetch(withBasePath("/api/sessions"), { headers, signal: controller.signal });
       if (res.status === 304) return;
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const etag = res.headers.get("ETag");
@@ -197,7 +198,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
   const loadProjects = useCallback(async () => {
     const seq = ++projectsLoadSeqRef.current;
     try {
-      const res = await fetch("/api/projects");
+      const res = await fetch(withBasePath("/api/projects"));
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { projects?: ManagedProject[] };
       // A newer request superseded this one — drop the stale response.
@@ -251,7 +252,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
   useEffect(() => {
     // Live running status and session-list invalidations arrive via SSE; the
     // sidebar never has to poll while an agent is working.
-    const source = new EventSource("/api/agent/running/events");
+    const source = new EventSource(withBasePath("/api/agent/running/events"));
 
     source.onmessage = (e) => {
       try {
@@ -334,7 +335,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
 
 
   useEffect(() => {
-    fetch("/api/home").then((r) => r.json()).then((d: { home?: string }) => {
+    fetch(withBasePath("/api/home")).then((r) => r.json()).then((d: { home?: string }) => {
       if (d.home) setHomeDir(d.home);
     }).catch(() => {});
   }, []);
@@ -444,7 +445,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     if (!selectedCwd) return;
     let cancelled = false;
     const requestedCwd = selectedCwd;
-    fetch(`/api/worktrees?cwd=${encodeURIComponent(requestedCwd)}`)
+    fetch(withBasePath(`/api/worktrees?cwd=${encodeURIComponent(requestedCwd)}`))
       .then((r) => r.json())
       .then((d: { projectRoot?: string; isGit?: boolean; isTopLevel?: boolean; worktrees?: WorktreeEntry[]; error?: string }) => {
         if (cancelled) return;
@@ -750,7 +751,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     setAddProjectBusy(true);
     setAddProjectError(null);
     try {
-      const res = await fetch("/api/projects", {
+      const res = await fetch(withBasePath("/api/projects"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cwd: path, launchConfig }),
@@ -774,7 +775,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
 
   const handleUpdateProjectPresentation = useCallback(async (projectPath: string, updates: { alias?: string | null; sortOrder?: number | null; launchConfig?: ProjectLaunchConfig | null }) => {
     try {
-      const response = await fetch("/api/projects", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd: projectPath, ...updates }) });
+      const response = await fetch(withBasePath("/api/projects"), { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd: projectPath, ...updates }) });
       if (!response.ok) throw new Error(t("projects.updateFailed"));
       await loadProjects();
     } catch (error) {
@@ -789,7 +790,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
       // One batched request: the server applies every entry in a single
       // atomic registry save, so per-project writes can't interleave and lose
       // updates. Discovered projects included here are registered server-side.
-      const response = await fetch("/api/projects", {
+      const response = await fetch(withBasePath("/api/projects"), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ updates: next.map((project, index) => ({ cwd: project.path, sortOrder: index })) }),
@@ -831,7 +832,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     if (removeProjectPath) return;
     setRemoveProjectPath(projectPath);
     try {
-      const res = await fetch("/api/projects", {
+      const res = await fetch(withBasePath("/api/projects"), {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cwd: projectPath }),
@@ -868,7 +869,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     setWtBusy(true);
     setWtError(null);
     try {
-      const res = await fetch("/api/worktrees", {
+      const res = await fetch(withBasePath("/api/worktrees"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cwd: root, branch }),
@@ -912,7 +913,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     setWtBusy(true);
     setWtError(null);
     try {
-      const res = await fetch("/api/worktrees", {
+      const res = await fetch(withBasePath("/api/worktrees"), {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cwd: root, path, force }),
@@ -997,7 +998,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     setImporting(true);
     try {
       const content = await file.text();
-      const res = await fetch("/api/sessions/import", {
+      const res = await fetch(withBasePath("/api/sessions/import"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fileName: file.name, content }),

@@ -1,6 +1,7 @@
+import { withStorageNamespace } from "./browser-storage.js";
 import { isToolPreset, type ToolPreset } from "./tool-presets";
 
-const STORAGE_KEY = "omp-web:tool-preset";
+const STORAGE_KEY = withStorageNamespace("omp-web:tool-preset");
 
 interface StorageLike {
   getItem(key: string): string | null;

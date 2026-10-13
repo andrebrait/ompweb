@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { useEffect, useState, useRef, useCallback, useMemo, type CSSProperties, type MouseEvent } from "react";
 import type { SyntaxHighlighterProps } from "react-syntax-highlighter";
@@ -200,7 +201,7 @@ function getFileApiUrl(
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined) searchParams.set(key, String(value));
   }
-  return `/api/files/${encoded}?${searchParams.toString()}`;
+  return withBasePath(`/api/files/${encoded}?${searchParams.toString()}`);
 }
 
 function DownloadLink({ filePath, sourceSessionId }: { filePath: string; sourceSessionId?: string | null }) {
@@ -864,7 +865,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
 
     try {
       const params = new URLSearchParams({ cwd, path: targetPath });
-      const response = await fetch(`/api/git/diff?${params.toString()}`);
+      const response = await fetch(withBasePath(`/api/git/diff?${params.toString()}`));
       const next = await response.json() as GitFileDiffResponse & { error?: string };
       if (requestId !== gitDiffRequestRef.current) return;
       setGitDiff(response.ok && next.supported && typeof next.patch === "string" ? next : null);
@@ -1192,7 +1193,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
                     ? resolveLocalFileHref(href, markdownDirectory, cwd ?? markdownDirectory)
                     : null;
                   if (!linkedFile || !onOpenFile) {
-                    return <a href={href} {...props}>{children}</a>;
+                    return <a href={href === undefined ? href : withBasePath(href)} {...props}>{children}</a>;
                   }
 
                   const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
@@ -1211,7 +1212,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
                     : null;
                   const imageSrc = imagePath
                     ? getFileApiUrl(imagePath, "read", sourceSessionId)
-                    : src;
+                    : typeof src === "string" ? withBasePath(src) : src;
                   // Dynamic local paths are served directly by the file API.
                   // eslint-disable-next-line @next/next/no-img-element
                   return <img src={imageSrc} alt={alt ?? ""} loading="lazy" {...props} />;

@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { sendAgentCommand } from "@/lib/agent-client";
@@ -651,7 +652,7 @@ export function PluginsConfig({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/plugins?cwd=${encodeURIComponent(cwd)}`);
+      const res = await fetch(withBasePath(`/api/plugins?cwd=${encodeURIComponent(cwd)}`));
       const next = (await res.json()) as PluginsResponse & { error?: string; code?: string };
       if (!res.ok || next.error) throw new Error(formatApiError(next.error ? next : `HTTP ${res.status}`));
       setData(next);
@@ -677,7 +678,7 @@ export function PluginsConfig({
     setActionError(null);
     setActionMessage(null);
     try {
-      const res = await fetch("/api/plugins", {
+      const res = await fetch(withBasePath("/api/plugins"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, source: pkg.source, scope: pkg.scope, cwd }),
@@ -717,7 +718,7 @@ export function PluginsConfig({
     setActionError(null);
     setActionMessage(null);
     try {
-      const res = await fetch("/api/plugins", {
+      const res = await fetch(withBasePath("/api/plugins"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "install", source, scope: installScope, cwd }),

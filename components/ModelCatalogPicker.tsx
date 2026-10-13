@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useI18n } from "@/lib/i18n";
@@ -106,7 +107,7 @@ export function ModelCatalogPicker({ open, providerName, providerBaseUrl, existi
     setLoading(true);
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/models-config/catalog?${params.toString()}`, { signal: controller.signal });
+        const res = await fetch(withBasePath(`/api/models-config/catalog?${params.toString()}`), { signal: controller.signal });
         const data = await res.json() as { models?: CatalogModelEntry[]; error?: string };
         if (searchSeqRef.current !== seq) return;
         if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);

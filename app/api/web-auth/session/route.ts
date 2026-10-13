@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { BASE_PATH } from "@/lib/base-path";
 import { parseJsonWithinLimit, RequestBodyTooLargeError } from "@/lib/bounded-form-data";
 import {
   createWebSession,
@@ -35,7 +36,7 @@ export async function POST(request: Request) {
     secure,
     sameSite: "lax",
     maxAge: OMP_WEB_SESSION_MAX_AGE_SECONDS,
-    path: "/",
+    path: BASE_PATH || "/",
   });
   return response;
 }

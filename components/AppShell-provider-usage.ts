@@ -1,3 +1,4 @@
+import { withBasePath } from "@/lib/base-path";
 import { useState, useEffect } from "react";
 import type { ProviderUsageReport, ProviderUsageSnapshot } from "@/lib/provider-usage-types";
 
@@ -62,7 +63,7 @@ export function useProviderUsage(query: string | null, refreshMs?: number): Prov
     setState({ snapshot: null, loading: true, error: false });
     const load = async () => {
       try {
-        const response = await fetch(`/api/provider-usage${query ? `?${query}` : ""}`, { signal: controller.signal });
+        const response = await fetch(withBasePath(`/api/provider-usage${query ? `?${query}` : ""}`), { signal: controller.signal });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const snapshot = await response.json() as ProviderUsageSnapshot;
         if (!controller.signal.aborted) setState({ snapshot, loading: false, error: false });

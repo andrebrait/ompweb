@@ -1,10 +1,11 @@
 "use client";
+import { withStorageNamespace } from "@/lib/browser-storage.js";
 
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 
 export type UiScalePreference = "compact" | "standard" | "comfortable" | "large";
 
-export const STORAGE_KEY = "omp-ui-scale";
+export const STORAGE_KEY = withStorageNamespace("omp-ui-scale");
 export const DEFAULT_UI_SCALE: UiScalePreference = "standard";
 export const UI_SCALE_CHANGE_EVENT = "omp-ui-scale-change";
 

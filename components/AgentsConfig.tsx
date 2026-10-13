@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Bot, Check, Copy, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
@@ -81,7 +82,7 @@ export function AgentsConfig({ cwd }: { cwd: string | null }) {
     try {
       const params = new URLSearchParams();
       if (cwd) params.set("cwd", cwd);
-      let res = await fetch(`/api/agents?${params.toString()}`);
+      let res = await fetch(withBasePath(`/api/agents?${params.toString()}`));
       let data = (await res.json()) as AgentsResponse;
       if (!isCurrent()) return;
       if (!res.ok || data.error) {
@@ -89,7 +90,7 @@ export function AgentsConfig({ cwd }: { cwd: string | null }) {
         // A project can remain in the sidebar after its directory is moved or
         // deleted. Keep global agents usable while the API continues to reject
         // writes against that missing workspace.
-        res = await fetch("/api/agents");
+        res = await fetch(withBasePath("/api/agents"));
         data = (await res.json()) as AgentsResponse;
         if (!isCurrent()) return;
         if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
@@ -176,7 +177,7 @@ export function AgentsConfig({ cwd }: { cwd: string | null }) {
     setSaving(true); setMessage(null);
     try {
       const scope: "user" | "project" = canEditProject ? "project" : "user";
-      const res = await fetch("/api/agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "unpack", scope, cwd: scope === "project" ? cwd : undefined }) });
+      const res = await fetch(withBasePath("/api/agents"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "unpack", scope, cwd: scope === "project" ? cwd : undefined }) });
       const data = (await res.json()) as { error?: string; total?: number; written?: number };
       if (!res.ok || data.error) {
         if (isCurrent() && res.status === 403 && scope === "project") setWorkspaceUnavailable(true);
@@ -212,7 +213,7 @@ export function AgentsConfig({ cwd }: { cwd: string | null }) {
         return;
       }
       const previousName = creating || isBundledActive || !active ? undefined : fileStem(active.filePath);
-      const res = await fetch("/api/agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd: scope === "project" ? cwd : undefined, scope, name: trimmedName, previousName, agent: payload }) });
+      const res = await fetch(withBasePath("/api/agents"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd: scope === "project" ? cwd : undefined, scope, name: trimmedName, previousName, agent: payload }) });
       const data = (await res.json()) as { error?: string };
       if (!res.ok || data.error) {
         if (isCurrent() && res.status === 403 && scope === "project") setWorkspaceUnavailable(true);
@@ -230,7 +231,7 @@ export function AgentsConfig({ cwd }: { cwd: string | null }) {
     const isCurrent = () => loadGenerationRef.current === requestGeneration && cwdRef.current === requestCwd;
     setSaving(true); setMessage(null);
     try {
-      const res = await fetch("/api/agents", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd: active.scope === "project" ? cwd : undefined, scope: active.scope, name: fileStem(active.filePath) }) });
+      const res = await fetch(withBasePath("/api/agents"), { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd: active.scope === "project" ? cwd : undefined, scope: active.scope, name: fileStem(active.filePath) }) });
       const data = (await res.json()) as { error?: string };
       if (!res.ok || data.error) {
         if (isCurrent() && res.status === 403 && active.scope === "project") setWorkspaceUnavailable(true);

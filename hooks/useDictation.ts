@@ -1,4 +1,5 @@
 "use client";
+import { withBasePath } from "@/lib/base-path";
 
 import { useState, useRef, useCallback, useEffect } from "react";
 
@@ -108,7 +109,7 @@ export function useDictation({ onTranscript, onError }: UseDictationOptions) {
           const body = new FormData();
           body.append("file", blob, ext);
 
-          const res = await fetch("/api/stt", {
+          const res = await fetch(withBasePath("/api/stt"), {
             method: "POST",
             body,
             signal: abortController.signal,

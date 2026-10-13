@@ -1,4 +1,6 @@
 "use client";
+import { withStorageNamespace } from "@/lib/browser-storage.js";
+import { withBasePath } from "@/lib/base-path";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useTransition, cloneElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { getSubmitDuringRunBehavior, setSubmitDuringRunBehavior, type SubmitDuringRunBehavior } from "@/lib/composer-prefs";
@@ -383,7 +385,7 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
     try {
-      const value = window.localStorage.getItem("omp-sound-enabled");
+      const value = window.localStorage.getItem(withStorageNamespace("omp-sound-enabled"));
       return value === null ? true : value === "true";
     } catch {
       return true;
@@ -404,7 +406,7 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
   const fetchWindowsServiceStatus = useCallback(async () => {
     try {
       setLoadingWindowsService(true);
-      const res = await fetch("/api/windows-service");
+      const res = await fetch(withBasePath("/api/windows-service"));
       if (res.ok) {
         const data = (await res.json()) as WindowsServiceStatus;
         setWindowsService(data);
@@ -420,7 +422,7 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
     try {
       setWindowsServiceActionPending(true);
       setMessage(null);
-      const res = await fetch("/api/windows-service", {
+      const res = await fetch(withBasePath("/api/windows-service"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, ...payload }),
@@ -449,7 +451,7 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
   const nativeSettingsMutatedRef = useRef(false);
 
   useEffect(() => {
-    fetch("/api/omp-settings")
+    fetch(withBasePath("/api/omp-settings"))
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
       .then((data: { settings?: NativeSettings }) => {
         if (!nativeSettingsMutatedRef.current) setNativeSettings(data.settings ?? {});
@@ -472,7 +474,7 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
           const snapshot = latestNativeSettingsRef.current;
           latestNativeSettingsRef.current = null;
           try {
-            const response = await fetch("/api/omp-settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings: snapshot }) });
+            const response = await fetch(withBasePath("/api/omp-settings"), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings: snapshot }) });
             const data = (await response.json()) as { settings?: NativeSettings; error?: string };
             if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
             if (latestNativeSettingsRef.current === null) setNativeSettings(data.settings ?? snapshot);
@@ -510,7 +512,7 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
     setChecking(true);
     setMessage(null);
     try {
-      const response = await fetch("/api/omp-update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "check", ...(force ? { force: true } : {}) }) });
+      const response = await fetch(withBasePath("/api/omp-update"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "check", ...(force ? { force: true } : {}) }) });
       const data = (await response.json()) as UpdateState & { error?: string };
       if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
       setUpdate(data);
@@ -537,7 +539,7 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
   const restartSessions = useCallback(async () => {
     setRestarting(true);
     try {
-      const response = await fetch("/api/omp-update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "restart" }) });
+      const response = await fetch(withBasePath("/api/omp-update"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "restart" }) });
       const data = (await response.json()) as { error?: string; sessionsRestarted?: number };
       if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
       setMessage(t("settingsConfig.restartSuccess", { count: data.sessionsRestarted ?? 0 }));
@@ -552,17 +554,17 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
     setOmpUpdating(true);
     setMessage(null);
     try {
-      const prepRes = await fetch("/api/omp-update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "update" }) });
+      const prepRes = await fetch(withBasePath("/api/omp-update"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "update" }) });
       const prepData = (await prepRes.json()) as { attemptId?: string; error?: string; code?: string };
       if (!prepRes.ok || !prepData.attemptId) throw new Error(prepData.error || `HTTP ${prepRes.status}`);
-      const commitRes = await fetch("/api/omp-update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "commit", attemptId: prepData.attemptId }) });
+      const commitRes = await fetch(withBasePath("/api/omp-update"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "commit", attemptId: prepData.attemptId }) });
       const commitData = (await commitRes.json()) as { error?: string };
       if (!commitRes.ok) throw new Error(commitData.error || `HTTP ${commitRes.status}`);
       const deadline = Date.now() + 5 * 60 * 1000;
       while (true) {
         if (Date.now() > deadline) throw new Error(t("settingsConfig.ompUpdateFailed"));
         await new Promise((r) => setTimeout(r, 500));
-        const statusRes = await fetch("/api/omp-update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "status" }) });
+        const statusRes = await fetch(withBasePath("/api/omp-update"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "status" }) });
         const status = (await statusRes.json()) as { state?: string; error?: string } | null;
         if (!status) break;
         if (status.state === "succeeded") {
@@ -765,7 +767,7 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
                       checked={soundEnabled}
                       onChange={(next) => {
                         setSoundEnabled(next);
-                        try { localStorage.setItem("omp-sound-enabled", String(next)); } catch { /* storage fallback */ }
+                        try { localStorage.setItem(withStorageNamespace("omp-sound-enabled"), String(next)); } catch { /* storage fallback */ }
                         window.dispatchEvent(new CustomEvent("omp-sound-pref-change", { detail: next }));
                       }}
                     />
