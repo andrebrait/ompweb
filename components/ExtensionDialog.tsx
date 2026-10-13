@@ -74,15 +74,10 @@ function useViewportMaxHeight(): number | undefined {
   return useSyncExternalStore(subscribeViewport, readPanelMaxHeight, () => undefined);
 }
 
-/**
- * Whether the visible area is shorter than the layout viewport, which is how
- * an on-screen keyboard shows up: browsers cannot report the keyboard itself,
- * and an inline `<textarea>` does not necessarily resize the page.
- */
-function isKeyboardOpen(): boolean {
-  if (typeof window === "undefined") return false;
+/** Height of the visible area, falling back to the layout viewport. */
+function visibleHeight(): number {
   const visual = window.visualViewport?.height;
-  return typeof visual === "number" && visual > 0 && visual < window.innerHeight - KEYBOARD_INSET;
+  return typeof visual === "number" && visual > 0 ? visual : window.innerHeight;
 }
 
 /**
@@ -107,8 +102,21 @@ function useMobileInputOpen(panelRef: RefObject<HTMLDivElement | null>, attached
     }
     let focused = false;
     let keyboardWasOpen = false;
+    // Browsers cannot report the keyboard itself. Compare the visible area to
+    // the tallest one seen at this width: with `interactive-widget:
+    // resizes-content` (app/layout.tsx) the keyboard shrinks the layout
+    // viewport too, so `visualViewport` vs `innerHeight` never differs there.
+    let width = window.innerWidth;
+    let fullHeight = Math.max(visibleHeight(), window.innerHeight);
     const update = () => {
-      const keyboard = isKeyboardOpen();
+      if (window.innerWidth !== width) {
+        // Rotation or a resized window: start over at the new size.
+        width = window.innerWidth;
+        fullHeight = 0;
+      }
+      const height = visibleHeight();
+      fullHeight = Math.max(fullHeight, height);
+      const keyboard = height < fullHeight - KEYBOARD_INSET;
       // Collapsing the keyboard (back button, swipe) keeps the text field
       // focused, and the next tap anywhere would raise it again for a moment.
       // A closed keyboard means the user is done typing: let the field go.

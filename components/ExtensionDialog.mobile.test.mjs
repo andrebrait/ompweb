@@ -194,23 +194,36 @@ test("an open keyboard caps the panel to the visible area", () => {
   }
 });
 
-test("collapsing the keyboard while typing in Other lets the text box go", async () => {
-  const restore = stubVisualViewport(Math.round(window.innerHeight * 0.5));
-  try {
-    renderAttached();
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-    const other = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
-    act(() => other.focus());
-    assert.ok(document.activeElement === other);
-    // Back button / swipe: the visible area grows back, focus would stay put,
-    // and the next tap (Submit) would raise the keyboard again for a moment.
-    window.visualViewport.height = window.innerHeight;
-    act(() => { window.dispatchEvent(new window.Event("resize")); });
-    assert.ok(document.activeElement !== other, "a collapsed keyboard must not keep the text box focused");
-  } finally {
-    restore();
-  }
-});
+for (const [mode, resizesLayout] of [["resizes-content", true], ["overlay", false]]) {
+  test(`collapsing the keyboard while typing in Other lets the text box go (${mode})`, async () => {
+    const full = window.innerHeight;
+    const innerHeight = Object.getOwnPropertyDescriptor(window, "innerHeight");
+    const restore = stubVisualViewport(full);
+    // With `interactive-widget: resizes-content` (Android Chrome here) the
+    // keyboard shrinks the layout viewport as well as the visible area.
+    const setHeight = (height) => {
+      window.visualViewport.height = height;
+      if (resizesLayout) Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
+      act(() => { window.dispatchEvent(new window.Event("resize")); });
+    };
+    try {
+      renderAttached();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const other = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
+      act(() => other.focus());
+      setHeight(Math.round(full * 0.5));
+      assert.ok(document.activeElement === other, "opening the keyboard keeps the text box");
+      // Back button / swipe: focus would stay put, and the next tap (Submit)
+      // would raise the keyboard again for a moment.
+      setHeight(full);
+      assert.ok(document.activeElement !== other, "a collapsed keyboard must not keep the text box focused");
+    } finally {
+      if (innerHeight) Object.defineProperty(window, "innerHeight", innerHeight);
+      else delete window.innerHeight;
+      restore();
+    }
+  });
+}
 
 test("the keyboard cap applies to every attached method with a text field", () => {
   const viewportHeight = Math.round(window.innerHeight * 0.5);
