@@ -106,8 +106,17 @@ function useMobileInputOpen(panelRef: RefObject<HTMLDivElement | null>, attached
       return;
     }
     let focused = false;
+    let keyboardWasOpen = false;
     const update = () => {
-      const isOpen = focused && (isKeyboardOpen() || touchPointer());
+      const keyboard = isKeyboardOpen();
+      // Collapsing the keyboard (back button, swipe) keeps the text field
+      // focused, and the next tap anywhere would raise it again for a moment.
+      // A closed keyboard means the user is done typing: let the field go.
+      if (focused && keyboardWasOpen && !keyboard && document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+      keyboardWasOpen = keyboard;
+      const isOpen = focused && (keyboard || touchPointer());
       setOpen((current) => (current === isOpen ? current : isOpen));
     };
     const onFocusIn = (event: FocusEvent) => {
@@ -221,7 +230,15 @@ export function ExtensionDialog({
     : request.method !== "select" || selectedOption !== null;
   const title = request.method === "ask" ? t("chatWindow.askTitle") : request.title;
 
-  const cancel = () => onRespond(request, { cancelled: true });
+  // Answering removes the panel. Release its text field first, in the same
+  // task, so the phone keyboard closes once instead of flashing as the
+  // focused field disappears from under it.
+  const respond = (response: ExtensionDialogResponse) => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && panelRef.current?.contains(active)) active.blur();
+    onRespond(request, response);
+  };
+  const cancel = () => respond({ cancelled: true });
 
   // useModalDialog gives us: focus-in on open, focus-restore on close,
   // document-level Escape (top-of-stack), and Tab wrapping inside the panel.
@@ -262,12 +279,12 @@ export function ExtensionDialog({
 
   const submitValue = () => {
     if (request.method === "confirm") {
-      onRespond(request, { confirmed: true });
+      respond({ confirmed: true });
     } else if (request.method === "select") {
-      if (selectedOption) onRespond(request, { value: selectedOption });
+      if (selectedOption) respond({ value: selectedOption });
     } else if (request.method === "ask") {
       if (!canSubmit) return;
-      onRespond(request, {
+      respond({
         answers: request.questions.map((question, index) => {
           const draft = askDraftAt(index);
           const customInput = draft.otherChosen ? draft.other.trim() : "";
@@ -279,7 +296,7 @@ export function ExtensionDialog({
         }),
       });
     } else {
-      onRespond(request, { value });
+      respond({ value });
     }
   };
 
@@ -359,7 +376,7 @@ export function ExtensionDialog({
                 return (
                   <button
                     key={option}
-                    onClick={() => attached ? setSelectedOption(option) : onRespond(request, { value: option })}
+                    onClick={() => attached ? setSelectedOption(option) : respond({ value: option })}
                     aria-pressed={attached ? selected : undefined}
                     style={{
                       width: "100%",

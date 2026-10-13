@@ -194,6 +194,24 @@ test("an open keyboard caps the panel to the visible area", () => {
   }
 });
 
+test("collapsing the keyboard while typing in Other lets the text box go", async () => {
+  const restore = stubVisualViewport(Math.round(window.innerHeight * 0.5));
+  try {
+    renderAttached();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const other = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
+    act(() => other.focus());
+    assert.ok(document.activeElement === other);
+    // Back button / swipe: the visible area grows back, focus would stay put,
+    // and the next tap (Submit) would raise the keyboard again for a moment.
+    window.visualViewport.height = window.innerHeight;
+    act(() => { window.dispatchEvent(new window.Event("resize")); });
+    assert.ok(document.activeElement !== other, "a collapsed keyboard must not keep the text box focused");
+  } finally {
+    restore();
+  }
+});
+
 test("the keyboard cap applies to every attached method with a text field", () => {
   const viewportHeight = Math.round(window.innerHeight * 0.5);
   const restore = stubVisualViewport(viewportHeight);
@@ -303,6 +321,17 @@ test("choosing an option takes focus from Other, so later typing cannot pick Oth
   fireEvent.click(red);
   // Compare identities: a failing element diff walks the whole jsdom graph.
   assert.ok(document.activeElement === red, "the chosen radio has focus");
+});
+
+test("answering releases the Other text box at once, so the keyboard does not wait for the server", () => {
+  const { responses } = renderAttached();
+  const other = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
+  act(() => other.focus());
+  fireEvent.change(other, { target: { value: "Teal" } });
+  // The panel stays mounted until omp acknowledges the answer (plus a hand-off delay).
+  fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+  assert.equal(responses.length, 1);
+  assert.ok(document.activeElement !== other, "the Other text box must not keep focus");
 });
 
 test("tapping back into kept Other text chooses it even when focus never left", () => {
