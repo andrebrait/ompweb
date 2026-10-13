@@ -269,9 +269,27 @@ test("on a desktop, shrinking and regrowing the window keeps the text box", asyn
   const viewport = stubResizableViewport();
   try {
     const other = await focusOther();
+    fireEvent.pointerDown(other, { pointerType: "mouse" });
     viewport.resize(Math.round(viewport.full * 0.5));
     viewport.resize(viewport.full);
     assert.ok(document.activeElement === other, "no soft keyboard was involved");
+  } finally {
+    viewport.restore();
+  }
+});
+
+test("on a touchscreen laptop, a tap's keyboard is tracked though the mouse is the primary pointer", async () => {
+  const viewport = stubResizableViewport();
+  try {
+    renderAttached();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const other = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
+    fireEvent.pointerDown(other, { pointerType: "touch" });
+    act(() => other.focus());
+    viewport.resize(Math.round(viewport.full * 0.5));
+    assert.equal(screen.getByRole("dialog").style.maxHeight, `${Math.round(viewport.full * 0.5) - 12}px`, "the footer stays above the keyboard");
+    viewport.resize(viewport.full);
+    assert.ok(document.activeElement !== other, "a collapsed keyboard must not keep the text box focused");
   } finally {
     viewport.restore();
   }

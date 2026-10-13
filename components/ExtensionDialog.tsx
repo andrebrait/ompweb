@@ -110,9 +110,13 @@ function useMobileInputOpen(panelRef: RefObject<HTMLDivElement | null>, attached
     let fullHeight = Math.max(visibleHeight(), window.innerHeight);
     // Lowest visible height while the keyboard is up; null while it is down.
     let keyboardLow: number | null = null;
+    // `pointerType` of the latest press anywhere: a hybrid laptop's primary
+    // pointer is fine, yet a touch tap there still raises a soft keyboard.
+    let lastPointer: string | null = null;
+    const onPointerDown = (event: PointerEvent) => { lastPointer = event.pointerType; };
     const update = () => {
       const height = visibleHeight();
-      const touch = touchPointer();
+      const touch = lastPointer ? lastPointer !== "mouse" : touchPointer();
       if (window.innerWidth !== width) {
         // Rotation or a resized window: the old heights mean nothing at the
         // new size. An open keyboard stays open; its collapse is still a rise.
@@ -151,12 +155,14 @@ function useMobileInputOpen(panelRef: RefObject<HTMLDivElement | null>, attached
       update();
     };
     update();
+    document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("focusin", onFocusIn);
     document.addEventListener("focusout", onFocusOut);
     window.addEventListener("resize", update);
     window.visualViewport?.addEventListener("resize", update);
     const poll = setInterval(update, KEYBOARD_POLL_MS);
     return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
       document.removeEventListener("focusin", onFocusIn);
       document.removeEventListener("focusout", onFocusOut);
       window.removeEventListener("resize", update);
