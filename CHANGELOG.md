@@ -17,6 +17,7 @@ All notable changes to **omp-web** (`@kahme247/ompweb`) are documented in this f
 ### Fixed
 
 - On a phone, the first tap on **Submit** (or **Cancel**) in a question panel now acts on it while you are typing in **Other**. It used to only close the keyboard and resize the panel, which moved the button out from under the tap.
+- On a phone, opening the keyboard at the end of a conversation no longer hides the newest messages under it: the chat stays scrolled to the bottom. The same holds when the message box or a question panel grows. A conversation you scrolled up in stays where it is.
 
 ---
 
