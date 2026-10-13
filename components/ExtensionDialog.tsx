@@ -101,32 +101,37 @@ function useMobileInputOpen(panelRef: RefObject<HTMLDivElement | null>, attached
       return;
     }
     let focused = false;
-    let keyboardWasOpen = false;
-    // Browsers cannot report the keyboard itself. Compare the visible area to
-    // the tallest one seen at this width: with `interactive-widget:
-    // resizes-content` (app/layout.tsx) the keyboard shrinks the layout
-    // viewport too, so `visualViewport` vs `innerHeight` never differs there.
+    // Browsers cannot report the keyboard itself. It opens when the visible
+    // area drops well below the tallest seen at this width, and closes when
+    // the area grows well above its lowest since then. Comparing to
+    // `innerHeight` cannot work: with `interactive-widget: resizes-content`
+    // (app/layout.tsx) the keyboard shrinks the layout viewport too.
     let width = window.innerWidth;
     let fullHeight = Math.max(visibleHeight(), window.innerHeight);
+    // Lowest visible height while the keyboard is up; null while it is down.
+    let keyboardLow: number | null = null;
     const update = () => {
-      if (window.innerWidth !== width) {
-        // Rotation or a resized window: start over at the new size. The new
-        // baseline may be a keyboard-shortened one, so this is no collapse.
-        width = window.innerWidth;
-        fullHeight = 0;
-        keyboardWasOpen = false;
-      }
       const height = visibleHeight();
-      fullHeight = Math.max(fullHeight, height);
-      const keyboard = height < fullHeight - KEYBOARD_INSET;
-      // Collapsing the keyboard (back button, swipe) keeps the text field
-      // focused, and the next tap anywhere would raise it again for a moment.
-      // A closed keyboard means the user is done typing: let the field go.
-      if (focused && keyboardWasOpen && !keyboard && document.activeElement instanceof HTMLElement) {
-        document.activeElement.blur();
+      if (window.innerWidth !== width) {
+        // Rotation or a resized window: the old heights mean nothing at the
+        // new size. An open keyboard stays open; its collapse is still a rise.
+        width = window.innerWidth;
+        fullHeight = height;
+        if (keyboardLow !== null) keyboardLow = height;
       }
-      keyboardWasOpen = keyboard;
-      const isOpen = focused && (keyboard || touchPointer());
+      fullHeight = Math.max(fullHeight, height);
+      if (keyboardLow === null) {
+        if (height < fullHeight - KEYBOARD_INSET) keyboardLow = height;
+      } else if (height > keyboardLow + KEYBOARD_INSET) {
+        keyboardLow = null;
+        // Collapsing the keyboard (back button, swipe) keeps the text field
+        // focused, and the next tap anywhere would raise it again for a
+        // moment. A closed keyboard means the user is done typing.
+        if (focused && document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      } else {
+        keyboardLow = Math.min(keyboardLow, height);
+      }
+      const isOpen = focused && (keyboardLow !== null || touchPointer());
       setOpen((current) => (current === isOpen ? current : isOpen));
     };
     const onFocusIn = (event: FocusEvent) => {

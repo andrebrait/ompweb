@@ -225,7 +225,7 @@ for (const [mode, resizesLayout] of [["resizes-content", true], ["overlay", fals
   });
 }
 
-test("rotating the phone with the keyboard up does not count as collapsing it", async () => {
+test("rotating with the keyboard up is no collapse, and the later collapse still lets the text box go", async () => {
   const full = window.innerHeight;
   const saved = ["innerHeight", "innerWidth"].map((key) => [key, Object.getOwnPropertyDescriptor(window, key)]);
   const restore = stubVisualViewport(full);
@@ -235,15 +235,19 @@ test("rotating the phone with the keyboard up does not count as collapsing it", 
     await new Promise((resolve) => requestAnimationFrame(resolve));
     const other = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
     act(() => other.focus());
-    window.visualViewport.height = Math.round(full * 0.5);
-    set("innerHeight", window.visualViewport.height);
-    act(() => { window.dispatchEvent(new window.Event("resize")); });
+    const resize = (height) => {
+      window.visualViewport.height = height;
+      set("innerHeight", height);
+      act(() => { window.dispatchEvent(new window.Event("resize")); });
+    };
+    resize(Math.round(full * 0.5));
     // Landscape, keyboard still up: a new width, a shorter visible area.
     set("innerWidth", window.innerWidth + 300);
-    window.visualViewport.height = Math.round(full * 0.3);
-    set("innerHeight", window.visualViewport.height);
-    act(() => { window.dispatchEvent(new window.Event("resize")); });
+    resize(Math.round(full * 0.3));
     assert.ok(document.activeElement === other, "rotation must not take the text box away");
+    // Back button in landscape: the visible area grows by the keyboard.
+    resize(Math.round(full * 0.6));
+    assert.ok(document.activeElement !== other, "the collapse after a rotation must still let the text box go");
   } finally {
     for (const [key, descriptor] of saved) {
       if (descriptor) Object.defineProperty(window, key, descriptor);
