@@ -670,8 +670,11 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
   // True while the viewport is at/near the conversation bottom. Drives the
   // anchored render window in CommittedTranscript.
   const [nearBottom, setNearBottom] = useState(true);
+  // The empty new-session screen has its own scroller, so the conversation's
+  // scroller mounts after the first send without a remount or a load.
+  const isEmptyNew = isNew && messages.length === 0 && !streamState.isStreaming && !sessionBusy;
   useEffect(() => {
-    if (loading) return;
+    if (loading || isEmptyNew) return;
     const el = scrollContainerRef.current;
     if (!el) return;
     let raf: number | null = null;
@@ -683,13 +686,24 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
     const onScroll = () => {
       if (raf === null) raf = requestAnimationFrame(update);
     };
+    // A scroller that shrinks (the phone keyboard opening, the composer or an
+    // ask panel growing) keeps its top edge, so the newest messages slide
+    // under the composer. Keep a reader whose old view reached the bottom there.
+    let height = el.clientHeight;
+    const resize = new ResizeObserver(() => {
+      const wasAtBottom = el.scrollTop + height >= el.scrollHeight - 96;
+      height = el.clientHeight;
+      if (wasAtBottom) el.scrollTop = el.scrollHeight;
+    });
     update();
     el.addEventListener("scroll", onScroll, { passive: true });
+    resize.observe(el);
     return () => {
       el.removeEventListener("scroll", onScroll);
+      resize.disconnect();
       if (raf !== null) cancelAnimationFrame(raf);
     };
-  }, [loading, scrollContainerRef]);
+  }, [loading, isEmptyNew, scrollContainerRef]);
   const scrollToBottom = useCallback(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
@@ -887,7 +901,6 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
     return agentPhase.tools.filter((tool) => !renderedIds.has(tool.id));
   }, [agentPhase, committedToolCallIds, streamState.streamingMessage]);
 
-  const isEmptyNew = isNew && messages.length === 0 && !streamState.isStreaming && !sessionBusy;
   // Reset minimized state on session switch (session-scoped)
   useEffect(() => { setComposerMinimized(false); }, [sessionKeyForPaging]);
   // The extension dialog renders inside the collapsible composer wrapper;

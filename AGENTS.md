@@ -520,6 +520,11 @@ during the wait.
 - A manual scroll-up sets `completionScrollAllowedRef = false` and disables
   following until the next prompt; `scrollUserMsgToTop` handles the
   pending-scroll after sending.
+- A `ResizeObserver` on the chat scroller (`ChatWindow`, beside `nearBottom`)
+  keeps a reader whose previous view reached the bottom there when the
+  scroller changes height (phone keyboard, composer or ask panel growing). It
+  judges by the previous height, so content that grew below the reader (an
+  expanded tool call) does not count as being at the bottom.
 - Programmatic smooth scrolling must respect `prefers-reduced-motion`
   (`usePrefersReducedMotion` in `hooks/usePrefersReducedMotion.ts` — also the
   only way to stop SVG SMIL animations, which CSS cannot).
