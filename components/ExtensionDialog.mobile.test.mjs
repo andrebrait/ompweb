@@ -243,7 +243,15 @@ test("without a visible-area API the panel keeps its CSS cap", () => {
   assert.deepEqual(responses, [{ answers: [{ id: "color", selectedOptions: [], customInput: "Teal" }] }]);
 });
 
+/** A press as the browser sends it: pointerdown, then the compat mousedown.
+ * Returns whether mousedown's default (moving focus) still runs. */
+function press(target, pointerType) {
+  fireEvent.pointerDown(target, { pointerType });
+  return fireEvent.mouseDown(target);
+}
+
 test("on touch, while Other is being typed, a press elsewhere in the panel keeps focus there", async () => {
+  // A phone: the panel leaves focus alone until tapped (#235).
   const restore = stubMedia({ coarse: true });
   const composer = document.body.appendChild(document.createElement("textarea"));
   try {
@@ -253,37 +261,57 @@ test("on touch, while Other is being typed, a press elsewhere in the panel keeps
     const red = screen.getByRole("radio", { name: "Red" });
     const targets = [red, red.closest("label"), screen.getByRole("button", { name: "Cancel" }), screen.getByRole("button", { name: "Submit" })];
     // No text box of the panel focused: no keyboard of ours to protect.
-    for (const target of targets) assert.equal(fireEvent.mouseDown(target), true);
+    for (const target of targets) assert.equal(press(target, "touch"), true);
     act(() => composer.focus());
-    for (const target of targets) assert.equal(fireEvent.mouseDown(target), true, "a field outside the panel is not ours to keep");
+    for (const target of targets) assert.equal(press(target, "touch"), true, "a field outside the panel is not ours to keep");
     act(() => red.focus());
-    assert.equal(fireEvent.mouseDown(screen.getByRole("button", { name: "Submit" })), true, "a focused radio raises no keyboard");
+    assert.equal(press(screen.getByRole("button", { name: "Submit" }), "touch"), true, "a focused radio raises no keyboard");
 
     act(() => other.focus());
     // A focus change on press closes the phone keyboard and resizes the panel
     // before the click, so the click misses the option or button it aimed at.
-    for (const target of targets) assert.equal(fireEvent.mouseDown(target), false, `${target.textContent} must not take focus`);
-    assert.equal(fireEvent.mouseDown(other), true, "the text box itself still takes the press");
+    for (const pointerType of ["touch", "pen"]) {
+      for (const target of targets) assert.equal(press(target, pointerType), false, `${target.textContent} must not take focus (${pointerType})`);
+    }
+    assert.equal(press(other, "touch"), true, "the text box itself still takes the press");
   } finally {
     composer.remove();
     restore();
   }
 });
 
-test("with a mouse, a press in the panel moves focus as usual", () => {
-  renderAttached();
-  act(() => screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea").focus());
-  // Text selection and radio arrow keys need the press to act normally.
-  assert.equal(fireEvent.mouseDown(screen.getByText("Red")), true);
+test("a mouse press in the panel moves focus as usual, even on a touch-first device", () => {
+  // The pointer media query describes the primary pointer only; a hybrid
+  // device's mouse must keep text selection and radio arrow keys.
+  const restore = stubMedia({ coarse: true });
+  try {
+    renderAttached();
+    act(() => screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea").focus());
+    assert.equal(press(screen.getByText("Red"), "mouse"), true);
+  } finally {
+    restore();
+  }
 });
 
-test("tapping back into kept Other text chooses it even though focus never left", () => {
+test("choosing an option takes focus from Other, so later typing cannot pick Other", () => {
+  renderAttached();
+  const other = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
+  const red = screen.getByRole("radio", { name: "Red" });
+  act(() => other.focus());
+  // A touch press on the radio itself keeps focus in Other; the change must move it.
+  assert.equal(press(red, "touch"), false);
+  fireEvent.click(red);
+  // Compare identities: a failing element diff walks the whole jsdom graph.
+  assert.ok(document.activeElement === red, "the chosen radio has focus");
+});
+
+test("tapping back into kept Other text chooses it even when focus never left", () => {
   renderAttached();
   const other = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
   fireEvent.change(other, { target: { value: "Teal" } });
   fireEvent.click(screen.getByRole("radio", { name: "Red" }));
   assert.equal(screen.getByRole("radio", { name: /Other/ }).checked, false);
-  // On touch the option tap kept focus in the box, so no focus event follows.
+  // A tap that finds focus already in the box fires no focus event.
   fireEvent.click(other);
   assert.equal(screen.getByRole("radio", { name: /Other/ }).checked, true);
   assert.equal(screen.getByRole("radio", { name: "Red" }).checked, false);

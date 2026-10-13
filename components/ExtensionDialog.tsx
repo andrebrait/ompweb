@@ -192,6 +192,9 @@ export function ExtensionDialog({
   const [value, setValue] = useState(request.method === "editor" ? request.prefill ?? "" : "");
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const requestIdRef = useRef(request.id);
+  // `pointerType` of the latest press: the pointer media query only describes
+  // the primary pointer, not the one pressing now.
+  const pressPointerRef = useRef<string | null>(null);
   const [askDrafts, setAskDrafts] = useState(() => initialAskDrafts(request));
   const viewportMaxHeight = useViewportMaxHeight();
   const { touchTargets } = useTouchTargets();
@@ -310,10 +313,13 @@ export function ExtensionDialog({
         // keyboard would close and the panel resize before the click, so the
         // tap misses its target. A tapped option label still focuses its radio
         // once the click lands, so the keyboard closes after the choice.
-        // Touch only: a mouse keeps text selection and radio arrow keys.
+        // Touch and pen only, judged per press (a hybrid laptop has both): a
+        // mouse keeps text selection and radio arrow keys.
+        onPointerDown={(event) => { pressPointerRef.current = event.pointerType; }}
         onMouseDown={(event) => {
           const target = event.target as Element;
-          if (touchPointer() && document.activeElement?.matches(TEXT_ENTRY) && event.currentTarget.contains(document.activeElement) && !target.closest(TEXT_ENTRY)) {
+          const pointer = pressPointerRef.current;
+          if (pointer && pointer !== "mouse" && document.activeElement?.matches(TEXT_ENTRY) && event.currentTarget.contains(document.activeElement) && !target.closest(TEXT_ENTRY)) {
             event.preventDefault();
           }
         }}
@@ -467,9 +473,15 @@ export function ExtensionDialog({
                             type={question.multi ? "checkbox" : "radio"}
                             name={`ask-${request.id}-${index}`}
                             checked={checked}
-                            onChange={() => updateAskDraft(index, (current) => question.multi
-                              ? { ...current, selected: current.selected.includes(option.label) ? current.selected.filter((label) => label !== option.label) : [...current.selected, option.label] }
-                              : { ...current, selected: [option.label], otherChosen: false })}
+                            onChange={(event) => {
+                              // A tap on the radio itself, unlike one on its label, does
+                              // not focus it once the press keeps focus in Other. Focus it
+                              // so the keyboard closes and further typing cannot pick Other.
+                              event.currentTarget.focus();
+                              updateAskDraft(index, (current) => question.multi
+                                ? { ...current, selected: current.selected.includes(option.label) ? current.selected.filter((label) => label !== option.label) : [...current.selected, option.label] }
+                                : { ...current, selected: [option.label], otherChosen: false });
+                            }}
                             style={{ margin: "2px 0 0", accentColor: "var(--accent-strong)" }}
                           />
                           <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>
@@ -519,8 +531,8 @@ export function ExtensionDialog({
                         placeholder={t("chatWindow.askOther")}
                         value={draft.other}
                         // Going back into kept text means answering with it again.
-                        // A tap counts too: picking an option no longer takes focus
-                        // from this box, so tapping back into it fires no focus event.
+                        // A tap counts too: unticking Other by touch keeps focus in
+                        // this box, so tapping back into it fires no focus event.
                         onFocus={chooseKeptOther}
                         onClick={chooseKeptOther}
                         rows={1}
