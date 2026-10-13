@@ -225,6 +225,34 @@ for (const [mode, resizesLayout] of [["resizes-content", true], ["overlay", fals
   });
 }
 
+test("rotating the phone with the keyboard up does not count as collapsing it", async () => {
+  const full = window.innerHeight;
+  const saved = ["innerHeight", "innerWidth"].map((key) => [key, Object.getOwnPropertyDescriptor(window, key)]);
+  const restore = stubVisualViewport(full);
+  const set = (key, value) => Object.defineProperty(window, key, { configurable: true, value });
+  try {
+    renderAttached();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const other = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
+    act(() => other.focus());
+    window.visualViewport.height = Math.round(full * 0.5);
+    set("innerHeight", window.visualViewport.height);
+    act(() => { window.dispatchEvent(new window.Event("resize")); });
+    // Landscape, keyboard still up: a new width, a shorter visible area.
+    set("innerWidth", window.innerWidth + 300);
+    window.visualViewport.height = Math.round(full * 0.3);
+    set("innerHeight", window.visualViewport.height);
+    act(() => { window.dispatchEvent(new window.Event("resize")); });
+    assert.ok(document.activeElement === other, "rotation must not take the text box away");
+  } finally {
+    for (const [key, descriptor] of saved) {
+      if (descriptor) Object.defineProperty(window, key, descriptor);
+      else delete window[key];
+    }
+    restore();
+  }
+});
+
 test("the keyboard cap applies to every attached method with a text field", () => {
   const viewportHeight = Math.round(window.innerHeight * 0.5);
   const restore = stubVisualViewport(viewportHeight);

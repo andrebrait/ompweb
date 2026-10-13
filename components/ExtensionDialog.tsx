@@ -110,9 +110,11 @@ function useMobileInputOpen(panelRef: RefObject<HTMLDivElement | null>, attached
     let fullHeight = Math.max(visibleHeight(), window.innerHeight);
     const update = () => {
       if (window.innerWidth !== width) {
-        // Rotation or a resized window: start over at the new size.
+        // Rotation or a resized window: start over at the new size. The new
+        // baseline may be a keyboard-shortened one, so this is no collapse.
         width = window.innerWidth;
         fullHeight = 0;
+        keyboardWasOpen = false;
       }
       const height = visibleHeight();
       fullHeight = Math.max(fullHeight, height);
