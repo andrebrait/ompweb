@@ -112,6 +112,7 @@ function useMobileInputOpen(panelRef: RefObject<HTMLDivElement | null>, attached
     let keyboardLow: number | null = null;
     const update = () => {
       const height = visibleHeight();
+      const touch = touchPointer();
       if (window.innerWidth !== width) {
         // Rotation or a resized window: the old heights mean nothing at the
         // new size. An open keyboard stays open; its collapse is still a rise.
@@ -120,7 +121,10 @@ function useMobileInputOpen(panelRef: RefObject<HTMLDivElement | null>, attached
         if (keyboardLow !== null) keyboardLow = height;
       }
       fullHeight = Math.max(fullHeight, height);
-      if (keyboardLow === null) {
+      if (!touch) {
+        // No soft keyboard: a window or docked dev tools resizing is not one.
+        keyboardLow = null;
+      } else if (keyboardLow === null) {
         if (height < fullHeight - KEYBOARD_INSET) keyboardLow = height;
       } else if (height > keyboardLow + KEYBOARD_INSET) {
         keyboardLow = null;
@@ -131,7 +135,9 @@ function useMobileInputOpen(panelRef: RefObject<HTMLDivElement | null>, attached
       } else {
         keyboardLow = Math.min(keyboardLow, height);
       }
-      const isOpen = focused && (keyboardLow !== null || touchPointer());
+      // A keyboard over the page (no layout resize) shows on any device.
+      const overlaid = height < window.innerHeight - KEYBOARD_INSET;
+      const isOpen = focused && (touch || overlaid);
       setOpen((current) => (current === isOpen ? current : isOpen));
     };
     const onFocusIn = (event: FocusEvent) => {

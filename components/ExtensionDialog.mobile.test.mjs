@@ -194,66 +194,86 @@ test("an open keyboard caps the panel to the visible area", () => {
   }
 });
 
-for (const [mode, resizesLayout] of [["resizes-content", true], ["overlay", false]]) {
-  test(`collapsing the keyboard while typing in Other lets the text box go (${mode})`, async () => {
-    const full = window.innerHeight;
-    const innerHeight = Object.getOwnPropertyDescriptor(window, "innerHeight");
-    const restore = stubVisualViewport(full);
-    // With `interactive-widget: resizes-content` (Android Chrome here) the
-    // keyboard shrinks the layout viewport as well as the visible area.
-    const setHeight = (height) => {
+/** Resizes the stubbed viewport like a browser does; `layout` also shrinks
+ * `innerHeight`, as `interactive-widget: resizes-content` (Android Chrome)
+ * and a desktop window or docked dev tools do. */
+function stubResizableViewport() {
+  const saved = ["innerHeight", "innerWidth"].map((key) => [key, Object.getOwnPropertyDescriptor(window, key)]);
+  const restoreViewport = stubVisualViewport(window.innerHeight);
+  const set = (key, value) => Object.defineProperty(window, key, { configurable: true, value });
+  return {
+    full: window.innerHeight,
+    resize(height, { layout = true, width } = {}) {
+      if (width !== undefined) set("innerWidth", width);
       window.visualViewport.height = height;
-      if (resizesLayout) Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
+      if (layout) set("innerHeight", height);
       act(() => { window.dispatchEvent(new window.Event("resize")); });
-    };
+    },
+    restore() {
+      for (const [key, descriptor] of saved) {
+        if (descriptor) Object.defineProperty(window, key, descriptor);
+        else delete window[key];
+      }
+      restoreViewport();
+    },
+  };
+}
+
+async function focusOther() {
+  renderAttached();
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  const other = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
+  act(() => other.focus());
+  return other;
+}
+
+for (const [mode, layout] of [["resizes-content", true], ["overlay", false]]) {
+  test(`collapsing the keyboard while typing in Other lets the text box go (${mode})`, async () => {
+    const restoreMedia = stubMedia({ coarse: true });
+    const viewport = stubResizableViewport();
     try {
-      renderAttached();
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-      const other = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
-      act(() => other.focus());
-      setHeight(Math.round(full * 0.5));
+      const other = await focusOther();
+      viewport.resize(Math.round(viewport.full * 0.5), { layout });
       assert.ok(document.activeElement === other, "opening the keyboard keeps the text box");
       // Back button / swipe: focus would stay put, and the next tap (Submit)
       // would raise the keyboard again for a moment.
-      setHeight(full);
+      viewport.resize(viewport.full, { layout });
       assert.ok(document.activeElement !== other, "a collapsed keyboard must not keep the text box focused");
     } finally {
-      if (innerHeight) Object.defineProperty(window, "innerHeight", innerHeight);
-      else delete window.innerHeight;
-      restore();
+      viewport.restore();
+      restoreMedia();
     }
   });
 }
 
 test("rotating with the keyboard up is no collapse, and the later collapse still lets the text box go", async () => {
-  const full = window.innerHeight;
-  const saved = ["innerHeight", "innerWidth"].map((key) => [key, Object.getOwnPropertyDescriptor(window, key)]);
-  const restore = stubVisualViewport(full);
-  const set = (key, value) => Object.defineProperty(window, key, { configurable: true, value });
+  const restoreMedia = stubMedia({ coarse: true });
+  const viewport = stubResizableViewport();
   try {
-    renderAttached();
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-    const other = screen.getByRole("group", { name: /Pick a color/ }).querySelector("textarea");
-    act(() => other.focus());
-    const resize = (height) => {
-      window.visualViewport.height = height;
-      set("innerHeight", height);
-      act(() => { window.dispatchEvent(new window.Event("resize")); });
-    };
-    resize(Math.round(full * 0.5));
+    const other = await focusOther();
+    viewport.resize(Math.round(viewport.full * 0.5));
     // Landscape, keyboard still up: a new width, a shorter visible area.
-    set("innerWidth", window.innerWidth + 300);
-    resize(Math.round(full * 0.3));
+    viewport.resize(Math.round(viewport.full * 0.3), { width: window.innerWidth + 300 });
     assert.ok(document.activeElement === other, "rotation must not take the text box away");
     // Back button in landscape: the visible area grows by the keyboard.
-    resize(Math.round(full * 0.6));
+    viewport.resize(Math.round(viewport.full * 0.6));
     assert.ok(document.activeElement !== other, "the collapse after a rotation must still let the text box go");
   } finally {
-    for (const [key, descriptor] of saved) {
-      if (descriptor) Object.defineProperty(window, key, descriptor);
-      else delete window[key];
-    }
-    restore();
+    viewport.restore();
+    restoreMedia();
+  }
+});
+
+test("on a desktop, shrinking and regrowing the window keeps the text box", async () => {
+  // Docked dev tools opening and closing, or a window resized vertically.
+  const viewport = stubResizableViewport();
+  try {
+    const other = await focusOther();
+    viewport.resize(Math.round(viewport.full * 0.5));
+    viewport.resize(viewport.full);
+    assert.ok(document.activeElement === other, "no soft keyboard was involved");
+  } finally {
+    viewport.restore();
   }
 });
 
