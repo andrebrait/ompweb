@@ -1054,21 +1054,34 @@ test("a finished reply stays on screen until its saved copy replaces it", async 
   resetWorld();
   primeSession("s1", [userMsg("u0", "loaded question")]);
   const { w, es } = await startRun("s1", "hello agent");
+  world.agents.set("s1", { running: true, state: { isStreaming: true } });
   const reply = { ...assistantMsg("a1", "hello world"), timestamp: 42 };
   await act(async () => { es.emit({ type: "agent_start" }); await Promise.resolve(); });
   await act(async () => { es.emit({ type: "message_update", message: reply }); await Promise.resolve(); });
   await settle(90);
-  // The catch-up read after message_end is slow, as on a phone.
-  saveSession("s1", [userMsg("u0", "loaded question"), userMsg("u1", "hello agent"), reply]);
-  const releaseSync = holdNextSync("s1", syncSnapshot("s1"));
+  const shown = () => w.latest.streamState.streamingMessage?.content?.[0]?.text === "hello world";
+  const saved = () => w.latest.messages.filter((m) => m.timestamp === 42).length;
+  // The first read after message_end races omp's write: the reply is not
+  // saved yet, and the server's live state has no message any more.
+  saveSession("s1", [userMsg("u0", "loaded question"), userMsg("u1", "hello agent")]);
+  const releaseSync = holdNextSync("s1", syncSnapshot("s1", liveSnapshot("s1", 99, null)));
   await act(async () => { es.emit({ type: "message_end", message: reply }); await Promise.resolve(); });
   // Dropping the reply before its saved copy arrives empties that space: the
   // chat jumps up to where the reply started, then back down.
-  assert.equal(w.latest.streamState.streamingMessage?.content?.[0]?.text, "hello world", "the reply stays while the save is read");
-  assert.equal(w.latest.messages.some((m) => m.timestamp === 42), false);
+  assert.ok(shown(), "the reply stays while the save is read");
   await act(async () => { releaseSync(); });
   await settle();
-  assert.equal(w.latest.messages.filter((m) => m.timestamp === 42).length, 1, "the saved copy is shown once");
+  assert.ok(shown(), "a read without the saved reply keeps it on screen");
+  assert.equal(saved(), 0);
+  world.agents.set("s1", { running: false, state: { isStreaming: false } });
+  await act(async () => { es.emit({ type: "agent_end", isTerminal: true }); });
+  await settle();
+  assert.ok(shown(), "the end of the run keeps it too");
+  // The save lands; the next read hands the reply over to its saved copy.
+  saveSession("s1", [userMsg("u0", "loaded question"), userMsg("u1", "hello agent"), reply]);
+  await act(async () => { es.emit({ type: "message_end", message: userMsg("u2", "unrelated") }); });
+  await settle();
+  assert.equal(saved(), 1, "the saved copy is shown once");
   assert.equal(w.latest.streamState.streamingMessage, null, "the held reply gives way to its saved copy");
 });
 

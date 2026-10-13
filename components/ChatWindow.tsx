@@ -526,6 +526,9 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
   });
   useEffect(() => {
     if (!autoplayPendingRef.current) return;
+    // A held reply is about to become its saved row: speak that one, so the
+    // row's own speaker button shows it playing and can stop it.
+    if (!streamState.isStreaming && streamState.streamingMessage) return;
     autoplayPendingRef.current = false;
     const speech = assistantSpeech(messages, entryIds, streamState.streamingMessage);
     if (speech) ttsRef.current.speak(speech.id, speech.text);
@@ -1322,7 +1325,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
                 toolCallsDefaultCollapsed={toolCallsDefaultCollapsed}
                 expandThinkingByDefault={expandThinkingByDefault}
                 hideThinking={hideThinkingBlock}
-                liveTokensPerSecond={tokensPerSecond}
+                liveTokensPerSecond={streamState.isStreaming ? tokensPerSecond : undefined}
               />
             )}
 
