@@ -87,10 +87,11 @@ function isKeyboardOpen(): boolean {
 
 /**
  * Per-panel soft-keyboard tracking for a composer-attached request, active
- * only while focus is inside the panel. A panel in the composer is not a
- * modal, so the browser is free to scroll the page when the keyboard opens;
- * this is what keeps the footer (Cancel / Submit) inside the visible area
- * (#236).
+ * only while a text field inside the panel has focus. A panel in the composer
+ * is not a modal, so the browser is free to scroll the page when the keyboard
+ * opens; this is what keeps the footer (Cancel / Submit) inside the visible
+ * area (#236). A focused option or button raises no keyboard, so it must not
+ * resize the panel either: that resize made the tap that focused it miss.
  *
  * Two signals, because neither alone is enough: `visualViewport` shrinking is
  * the real keyboard (fingerprint-free), and a coarse pointer means the tap
@@ -110,14 +111,13 @@ function useMobileInputOpen(panelRef: RefObject<HTMLDivElement | null>, attached
       setOpen((current) => (current === isOpen ? current : isOpen));
     };
     const onFocusIn = (event: FocusEvent) => {
-      const panel = panelRef.current;
-      focused = Boolean(panel && event.target instanceof Node && panel.contains(event.target));
+      const target = event.target;
+      focused = target instanceof Element && target.matches(TEXT_ENTRY) && Boolean(panelRef.current?.contains(target));
       update();
     };
     const onFocusOut = (event: FocusEvent) => {
-      const panel = panelRef.current;
       const next = event.relatedTarget;
-      focused = Boolean(next instanceof Node && panel && panel.contains(next));
+      focused = next instanceof Element && next.matches(TEXT_ENTRY) && Boolean(panelRef.current?.contains(next));
       update();
     };
     update();

@@ -194,20 +194,40 @@ test("an open keyboard caps the panel to the visible area", () => {
   }
 });
 
-test("the keyboard-only footer cap applies to every attached method", () => {
+test("the keyboard cap applies to every attached method with a text field", () => {
   const viewportHeight = Math.round(window.innerHeight * 0.5);
   const restore = stubVisualViewport(viewportHeight);
   const restoreMedia = stubMedia({ coarse: true });
   try {
-    const { responses } = renderAttached({ type: "extension_ui_request", id: "select-1", method: "select", title: "Which?", options: ["First", "Second"] });
-    const button = screen.getByRole("button", { name: "First" });
-    fireEvent.click(button);
-    fireEvent.focus(button);
+    renderAttached({ type: "extension_ui_request", id: "input-1", method: "input", title: "Name?" });
+    fireEvent.focus(screen.getByRole("textbox", { name: "Name?" }));
     assert.equal(screen.getByRole("dialog").style.maxHeight, `${viewportHeight - 12}px`);
-    assert.deepEqual(responses, [], "select still submits from the footer, not from focus");
   } finally {
     restoreMedia();
     restore();
+  }
+});
+
+test("on touch, focusing an option or button keeps the panel's height", () => {
+  const restoreMedia = stubMedia({ coarse: true });
+  try {
+    const { view } = renderAttached();
+    const panel = screen.getByRole("dialog");
+    // No keyboard comes up for them, and a resize under the finger made the
+    // tap that focused them miss.
+    for (const control of [screen.getByRole("radio", { name: "Red" }), screen.getByRole("button", { name: "Submit" })]) {
+      fireEvent.focus(control);
+      assert.equal(panel.style.maxHeight, "min(420px, 60dvh)");
+    }
+    view.rerender(React.createElement(ExtensionDialog, {
+      request: { type: "extension_ui_request", id: "select-1", method: "select", title: "Which?", options: ["First", "Second"] },
+      onRespond: () => {},
+      attached: true,
+    }));
+    fireEvent.focus(screen.getByRole("button", { name: "First" }));
+    assert.equal(screen.getByRole("dialog").style.maxHeight, "min(420px, 60dvh)");
+  } finally {
+    restoreMedia();
   }
 });
 
