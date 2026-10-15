@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 "use strict";
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+require("./node-version").exitIfUnsupportedNode();
+
 // Install ompweb as a macOS launchd user agent (starts at login, restarts on crash).
 //
 // Usage (installed as the `ompweb-launchd` bin, or run via npx / node directly):

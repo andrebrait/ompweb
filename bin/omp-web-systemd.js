@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 "use strict";
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+require("./node-version").exitIfUnsupportedNode();
+
 // Install ompweb as a Linux systemd user service.
 //
 // Usage:

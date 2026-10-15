@@ -27,7 +27,7 @@
 ## 环境要求
 
 - 已安装 [omp](https://github.com/can1357/oh-my-pi) 且在 `PATH` 中（或通过 `OMP_WEB_OMP_BIN` 指定路径）
-- Node.js `>= 22.19.0`
+- Node.js `>= 24`
 
 将排队的后续消息转为 **Steer** 需要 omp 运行时支持 `promote_queued_message` RPC 命令（omp 18.1.16 尚不支持）。旧版运行时会返回错误，消息仍作为后续消息排队；ompweb 不会重复发送一条引导消息。
 
@@ -119,9 +119,9 @@ Windows 服务）仍在安装时接受 `OMP_WEB_PASSWORD`，但在写入配置�
 | `OMP_WEB_NAME` | 浏览器标签页和已安装应用中显示的名称。设为 `url`、`host` 或 `domain`（不区分大小写）时使用浏览器所连接的主机名（不含端口），localhost 和 IP 地址仍显示 `omp web`；其他值按原样使用。修改后需重启 | `omp web` |
 | `OMP_WEB_OMP_BIN` | `omp` 二进制路径（未在 PATH 时使用） | _自动检测_ |
 | `PI_CODING_AGENT_DIR` | 自定义 omp agent 目录 | `~/.omp/agent` |
-| `OMP_WEB_STT_ENDPOINT` | OpenAI 兼容的语音转文字接口 URL | _无（默认禁用）_ |
+| `OMP_WEB_STT_ENDPOINT` | OpenAI 兼容的语音转文字接口 URL。不设置时使用 `OMP_WEB_STT_MODEL` 通过 omp 自身的凭据转录 | _无_ |
 | `OMP_WEB_STT_KEY` | STT 接口对应的 API Key | _无_ |
-| `OMP_WEB_STT_MODEL` | STT 接口的模型名称 | _无_ |
+| `OMP_WEB_STT_MODEL` | STT 接口的模型名称。未设置接口时：使用 omp 登录凭据运行的 omp 语音转文字模型，例如 `openai-codex/codex-transcribe`（ChatGPT 订阅；需要包含该模型的 omp 版本） | _无（未设置接口时禁用）_ |
 
 **`OMP_WEB_NAME` 与已安装应用。** 已安装应用（PWA）通常以安装时所在页面的名称命名。如果之后修改了 `OMP_WEB_NAME`，或在 `OMP_WEB_NAME` 为 `url`、`host` 或 `domain` 时通过其他地址访问 omp-web，操作系统可能也会重命名已安装的应用。建议将 `OMP_WEB_NAME` 留空，或设置一个无论通过哪个域名或地址访问都能识别这台 omp-web 服务器的名称。
 

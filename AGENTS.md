@@ -50,6 +50,8 @@ Shared foundations in `lib/omp/`:
 - `omp-cli.ts` — locate/probe the installed `omp` binary (`resolveOmpBin`,
   `getOmpVersion`).
 - `rpc-process.ts` — process + NDJSON protocol layer (`RpcProcess`).
+- `auth-gateway.ts` — shared, idle-killed `omp auth-gateway stdio` child:
+  omp's own credentials and models behind JSON-line gateway requests.
 
 ---
 
@@ -68,6 +70,7 @@ app/api/
   notifications/devices/route.ts  GET VAPID key + subscribed | PUT { deviceId, prefs, subscription? }
   notifications/presence/route.ts POST { clientId, deviceId, visible, sessionId, seq }
   notifications/test/route.ts     POST { deviceId } send a test push (502 on push-service refusal)
+  notifications/history/route.ts  GET entries | PATCH { ids } mark read | DELETE ?id= remove one, ?all=1 clear
   auth/**                         provider list, login/logout, API keys (via RPC)
   cwd/validate/route.ts           POST validate/select a cwd
   default-cwd/route.ts            POST create ~/omp-cwd-YYYYMMDD
@@ -110,8 +113,10 @@ lib/
   project-command-env.ts  child-process environments: strips PORT/NODE_ENV/NEXT_* and omp-web's secrets
   project-ordering.ts  pure project sort/group/activity helpers (client + tests)
   project-registry.ts  on-disk managed-project registry (~/.omp/agent/projects.json)
-  notification-events.ts  shared: event/prefs types, frame→event detector, renderNotification()
-  notification-hub.ts  server: presence, device store + VAPID keys, routing, Web Push
+  notification-events.ts  shared: event/prefs/history-entry types, frame→event detector, renderNotification()
+  notification-hub.ts  server: presence, routing, Web Push, recording published notifications
+  notification-store.ts  server: SQLite store for VAPID keys, devices and the notification history
+  notification-history.ts  browser: mirror of the server's notification history (Notifications tab)
   notification-client.ts  browser: device id, prefs store, service worker + push subscription
   rpc-manager.ts       session registry + startRpcSession over RpcProcess
   session-reader.ts    session .jsonl parsing + path cache + buildSessionContext
@@ -141,7 +146,7 @@ components/
   CommandPalette.tsx  ⌘K/Ctrl+K palette (cmdk): session switch, new session, theme
   ImageLightbox.tsx   click-to-preview lightbox for chat images (ClickableImage)
   BranchNavigator.tsx in-session branch switcher
-  NotificationList.tsx right-panel Notifications tab: in-memory history of session notifications (`toastHistory`)
+  NotificationList.tsx right-panel Notifications tab: the persisted notification history (`lib/notification-history.ts`)
   ChatMinimap.tsx     scroll minimap alongside the message list
   MarkdownBody.tsx    markdown renderer
   ModelsConfig.tsx    modal for models/auth configuration
@@ -517,6 +522,11 @@ during the wait.
 - A manual scroll-up sets `completionScrollAllowedRef = false` and disables
   following until the next prompt; `scrollUserMsgToTop` handles the
   pending-scroll after sending.
+- A `ResizeObserver` on the chat scroller (`ChatWindow`, beside `nearBottom`)
+  keeps a reader whose previous view reached the bottom there when the
+  scroller changes height (phone keyboard, composer or ask panel growing). It
+  judges by the previous height, so content that grew below the reader (an
+  expanded tool call) does not count as being at the bottom.
 - Programmatic smooth scrolling must respect `prefers-reduced-motion`
   (`usePrefersReducedMotion` in `hooks/usePrefersReducedMotion.ts` — also the
   only way to stop SVG SMIL animations, which CSS cannot).
@@ -633,6 +643,10 @@ during the wait.
 - Store is per process (`globalThis` map) with caps (4 pending, 20 live) and
   TTLs; a server restart loses jobs, and the hook then re-uploads its local
   copy if it has one.
+- Without `OMP_WEB_STT_ENDPOINT`, `OMP_WEB_STT_MODEL` names an omp STT model
+  (e.g. `openai-codex/codex-transcribe`, the ChatGPT subscription) and jobs
+  go through `lib/omp/auth-gateway.ts` as base64 JSON — so the gateway's 25MB
+  body cap limits audio to 18MB there. omp-web never reads omp credentials.
 
 ### Completion sound
 - `hooks/useAudio.ts` stores the toggle in `localStorage` and reuses one `AudioContext`.
@@ -675,9 +689,12 @@ during the wait.
   while Settings is open, so that tab gets no toasts then; it also stops
   counting as active, so other devices are not silenced.
 - Prefs and push subscriptions are per device, in `localStorage` and mirrored to
-  `~/.omp/agent/omp-web/notifications.json` (mode 0600; also holds the VAPID
-  private key). The server reads that file on every use, never caching it: an
-  installed server and `npm run dev` can share the agent dir. Push text is
+  the SQLite notification store in omp-web's data dir
+  (`lib/notification-store.ts`, server-only; mode 0600 because it also holds
+  the VAPID private key; WAL with a busy timeout). It also keeps the
+  notification history. An installed server and `npm run dev` sharing the agent
+  dir share it safely; the first open imports and deletes the old
+  `notifications.json`. Push text is
   rendered server-side in the device's locale. Browsers with saved settings (enabled or not) sync on load; never-configured browsers do not.
 - A crash notifies "Run failed" while a run is live or while background work
   started by it has not settled yet (`unsettled`, cleared by `session_settled`).
@@ -756,19 +773,24 @@ motion: --dur-fast (150ms) --dur-med (220ms) --dur-slow (320ms) --ease-out-warm
 `components/ui/` holds the shared primitives (built on `@base-ui/react`):
 `primitives.tsx` (Dialog/Tooltip/Collapsible), `field.tsx` (form fields +
 ConfirmDialog), `toast.tsx` (`toast.success/error/info`, mounted in AppShell).
-Only toasts passed `history: true` land in `toastHistory`, the last 100 kept
-in memory for the right panel's Notifications tab, with their `onClick`;
-`useNotifications` sets it for session notifications (the pushable types:
-completed, input, error, model switch), so plain status toasts ("Saved", update
-notices) stay out. System notifications are recorded with
-`toastHistory.record()` (also with the session `onClick`): those the page shows
-itself in `useNotifications`, and Web Pushes when `public/sw.js` posts
-`omp-notification-shown` to open tabs; a push with no tab open is not listed.
-An entry with an `onClick` runs it on click or Enter, like the toast card.
+Toasts are not stored. The right panel's Notifications tab lists the server's
+notification history (`lib/notification-history.ts`, a mirror of
+`/api/notifications/history`): `publishNotification` records every
+notification type some device has turned on (completed, input, error, model
+switch), whether or not any tab or push receives it, already read when a
+visible tab shows that session; the newest 100, so entries survive reloads and restarts and
+every device sees the same list. The mirror loads on mount and when the tab
+becomes visible (read marks and removals from other devices), adds events this
+tab receives over SSE without a refetch, and reloads when the service worker
+reports a push it showed. Entries store the `NotificationEvent` and render in
+the viewer's language; clicking one, or Enter, marks it read and opens its
+session (`OPEN_SESSION_EVENT`).
 Unread entries badge the right-panel toggle, which then opens the Notifications
-tab; entries become read when the user leaves that tab, uses Mark all as read,
-or runs the toast's `onClick` action (`toastHistory.markRead`), and a reused id
-is unread again. Unread rows show a leading accent dot and a bold title; read
+tab; entries become read when the user leaves that tab (only the entries it
+showed), uses Mark all as read, or opens the notification from its toast or
+row, and a reused id (`<sessionId>:<type>`) is unread again. Mark-read, remove
+and clear update the list at once, then the server; a failed request reloads
+it. Unread rows show a leading accent dot and a bold title; read
 rows are dimmed. Toasts and Notifications entries dismiss on
 a sideways touch/pen swipe (base-ui's toast swipe; `NotificationRow` for the
 list) and carry `data-swipe-dismiss`, which the mobile sidebar gesture skips.

@@ -2,12 +2,7 @@
 "use strict";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { getUnsupportedNodeVersionMessage, isNodeVersionSupported } = require("./node-version");
-
-if (!isNodeVersionSupported(process.versions.node)) {
-  console.error(getUnsupportedNodeVersionMessage(process.versions.node));
-  process.exit(1);
-}
+require("./node-version").exitIfUnsupportedNode();
 
 // Forward service subcommands from the main bin. This makes both
 // `npx @kahme247/ompweb@latest ompweb-launchd ...` and
