@@ -42,8 +42,10 @@ export function NotificationBell({ open, onOpenChange }: { open: boolean; onOpen
               display: "flex",
               flexDirection: "column",
               width: 380,
-              maxWidth: "calc(100vw - 16px)",
-              maxHeight: "min(480px, var(--available-height))",
+              // Viewport units and base-ui's --available-height are painted pixels; the UI scale zooms CSS ones.
+              // Under zoom base-ui also drops the collision padding from --available-height, hence the 8px.
+              maxWidth: "calc((100vw - 16px) / var(--ui-scale))",
+              maxHeight: "min(480px, calc(var(--available-height) / var(--ui-scale) - 8px))",
               outline: "none",
             }}
           >
