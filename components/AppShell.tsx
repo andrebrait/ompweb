@@ -19,6 +19,7 @@ import { ChatWindow } from "./ChatWindow";
 import { type Tab } from "./TabBar";
 import { type FileExplorerHandle } from "./FileExplorer";
 import type { RightPanelView } from "./RightPanel";
+import { NotificationBell } from "./NotificationBell";
 import { BranchNavigator } from "./BranchNavigator";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { CommandPaletteMount } from "./CommandPaletteMount";
@@ -1012,15 +1013,21 @@ export function AppShell({ appName }: { appName: string }) {
   const [rightPanelHasOpened, setRightPanelHasOpened] = useState(false);
   const [rightView, setRightView] = useState<RightPanelView>("explorer");
   const unreadNotifications = useUnreadNotificationCount();
-  // Unread entries stay highlighted while the Notifications tab is shown and
-  // become read once the user leaves it (switches tab or closes the panel).
-  const viewingNotifications = rightPanelOpen && rightView === "notifications" && !settingsTab;
+  // Desktop shows the history in the top-bar bell's popover; mobile in the right panel's tab.
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  useEffect(() => {
+    if (isMobile) setNotificationsOpen(false);
+    else setRightView((view) => view === "notifications" ? "explorer" : view);
+  }, [isMobile]);
+  // Unread entries stay highlighted while the notifications are shown and
+  // become read once the user leaves them (switches tab, closes the panel or popover).
+  const viewingNotifications = (notificationsOpen || (rightPanelOpen && rightView === "notifications")) && !settingsTab;
   const wasViewingNotificationsRef = useRef(false);
   useEffect(() => {
     if (wasViewingNotificationsRef.current && !viewingNotifications) notificationHistory.markAllRead();
     wasViewingNotificationsRef.current = viewingNotifications;
   }, [viewingNotifications]);
-  const opensNotifications = unreadNotifications > 0 && !viewingNotifications;
+  const opensNotifications = isMobile && unreadNotifications > 0 && !viewingNotifications;
   const panelOpenerLabel = opensNotifications
     ? t("appShell.showNotifications", { count: unreadNotifications })
     : rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel");
@@ -2391,6 +2398,7 @@ export function AppShell({ appName }: { appName: string }) {
                 style={{ display: "flex", height: 44, flexShrink: 0, alignSelf: "flex-start" }}
               />
             )}
+            {!isMobile && <NotificationBell open={notificationsOpen} onOpenChange={setNotificationsOpen} />}
             <button
               type="button"
               className="shell-toolbar-btn shell-panel-opener ui-focus-ring"
@@ -2410,7 +2418,7 @@ export function AppShell({ appName }: { appName: string }) {
               aria-label={panelOpenerLabel}
             >
               <PanelRight size={16} strokeWidth={1.8} aria-hidden="true" />
-              {unreadNotifications > 0 && (
+              {isMobile && unreadNotifications > 0 && (
                 <span aria-hidden="true" className="panel-opener-badge">
                   {unreadNotifications > 99 ? "99+" : unreadNotifications}
                 </span>

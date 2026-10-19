@@ -150,7 +150,8 @@ components/
   CommandPalette.tsx  ⌘K/Ctrl+K palette (cmdk): session switch, new session, theme
   ImageLightbox.tsx   click-to-preview lightbox for chat images (ClickableImage)
   BranchNavigator.tsx in-session branch switcher
-  NotificationList.tsx right-panel Notifications tab: the persisted notification history (`lib/notification-history.ts`)
+  NotificationList.tsx notification history list + Mark all read/Clear actions (mobile right-panel tab, desktop bell popover)
+  NotificationBell.tsx desktop top-bar bell: unread badge + floating NotificationList popover
   ChatMinimap.tsx     scroll minimap alongside the message list
   MarkdownBody.tsx    markdown renderer
   ModelsConfig.tsx    modal for models/auth configuration
@@ -811,7 +812,9 @@ motion: --dur-fast (150ms) --dur-med (220ms) --dur-slow (320ms) --ease-out-warm
 `components/ui/` holds the shared primitives (built on `@base-ui/react`):
 `primitives.tsx` (Dialog/Tooltip/Collapsible), `field.tsx` (form fields +
 ConfirmDialog), `toast.tsx` (`toast.success/error/info`, mounted in AppShell).
-Toasts are not stored. The right panel's Notifications tab lists the server's
+Toasts are not stored. The notification list (`NotificationList`: the desktop
+top-bar bell's popover, `NotificationBell`; the right panel's Notifications tab
+on mobile only, `isMobile`) lists the server's
 notification history (`lib/notification-history.ts`, a mirror of
 `/api/notifications/history`): `publishNotification` records every
 notification type some device has turned on (completed, input, error, model
@@ -823,8 +826,11 @@ tab receives over SSE without a refetch, and reloads when the service worker
 reports a push it showed. Entries store the `NotificationEvent` and render in
 the viewer's language; clicking one, or Enter, marks it read and opens its
 session (`OPEN_SESSION_EVENT`).
-Unread entries badge the right-panel toggle, which then opens the Notifications
-tab; entries become read when the user leaves that tab (only the entries it
+On desktop the bell carries the unread badge and its popover (base-ui Popover,
+380px wide, at most 480px tall, the list scrolls) closes when a notification
+opens a session. On mobile unread entries badge the right-panel toggle, which
+then opens the Notifications tab. Entries become read when the user closes the
+popover or leaves that tab (only the entries it
 showed), uses Mark all as read, or opens the notification from its toast or
 row, and a reused id (`<sessionId>:<type>`) is unread again. Mark-read, remove
 and clear update the list at once, then the server; a failed request reloads
