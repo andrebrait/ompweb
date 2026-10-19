@@ -1026,7 +1026,8 @@ export function AppShell({ appName }: { appName: string }) {
   // become read once the user leaves them (switches tab, closes the panel or popover).
   const viewingNotifications = (notificationsOpen || (rightPanelOpen && rightView === "notifications")) && !settingsTab;
   const wasViewingNotificationsRef = useRef(false);
-  useEffect(() => {
+  // Layout effect: marks read before a notification arriving after the close can join the list.
+  useLayoutEffect(() => {
     if (wasViewingNotificationsRef.current && !viewingNotifications) notificationHistory.markAllRead();
     wasViewingNotificationsRef.current = viewingNotifications;
   }, [viewingNotifications]);

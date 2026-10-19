@@ -37,7 +37,7 @@ export function NotificationBell({ open, onOpenChange }: { open: boolean; onOpen
       <Popover.Portal>
         <Popover.Positioner side="bottom" align="end" sideOffset={8} collisionPadding={8} style={{ zIndex: 220 }}>
           <Popover.Popup
-            className="picker-panel"
+            className="picker-panel ui-focus-ring"
             style={{
               display: "flex",
               flexDirection: "column",
