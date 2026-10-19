@@ -1016,9 +1016,12 @@ export function AppShell({ appName }: { appName: string }) {
   // Desktop shows the history in the top-bar bell's popover; mobile in the right panel's tab.
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   useEffect(() => {
-    if (isMobile) setNotificationsOpen(false);
-    else setRightView((view) => view === "notifications" ? "explorer" : view);
+    if (!isMobile) setRightView((view) => view === "notifications" ? "explorer" : view);
   }, [isMobile]);
+  // Settings replaces the top bar; the popover must not reopen on the way back.
+  useEffect(() => {
+    if (isMobile || settingsTab) setNotificationsOpen(false);
+  }, [isMobile, settingsTab]);
   // Unread entries stay highlighted while the notifications are shown and
   // become read once the user leaves them (switches tab, closes the panel or popover).
   const viewingNotifications = (notificationsOpen || (rightPanelOpen && rightView === "notifications")) && !settingsTab;

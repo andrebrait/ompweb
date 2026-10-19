@@ -3420,7 +3420,8 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
   cursor: default;
   opacity: 0.5;
 }
-.shell-toolbar-btn[aria-pressed="true"] {
+.shell-toolbar-btn[aria-pressed="true"],
+.shell-toolbar-btn[data-popup-open] {
   background: var(--bg-selected);
   color: var(--text);
 }
@@ -3431,8 +3432,9 @@ html[data-touch-targets="accessible"] .message-overflow-toggle {
 .shell-toolbar-btn:active:not(:disabled) {
   transform: scale(0.96);
 }
-/* Unread-notification count on the right-panel toggle. */
-.shell-panel-opener {
+/* Unread-notification count on the right-panel toggle (mobile) and the bell (desktop). */
+.shell-panel-opener,
+.shell-notification-bell {
   position: relative;
 }
 .panel-opener-badge {

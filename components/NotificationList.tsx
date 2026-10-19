@@ -194,8 +194,8 @@ function NotificationRow({ entry }: { entry: NotificationHistoryEntry }) {
         type="button"
         onClick={(event) => {
           // Dismissing unmounts this button (and the list, if it was the
-          // last entry); keep keyboard focus in the always-mounted tab panel.
-          const panel = event.currentTarget.closest<HTMLElement>('[role="tabpanel"]');
+          // last entry); keep keyboard focus in the tab panel or bell popover.
+          const panel = event.currentTarget.closest<HTMLElement>('[role="tabpanel"], [role="dialog"]');
           notificationHistory.remove(entry.id);
           panel?.focus();
         }}

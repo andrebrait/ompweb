@@ -23,8 +23,7 @@ export function NotificationBell({ open, onOpenChange }: { open: boolean; onOpen
   return (
     <Popover.Root open={open} onOpenChange={onOpenChange}>
       <Popover.Trigger
-        className="shell-toolbar-btn shell-panel-opener ui-focus-ring"
-        aria-pressed={open}
+        className="shell-toolbar-btn shell-notification-bell ui-focus-ring"
         title={label}
         aria-label={label}
       >
@@ -38,7 +37,6 @@ export function NotificationBell({ open, onOpenChange }: { open: boolean; onOpen
       <Popover.Portal>
         <Popover.Positioner side="bottom" align="end" sideOffset={8} collisionPadding={8} style={{ zIndex: 220 }}>
           <Popover.Popup
-            aria-label={t("appShell.notifications")}
             className="picker-panel"
             style={{
               display: "flex",
@@ -46,16 +44,11 @@ export function NotificationBell({ open, onOpenChange }: { open: boolean; onOpen
               width: 380,
               maxWidth: "calc(100vw - 16px)",
               maxHeight: "min(480px, var(--available-height))",
-              background: "var(--bg-panel)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-card)",
-              boxShadow: "var(--shadow-pop)",
-              overflow: "hidden",
               outline: "none",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 6px 6px 12px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-              <Popover.Title style={{ margin: 0, fontSize: 12, fontWeight: 700, color: "var(--text)" }}>{t("appShell.notifications")}</Popover.Title>
+            <div className="picker-panel-header" style={{ justifyContent: "space-between", paddingRight: 4, flexShrink: 0 }}>
+              <Popover.Title className="picker-panel-title" style={{ margin: 0 }}>{t("appShell.notifications")}</Popover.Title>
               <NotificationActions />
             </div>
             <NotificationList />
