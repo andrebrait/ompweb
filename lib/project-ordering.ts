@@ -37,6 +37,39 @@ export function sortManagedProjects(projects: ManagedProject[]): ManagedProject[
   });
 }
 
+/** Sidebar workspace sort: "none" is the manual/registration order above. */
+export type ProjectSortMode = "none" | "alphabetical" | "updated";
+
+/** Order projects for a sort mode. In "none", pins are ignored and the manual
+ *  order applies. Otherwise pinned projects come first in their pinOrder, then
+ *  the rest by label (A→Z) or by their newest session's `modified` time (most
+ *  recent first; projects without sessions last). Ties keep the manual order. */
+export function orderProjects(
+  projects: ManagedProject[],
+  mode: ProjectSortMode,
+  sessions: SessionInfo[],
+  labelOf: (project: ManagedProject) => string,
+): ManagedProject[] {
+  const manual = sortManagedProjects(projects);
+  if (mode === "none") return manual;
+  const pinned = manual.filter((p) => p.pinOrder !== undefined).sort((a, b) => a.pinOrder! - b.pinOrder!);
+  const rest = manual.filter((p) => p.pinOrder === undefined);
+  if (mode === "alphabetical") {
+    rest.sort((a, b) => labelOf(a).localeCompare(labelOf(b), undefined, { sensitivity: "base", numeric: true }));
+  } else {
+    const updated = new Map<string, number>();
+    for (const session of sessions) {
+      const key = workspaceKeyOf(session);
+      if (!key) continue;
+      const folded = comparableProjectPath(session.projectKey ?? key);
+      const time = Date.parse(session.modified);
+      if (Number.isFinite(time) && time > (updated.get(folded) ?? 0)) updated.set(folded, time);
+    }
+    rest.sort((a, b) => (updated.get(comparableProjectPath(b.path)) ?? 0) - (updated.get(comparableProjectPath(a.path)) ?? 0));
+  }
+  return [...pinned, ...rest];
+}
+
 /** Running/unread/exit session counts per project, for the activity indicators
  *  on project rows. Keys are the case-folded comparable form of the projectRoot
  *  so casing-only differences (Windows/NTFS) still resolve — callers must

@@ -10,9 +10,9 @@ import { ProviderUsageBar } from "./ProviderUsageBar";
 import { Tooltip } from "./ui/primitives";
 import { toast } from "./ui/toast";
 import { clearLastOpenSession, setLastOpenSession, workspaceKeyOf } from "@/lib/workspace-memory";
-import { groupSessionsByProject, projectActivityCounts, sortManagedProjects } from "@/lib/project-ordering";
+import { groupSessionsByProject, orderProjects, projectActivityCounts, type ProjectSortMode } from "@/lib/project-ordering";
 import { comparableProjectPath } from "@/lib/comparable-path";
-import { Archive, ArrowLeft, ArrowRight, Check, ChevronRight, FileUp, Plus, RefreshCw, Search, Settings2, SlidersHorizontal, X } from "lucide-react";
+import { Archive, ArrowDownUp, ArrowLeft, ArrowRight, Check, ChevronRight, FileUp, Plus, RefreshCw, Search, Settings2, SlidersHorizontal, X } from "lucide-react";
 import { publishSessionsChanged } from "@/lib/session-change-bus";
 import { NOTIFICATION_MESSAGE_EVENT, notificationClientId } from "@/lib/notification-client";
 import {
@@ -22,16 +22,18 @@ import {
   MAX_PROJECT_SESSIONS,
   buildSessionTree,
   loadExpandedProjects,
+  loadProjectSortMode,
   loadUnreadSessionIds,
   normalizeProjectKey,
   projectLabel,
   saveExpandedProjects,
+  saveProjectSortMode,
   saveUnreadSessionIds,
   type WorktreeContext,
   type WorktreeEntry,
   type WorktreeState,
 } from "./SessionSidebar-helpers";
-import { OmpWebTitle, SIDEBAR_BUTTON_TRANSITION, SidebarIconButton } from "./SessionSidebar-chrome";
+import { OmpWebTitle, SIDEBAR_BUTTON_TRANSITION, SidebarIconButton, SidebarPortalMenu } from "./SessionSidebar-chrome";
 import { ProjectRow } from "./SessionSidebar-rows";
 
 /** Deadline for one /api/sessions fetch. A wedged-but-listening server never
@@ -135,6 +137,11 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
   const [searchQuery, setSearchQuery] = useState("");
   const [runningOnly, setRunningOnly] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // Workspace sort (per browser). Pins apply only while a sort is active.
+  const [projectSortMode, setProjectSortMode] = useState<ProjectSortMode>(() => loadProjectSortMode());
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
+  const sortAnchorRef = useRef<HTMLSpanElement>(null);
+  const pinsActive = projectSortMode !== "none";
 
   // Once the SSE stream has delivered a frame it is the source of truth for
   // running state; late /api/sessions responses must not overwrite it.
@@ -649,7 +656,10 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     optimisticSession
     || [...runningSessionIds, ...exitedSessions.keys()].some((id) => !allSessions.some((session) => session.id === id)),
   );
-  const sortedProjectsBase = useMemo(() => sortManagedProjects(visibleProjects), [visibleProjects]);
+  const sortedProjectsBase = useMemo(
+    () => orderProjects(visibleProjects, projectSortMode, visibleSessions, (project) => project.alias ?? projectLabel(project.path)),
+    [visibleProjects, projectSortMode, visibleSessions],
+  );
   const sortedProjectsRef = useRef<ManagedProject[] | null>(null);
   const sortedProjects = useMemo(() => {
     if (hasPendingNewSession && sortedProjectsRef.current) {
@@ -826,7 +836,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     }
   }, [addProjectBusy, loadProjects, expandProject, setAddProjectOpen]);
 
-  const handleUpdateProjectPresentation = useCallback(async (projectPath: string, updates: { alias?: string | null; sortOrder?: number | null; launchConfig?: ProjectLaunchConfig | null }) => {
+  const handleUpdateProjectPresentation = useCallback(async (projectPath: string, updates: { alias?: string | null; sortOrder?: number | null; pinOrder?: number | null; launchConfig?: ProjectLaunchConfig | null }) => {
     try {
       const response = await fetch("/api/projects", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd: projectPath, ...updates }) });
       if (!response.ok) throw new Error(t("projects.updateFailed"));
@@ -837,6 +847,13 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     }
   }, [loadProjects, t]);
 
+  /** Projects Move up/down and drag can reorder: all of them in manual mode,
+   *  only the pinned ones while a sort is active (the rest follow the sort). */
+  const reorderableProjects = useMemo(
+    () => (pinsActive ? sortedProjects.filter((project) => project.pinOrder !== undefined) : sortedProjects),
+    [pinsActive, sortedProjects],
+  );
+
   /** Persist one whole-list order as a single atomic batched PATCH. */
   const persistProjectOrder = useCallback(async (next: ManagedProject[]) => {
     try {
@@ -846,20 +863,20 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
       const response = await fetch("/api/projects", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ updates: next.map((project, index) => ({ cwd: project.path, sortOrder: index })) }),
+        body: JSON.stringify({ updates: next.map((project, index) => ({ cwd: project.path, ...(pinsActive ? { pinOrder: index } : { sortOrder: index }) })) }),
       });
       if (!response.ok) throw new Error(t("projects.reorderFailed"));
       await loadProjects();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     }
-  }, [loadProjects, t]);
+  }, [loadProjects, pinsActive, t]);
 
   const handleProjectDrop = useCallback(async (targetPath: string) => {
     const sourcePath = draggedProjectPath;
     setDraggedProjectPath(null);
     if (!sourcePath || sourcePath === targetPath) return;
-    const next = [...sortedProjects];
+    const next = [...reorderableProjects];
     const from = next.findIndex((project) => project.path === sourcePath);
     const to = next.findIndex((project) => project.path === targetPath);
     if (from < 0 || to < 0) return;
@@ -867,11 +884,11 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     if (!moved) return;
     next.splice(to, 0, moved);
     await persistProjectOrder(next);
-  }, [draggedProjectPath, sortedProjects, persistProjectOrder]);
+  }, [draggedProjectPath, reorderableProjects, persistProjectOrder]);
 
   /** Keyboard-accessible reorder: move one project up/down the list. */
   const handleMoveProject = useCallback(async (projectPath: string, delta: -1 | 1) => {
-    const next = [...sortedProjects];
+    const next = [...reorderableProjects];
     const index = next.findIndex((project) => project.path === projectPath);
     const target = index + delta;
     if (index < 0 || target < 0 || target >= next.length) return;
@@ -879,7 +896,22 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     if (!moved) return;
     next.splice(target, 0, moved);
     await persistProjectOrder(next);
-  }, [sortedProjects, persistProjectOrder]);
+  }, [reorderableProjects, persistProjectOrder]);
+
+  /** Pin to the end of the pinned group, or unpin. */
+  const handleTogglePin = useCallback((project: ManagedProject) => {
+    const pinOrder = project.pinOrder !== undefined
+      ? null
+      : Math.max(-1, ...sortedProjects.map((p) => p.pinOrder ?? -1)) + 1;
+    // handleUpdateProjectPresentation already toasts the failure.
+    handleUpdateProjectPresentation(project.path, { pinOrder }).catch(() => {});
+  }, [sortedProjects, handleUpdateProjectPresentation]);
+
+  const chooseProjectSortMode = useCallback((mode: ProjectSortMode) => {
+    setSortMenuOpen(false);
+    setProjectSortMode(mode);
+    saveProjectSortMode(mode);
+  }, []);
 
   const handleRemoveProject = useCallback(async (projectPath: string) => {
     if (removeProjectPath) return;
@@ -1277,6 +1309,35 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
         >
           <Search size={15} strokeWidth={1.9} aria-hidden="true" />
         </SidebarIconButton>
+        <span ref={sortAnchorRef} style={{ display: "flex" }}>
+          <SidebarIconButton
+            label={t("projects.sort")}
+            active={pinsActive || sortMenuOpen}
+            onClick={() => setSortMenuOpen((open) => !open)}
+          >
+            <ArrowDownUp size={15} strokeWidth={1.9} aria-hidden="true" />
+          </SidebarIconButton>
+        </span>
+        <SidebarPortalMenu anchor={sortAnchorRef} open={sortMenuOpen} onClose={() => setSortMenuOpen(false)} placement="below" minWidth={150}>
+          {([
+            ["none", t("projects.sortNone")],
+            ["alphabetical", t("projects.sortAlphabetical")],
+            ["updated", t("projects.sortUpdated")],
+          ] as const).map(([mode, label]) => (
+            <button
+              key={mode}
+              type="button"
+              role="menuitemradio"
+              aria-checked={projectSortMode === mode}
+              className="sidebar-menu-item"
+              onClick={() => chooseProjectSortMode(mode)}
+              style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", padding: "6px 9px", border: "none", borderRadius: 6, background: "transparent", color: "var(--text)", cursor: "pointer", textAlign: "left", fontSize: 11 }}
+            >
+              <Check size={12} strokeWidth={2} aria-hidden="true" style={{ flexShrink: 0, visibility: projectSortMode === mode ? "visible" : "hidden" }} />
+              {label}
+            </button>
+          ))}
+        </SidebarPortalMenu>
         <SidebarIconButton
           label={t("sessionSidebar.filterRunning")}
           title={t("sessionSidebar.filterRunningTitle")}
@@ -1400,7 +1461,9 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
                 onDragPathChange={setDraggedProjectPath}
                 onDropProject={(path) => void handleProjectDrop(path)}
                 onMoveProject={(path, delta) => void handleMoveProject(path, delta)}
-                isDragTarget={draggedProjectPath !== null && draggedProjectPath !== project.path}
+                pinnable={pinsActive}
+                onTogglePin={handleTogglePin}
+                isDragTarget={draggedProjectPath !== null && draggedProjectPath !== project.path && (!pinsActive || project.pinOrder !== undefined)}
                 removeBusy={removeProjectPath === project.path}
                 onSelectSession={handleSelectSessionFromList}
                 onRenamed={loadSessions}
