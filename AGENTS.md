@@ -61,6 +61,7 @@ Shared foundations in `lib/omp/`:
 ```
 app/api/
   sessions/route.ts               GET  list all sessions
+  sessions/search/route.ts        GET ?q= — NDJSON { scores } batches (titles + transcripts); closing the request stops the scan
   sessions/[id]/route.ts          GET/PATCH/DELETE session
   sessions/[id]/context/route.ts  GET ?leafId= — context for a specific leaf
   sessions/[id]/export/route.ts   GET exported HTML for a session
@@ -124,6 +125,8 @@ lib/
   notification-client.ts  browser: device id, prefs store, service worker + push subscription
   rpc-manager.ts       session registry + startRpcSession over RpcProcess
   session-reader.ts    session .jsonl parsing + path cache + buildSessionContext
+  session-search.ts    shared fuzzy/phrase query scorer for sidebar search (title weights ≫ transcript)
+  session-content-search.ts  server: per-file transcript text cache (size+mtime) + searchSessions()
   session-resume.ts    running-session list for auto-resume after a restart
   web-auth.ts          password-hash check + session cookie signing
   web-auth-secret.ts   per-installation session-signing key (~/.omp/agent/omp-web/web-auth-secret.json)
