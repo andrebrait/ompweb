@@ -140,7 +140,9 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
   const [runningOnly, setRunningOnly] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   // Workspace sort (per browser). Pins apply only while a sort is active.
-  const [projectSortMode, setProjectSortMode] = useState<ProjectSortMode>(() => loadProjectSortMode());
+  // The sidebar is server-rendered: start at "none" and read storage after mount.
+  const [projectSortMode, setProjectSortMode] = useState<ProjectSortMode>("none");
+  useEffect(() => setProjectSortMode(loadProjectSortMode()), []);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const sortButtonRef = useRef<HTMLButtonElement>(null);
   const closeSortMenu = useCallback(() => setSortMenuOpen(false), []);
@@ -677,9 +679,15 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
       for (const p of sortedProjectsBase) if (!prevKeys.has(comparableProjectPath(p.path))) next.push(p);
       return next;
     }
-    sortedProjectsRef.current = { key: orderingKey, list: sortedProjectsBase };
     return sortedProjectsBase;
   }, [sortedProjectsBase, hasPendingNewSession, orderingKey]);
+  // Snapshot only committed orders; render work React discards must not leak into the freeze.
+  useEffect(() => {
+    const prev = sortedProjectsRef.current;
+    if (!hasPendingNewSession || !prev || prev.key !== orderingKey) {
+      sortedProjectsRef.current = { key: orderingKey, list: sortedProjectsBase };
+    }
+  }, [hasPendingNewSession, orderingKey, sortedProjectsBase]);
   useEffect(() => {
     onWorkspaceOptionsChange?.(sortedProjects, selectedProject, selectedCwd);
   }, [onWorkspaceOptionsChange, sortedProjects, selectedProject, selectedCwd]);
