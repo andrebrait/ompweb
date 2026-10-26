@@ -420,14 +420,18 @@ export function validateCommitSelfUpdate(attemptId: string, kind: Kind = "app"):
   if (!status || status.attemptId !== attemptId) throw new SelfUpdateError("attempt_not_found", "Update attempt not found", 404);
   if (status.state === "running") return "replay";
   if (status.state !== "prepared") throw new SelfUpdateError("invalid_state", "Update attempt is not prepared", 409);
-  const lease = readStateJson<{ attemptId?: string }>(leasePath(kind));
+  const lease = readStateJson<{ attemptId?: string; expiresAt?: unknown }>(leasePath(kind));
   if (!lease || lease.attemptId !== attemptId) throw new SelfUpdateError("lease_mismatch", "Lease mismatch", 409);
+  if (!isActiveLease(lease)) throw new SelfUpdateError("lease_expired", "Update attempt expired; prepare it again", 409);
   if (!existsSync(markerPath(attemptId, "ready", kind))) throw new SelfUpdateError("not_ready", "Update attempt not ready", 409);
   return "ready";
 }
 export function markSelfUpdateStopping(attemptId: string, kind: Kind = "app"): void {
   const status = readStateJson<StoredStatus>(statusPath(kind));
   if (!status || status.attemptId !== attemptId) return;
+  // The worker gets a full lease from here: a running attempt past it counts as lost.
+  const lease = readStateJson<Record<string, unknown>>(leasePath(kind));
+  atomicWrite(leasePath(kind), JSON.stringify({ ...lease, attemptId, expiresAt: Date.now() + LEASE_MS }));
   const next: StoredStatus = { ...status, state: "running", stage: "stopping", startedAt: new Date().toISOString() };
   atomicWrite(statusPath(kind), JSON.stringify(next));
 }
