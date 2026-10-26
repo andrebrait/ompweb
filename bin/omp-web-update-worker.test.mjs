@@ -3,17 +3,18 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-const WORKER = new URL("./omp-web-update-worker.js", import.meta.url).pathname;
+const WORKER = fileURLToPath(new URL("./omp-web-update-worker.js", import.meta.url));
 const ATTEMPT = "11111111-2222-3333-4444-555555555555";
 
 // Runs the worker for a systemd unit with stub `systemctl` and `npm` on PATH.
-function runWorker(t, { npmExit = 0, startExit = 0 } = {}) {
+function runWorker(t, { npmExit = 0, startExit = 0, activeExit = 0 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "update-worker-test-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const log = join(dir, "calls.log");
-  writeFileSync(join(dir, "systemctl"), `#!/bin/sh\necho "systemctl $*" >> "${log}"\n[ "$2" = start ] && exit ${startExit}\nexit 0\n`, { mode: 0o755 });
+  writeFileSync(join(dir, "systemctl"), `#!/bin/sh\necho "systemctl $*" >> "${log}"\n[ "$2" = start ] && exit ${startExit}\n[ "$2" = is-active ] && { echo failed; exit ${activeExit}; }\nexit 0\n`, { mode: 0o755 });
   writeFileSync(join(dir, "npm"), `#!/bin/sh\necho "npm $*" >> "${log}"\nexit ${npmExit}\n`, { mode: 0o755 });
   writeFileSync(join(dir, "status.json"), JSON.stringify({ attemptId: ATTEMPT, state: "running" }), { mode: 0o600 });
   writeFileSync(join(dir, `${ATTEMPT}.go`), "{}", { mode: 0o600 });
@@ -36,12 +37,13 @@ function runWorker(t, { npmExit = 0, startExit = 0 } = {}) {
   };
 }
 
-test("a systemd update stops the unit, installs, then starts it", { skip: process.platform === "win32" }, (t) => {
+test("a systemd update stops the unit, installs, starts it and checks it stayed up", { skip: process.platform === "win32" }, (t) => {
   const { calls, status } = runWorker(t);
   assert.deepEqual(calls, [
     "systemctl --user stop ompweb.service",
     "npm install -g @kahme247/ompweb@0.6.0",
     "systemctl --user start ompweb.service",
+    "systemctl --user is-active ompweb.service",
   ]);
   assert.equal(status.state, "succeeded");
 });
@@ -57,4 +59,10 @@ test("a unit that will not start again is reported as stopped", { skip: process.
   const { status } = runWorker(t, { startExit: 1 });
   assert.equal(status.state, "failed");
   assert.match(status.error, /^ompweb\.service is still stopped: /);
+});
+
+test("a new release that does not stay up fails the update", { skip: process.platform === "win32" }, (t) => {
+  const { status } = runWorker(t, { activeExit: 3 });
+  assert.equal(status.state, "failed");
+  assert.match(status.error, /systemctl is-active ompweb\.service failed: failed/);
 });

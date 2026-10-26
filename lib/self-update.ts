@@ -12,17 +12,19 @@ import {
   writeFileSync,
   type Stats,
 } from "fs";
-import { spawn, spawnSync } from "child_process";
+import { execFile, spawn } from "child_process";
 import { createChildProcessEnvironment } from "./project-command-env";
 import { randomUUID } from "crypto";
 import { tmpdir } from "os";
 import { dirname, join, posix, resolve, win32 } from "path";
+import { promisify } from "util";
 import { checkNpmUpdate, detectInstallMethod } from "./npm-update";
 import { checkOmpUpdate } from "./omp/updates";
 import { DISABLE_AUTOUPDATE_ENV_VAR, isUpdateDisabled } from "./update-policy";
 
 const LEASE_MS = 30 * 60 * 1000;
 const TERMINAL_STATUS_TTL_MS = 24 * 60 * 60 * 1000;
+const execFileAsync = promisify(execFile);
 
 export type SelfUpdateState = "prepared" | "running" | "succeeded" | "failed";
 export type SelfUpdateStage = "preparing" | "stopping" | "installing" | "restarting" | "finalizing";
@@ -317,7 +319,12 @@ export function parseSystemdServiceCgroup(cgroup: string): SystemdService | null
   return null;
 }
 
-function detectSystemdService(launcherPid: number): SystemdService | null {
+function commandError(error: unknown): string {
+  const stderr = (error as { stderr?: unknown } | null)?.stderr;
+  return (typeof stderr === "string" && stderr.trim()) || (error instanceof Error ? error.message : String(error));
+}
+
+async function detectSystemdService(launcherPid: number): Promise<SystemdService | null> {
   if (process.platform !== "linux") return null;
   let service: SystemdService | null;
   try {
@@ -328,8 +335,14 @@ function detectSystemdService(launcherPid: number): SystemdService | null {
   if (!service) return null;
   // Only the unit this launcher is the main process of: a dev server started
   // from a session inside another unit must never stop that unit.
-  const result = spawnSync("systemctl", [...(service.user ? ["--user"] : []), "show", "--property=MainPID", "--value", service.unit], { encoding: "utf8", timeout: 5000 });
-  return result.status === 0 && Number(result.stdout.trim()) === launcherPid ? service : null;
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync("systemctl", [...(service.user ? ["--user"] : []), "show", "--property=MainPID", "--value", service.unit], { encoding: "utf8", timeout: 5000 }));
+  } catch (error) {
+    // Guessing "not systemd" would start a worker the unit's stop kills.
+    throw new Error(`Cannot check systemd unit ${service.unit}: ${commandError(error)}`);
+  }
+  return Number(stdout.trim()) === launcherPid ? service : null;
 }
 export function getSelfUpdateSupport(): { supported: boolean; reason?: string; packageDir: string } {
   const packageDir = process.env.OMP_WEB_PACKAGE_DIR ?? resolve(join(import.meta ? dirname(new URL(import.meta.url).pathname) : process.cwd(), ".."));
@@ -431,7 +444,10 @@ export function markSelfUpdateStopping(attemptId: string, kind: Kind = "app"): v
   if (!status || status.attemptId !== attemptId) return;
   // The worker gets a full lease from here: a running attempt past it counts as lost.
   const lease = readStateJson<Record<string, unknown>>(leasePath(kind));
-  atomicWrite(leasePath(kind), JSON.stringify({ ...lease, attemptId, expiresAt: Date.now() + LEASE_MS }));
+  // Never take over another attempt's lease.
+  if (lease?.attemptId === attemptId) {
+    atomicWrite(leasePath(kind), JSON.stringify({ ...lease, expiresAt: Date.now() + LEASE_MS }));
+  }
   const next: StoredStatus = { ...status, state: "running", stage: "stopping", startedAt: new Date().toISOString() };
   atomicWrite(statusPath(kind), JSON.stringify(next));
 }
@@ -443,7 +459,7 @@ export async function armSelfUpdateLauncher(attemptId: string, kind: Kind = "app
   await new Promise<void>((r) => setTimeout(r, 500));
 }
 
-export function commitSelfUpdate(attemptId: string, kind: Kind = "app"): { accepted: true; attemptId: string } {
+export async function commitSelfUpdate(attemptId: string, kind: Kind = "app"): Promise<{ accepted: true; attemptId: string }> {
   assertUpdatesEnabled();
   const status = readStateJson<StoredStatus>(statusPath(kind));
   if (!status || status.attemptId !== attemptId) throw new SelfUpdateError("attempt_not_found", "Update attempt not found", 404);
@@ -494,10 +510,10 @@ export function commitSelfUpdate(attemptId: string, kind: Kind = "app"): { accep
     "--kind",
     kind,
   ];
-  const systemd = kind === "app" ? detectSystemdService(launcherPid) : null;
-  if (systemd) args.push("--systemd-unit", systemd.unit, "--systemd-user", systemd.user ? "1" : "0");
-  const workerArgs = workerPath ? [workerPath, ...args] : args;
   try {
+    const systemd = kind === "app" ? await detectSystemdService(launcherPid) : null;
+    if (systemd) args.push("--systemd-unit", systemd.unit, "--systemd-user", systemd.user ? "1" : "0");
+    const workerArgs = workerPath ? [workerPath, ...args] : args;
     let command = process.execPath;
     let commandArgs = workerArgs;
     if (systemd) {
@@ -506,9 +522,10 @@ export function commitSelfUpdate(attemptId: string, kind: Kind = "app"): { accep
       const systemdRun = [...(systemd.user ? ["--user"] : []), "--scope", "--quiet", "--collect", "--no-ask-password"];
       // The detached worker's own failure would be invisible; fail here instead
       // (e.g. a non-root system service, which polkit refuses).
-      const probe = spawnSync("systemd-run", [...systemdRun, "true"], { encoding: "utf8", timeout: 10000 });
-      if (probe.status !== 0) {
-        throw new Error(`systemd-run cannot start the update worker: ${(probe.stderr || probe.error?.message || "").trim()}`);
+      try {
+        await execFileAsync("systemd-run", [...systemdRun, "true"], { encoding: "utf8", timeout: 10000 });
+      } catch (error) {
+        throw new Error(`systemd-run cannot start the update worker: ${commandError(error)}`);
       }
       command = "systemd-run";
       commandArgs = [...systemdRun, process.execPath, ...workerArgs];
@@ -520,6 +537,14 @@ export function commitSelfUpdate(attemptId: string, kind: Kind = "app"): { accep
       // The worker and everything it runs inherit this environment, so the web
       // password hash must not be in it (issue #239).
       env: createChildProcessEnvironment(),
+    });
+    // A failed launch arrives as an event, after this function returned.
+    child.once("error", (error) => {
+      const current = readStateJson<StoredStatus>(statusPath(kind));
+      if (current?.attemptId !== attemptId || current.state !== "running") return;
+      try {
+        atomicWrite(statusPath(kind), JSON.stringify({ ...current, state: "failed", error: error.message.slice(0, 240), finishedAt: new Date().toISOString(), cleanupReady: true }));
+      } catch {}
     });
     child.unref();
     // record worker pid

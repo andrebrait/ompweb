@@ -82,7 +82,7 @@ function isTrayActive() {
 function systemctl(action) {
   const result = cp.spawnSync("systemctl", [...systemctlScope, action, systemdUnit], { encoding: "utf8", timeout: 120000 });
   if (result.status !== 0) {
-    const detail = (result.stderr || (result.error && result.error.message) || "").trim().slice(0, 200);
+    const detail = (result.stderr || result.stdout || (result.error && result.error.message) || "").trim().slice(0, 200);
     throw new Error(`systemctl ${action} ${systemdUnit} failed${detail ? `: ${detail}` : ""}`);
   }
 }
@@ -174,6 +174,11 @@ async function restartServices(info) {
   updateStatus({ stage: "restarting" });
   if (info.systemd) {
     systemctl("start");
+    // A Type=simple start returns once the process is forked; a release that
+    // crashes on startup shows up as not active a moment later.
+    // shortcut: one check after 3s, not a port probe; upgrade if slow-starting crashes slip through.
+    await sleep(3000);
+    systemctl("is-active");
     return;
   }
   if (info.launchd) {
