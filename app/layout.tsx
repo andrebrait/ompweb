@@ -1,11 +1,12 @@
 import type { Metadata, Viewport } from "next";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import Script from "next/script";
 import { Geist, JetBrains_Mono, Noto_Sans_Mono, Source_Serif_4 } from "next/font/google";
 import { ThemeColor } from "@/hooks/useTheme";
 import { IosFocusZoomGuard } from "@/components/IosFocusZoomGuard";
 import { SIDEBAR_HISTORY_BRIDGE_SCRIPT } from "@/lib/sidebar-history-bridge";
 import { getInstallName } from "@/lib/install-name";
+import { manifestHref, THEME_COLOR_COOKIE } from "@/lib/manifest-theme";
 import "./globals.css";
 
 const geist = Geist({
@@ -64,15 +65,16 @@ export const viewport: Viewport = {
   interactiveWidget: "resizes-content",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const themeColor = (await cookies()).get(THEME_COLOR_COOKIE)?.value;
   return (
     <html lang="en" translate="no" className={`${geist.variable} ${jetbrainsMono.variable} ${notoSansMono.variable} ${sourceSerif.variable} notranslate`} suppressHydrationWarning>
       <head>
-        <link rel="manifest" href="/api/manifest" crossOrigin="use-credentials" />
+        <link rel="manifest" href={manifestHref(themeColor)} crossOrigin="use-credentials" />
         <ThemeColor />
         <meta name="google" content="notranslate" />
         {/* Register before Next's router. Owned sidebar traversals must be handled

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { MetadataRoute } from "next";
 import type { NextRequest } from "next/server";
 import { getInstallName } from "@/lib/install-name";
+import { parseThemeColor } from "@/lib/manifest-theme";
 
 // Packaged public assets are read/encoded once per server module. Native
 // installers fetch HTTP icons without cookies, even with a credentialed manifest.
@@ -25,11 +26,11 @@ const manifest: MetadataRoute.Manifest = {
 // Authentication is enforced by the existing /api/ web-password proxy guard.
 export function GET(request: NextRequest) {
   const name = getInstallName(request.headers);
-  // Set by applyDomTheme. theme_color colors the installed app's system bars;
-  // background_color is its window background, which shows through the
-  // navigation bar on edge-to-edge Android (and on the splash screen).
-  const themeColor = request.cookies.get("omp-theme-color")?.value;
-  const color = themeColor && /^[0-9a-f]{6}$/i.test(themeColor) ? `#${themeColor}` : manifest.theme_color;
+  // ?theme= comes from the page's manifest link (lib/manifest-theme.ts).
+  // theme_color colors the installed app's system bars; background_color is
+  // its window background, which shows through the navigation bar on
+  // edge-to-edge Android (and on the splash screen).
+  const color = parseThemeColor(request.nextUrl.searchParams.get("theme")) ?? manifest.theme_color;
   return Response.json({ ...manifest, theme_color: color, background_color: color, name, short_name: name }, {
     headers: {
       "Content-Type": "application/manifest+json",
