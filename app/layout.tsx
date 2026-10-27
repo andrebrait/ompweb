@@ -80,11 +80,11 @@ export default function RootLayout({
         <Script id="sidebar-history" strategy="beforeInteractive">
           {SIDEBAR_HISTORY_BRIDGE_SCRIPT}
         </Script>
-        {/* Apply the stored theme and its CSS background to browser chrome before
+        {/* Apply the stored theme and its top bar color to browser chrome before
             first paint. The hydrated hook keeps both in sync afterward. */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var t;try{t=localStorage.getItem("omp-theme")}catch(e){}var d=matchMedia("(prefers-color-scheme: dark)").matches;var dt={"dark":1,"omp":1,"dracula":1,"harbor":1,"one-dark-pro":1,"rose-pine":1,"catppuccin-mocha":1,"gruvbox-dark":1,"nord":1,"tokyo-night":1};var lt={"light":1,"one-light":1,"catppuccin-latte":1,"rose-pine-dawn":1};var res=t==="system"?(d?"dark":"light"):(!t?"omp":t);if(!dt[res]&&!lt[res]&&res!=="omp")res="omp";var dark=!!dt[res]&&res!=="omp";if(dark)document.documentElement.classList.add("dark");if(res==="omp"){document.documentElement.classList.add("omp")}else{document.documentElement.classList.add("theme-"+res)}document.documentElement.setAttribute("data-theme",res);var m=document.querySelector('meta[name="theme-color"]'),c=getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();if(m&&c)m.setAttribute("content",c);}catch(e){}})();`,
+            __html: `(function(){try{var t;try{t=localStorage.getItem("omp-theme")}catch(e){}var d=matchMedia("(prefers-color-scheme: dark)").matches;var dt={"dark":1,"omp":1,"dracula":1,"harbor":1,"one-dark-pro":1,"rose-pine":1,"catppuccin-mocha":1,"gruvbox-dark":1,"nord":1,"tokyo-night":1};var lt={"light":1,"one-light":1,"catppuccin-latte":1,"rose-pine-dawn":1};var res=t==="system"?(d?"dark":"light"):(!t?"omp":t);if(!dt[res]&&!lt[res]&&res!=="omp")res="omp";var dark=!!dt[res]&&res!=="omp";if(dark)document.documentElement.classList.add("dark");if(res==="omp"){document.documentElement.classList.add("omp")}else{document.documentElement.classList.add("theme-"+res)}document.documentElement.setAttribute("data-theme",res);var m=document.querySelector('meta[name="theme-color"]'),c=getComputedStyle(document.documentElement).getPropertyValue("--bg-panel").trim();if(m&&c)m.setAttribute("content",c);}catch(e){}})();`,
           }}
         />
         <script
