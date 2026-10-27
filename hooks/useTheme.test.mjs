@@ -1,11 +1,12 @@
 import "../tests/setup-dom.mjs";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test, { afterEach } from "node:test";
 import { act, cleanup, renderHook } from "@testing-library/react/pure.js";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { tsconfigPaths: true });
-const { nextThemePreference, resolveTheme, isDarkTheme, LIGHT_THEMES, DARK_THEMES, useTheme } = await jiti.import("./useTheme.ts");
+const { nextThemePreference, resolveTheme, isDarkTheme, LIGHT_THEMES, DARK_THEMES, ALL_THEMES, useTheme } = await jiti.import("./useTheme.ts");
 
 afterEach(cleanup);
 
@@ -48,6 +49,19 @@ test("nextThemePreference toggles custom dark themes to light and custom light t
   assert.equal(nextThemePreference("tokyo-night"), "light");
   assert.equal(nextThemePreference("catppuccin-latte"), "dark");
   assert.equal(nextThemePreference("one-light"), "dark");
+});
+
+test("each theme's browser chrome color is its CSS --bg-panel, the top bar's color", async () => {
+  // The pre-paint script reads the CSS and the hook reads the table: a mismatch
+  // flickers the status bar after hydration and sends a stale manifest color.
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  for (const { id, panel } of ALL_THEMES) {
+    const selector = id === "light" ? ":root" : id === "omp" ? "html.omp" : `html.theme-${id}`;
+    const start = css.search(new RegExp(`(^|, )${selector.replace(".", "\\.")} \\{`, "m"));
+    assert.notEqual(start, -1, `${id} has a CSS block`);
+    const block = css.slice(start, css.indexOf("}", start));
+    assert.equal(block.match(/--bg-panel:\s*(#[0-9A-Fa-f]{6})/)?.[1].toUpperCase(), panel, id);
+  }
 });
 
 test("browser chrome follows the selected theme and only follows OS changes in system mode", async (t) => {
