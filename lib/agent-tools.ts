@@ -24,7 +24,7 @@ export const AGENT_TOOL_DEFINITIONS: HostToolDefinition[] = [
   {
     name: "list_sessions",
     description:
-      "List omp-web sessions (ID, name, working directory, running or idle) so send_to_session can address one without the user copying IDs.",
+      "List omp-web sessions on every host (ID, name, working directory, host, running or idle) so send_to_session can address one without the user copying IDs.",
     parameters: { type: "object", properties: {} },
   },
   {
@@ -40,6 +40,7 @@ export const AGENT_TOOL_DEFINITIONS: HostToolDefinition[] = [
         provider: { type: "string", description: "Model provider, used with modelId instead of model." },
         modelId: { type: "string", description: "Model ID, used with provider instead of model." },
         name: { type: "string", description: "Display name for the new session." },
+        host: { type: "string", description: "Host id or label from list_sessions; defaults to this machine." },
       },
     },
   },
@@ -88,10 +89,25 @@ export interface AgentToolSessionSummary {
   name?: string;
   cwd?: string;
   running: boolean;
+  /** The host's label. */
+  host: string;
+}
+
+/** A session as the ops layer lists it; executeAgentTool names its host. */
+export type AgentToolSessionRow = Omit<AgentToolSessionSummary, "host"> & { hostId: string };
+
+/** A machine sessions can start on; this machine has id "local". */
+export interface AgentToolHost {
+  id: string;
+  label: string;
+  online: boolean;
+  /** Off: the user confirms each agent-started session there. */
+  allowAgentStart: boolean;
 }
 
 export interface AgentToolCreateSessionInput {
   cwd: string;
+  hostId: string;
   /** Already sender-attributed by executeAgentTool, or null for an idle session. */
   prompt: string | null;
   provider?: string;
@@ -120,7 +136,8 @@ export interface AgentToolDeliverResult {
 
 /** Session operations supplied by lib/rpc-manager; fakes replace them in tests. */
 export interface AgentToolSessionOps {
-  listSessions(): Promise<AgentToolSessionSummary[]>;
+  listSessions(): Promise<AgentToolSessionRow[]>;
+  listHosts(): AgentToolHost[];
   createSession(input: AgentToolCreateSessionInput): Promise<{ sessionId: string }>;
   deliver(input: AgentToolDeliverInput): Promise<AgentToolDeliverResult>;
 }
@@ -131,6 +148,8 @@ export interface AgentToolContext {
   /** The off-by-default Settings gate (lib/web-settings agentToolsEnabled). */
   enabled: boolean;
   guard: AgentToolGuard;
+  /** Ask the calling session's user; resolves false when declined or the dialog is dropped. */
+  confirm(title: string): Promise<boolean>;
 }
 
 /**
@@ -273,6 +292,15 @@ function checkMessageLength(message: string, field: string): void {
   }
 }
 
+/** `host` matched case-insensitively against ids and labels; absent means this machine. */
+function resolveHost(hosts: AgentToolHost[], host: string | undefined): AgentToolHost {
+  const wanted = (host ?? "local").toLowerCase();
+  const match = hosts.find((h) => h.id.toLowerCase() === wanted || h.label.toLowerCase() === wanted);
+  if (!match) throw new Error(`Unknown host "${host}". Known hosts: ${hosts.map((h) => h.label).join(", ")}.`);
+  if (!match.online) throw new Error(`${match.label} is offline.`);
+  return match;
+}
+
 /**
  * Execute one server-side agent tool. Returns a plain JSON-able result the
  * caller renders as the host_tool_result text payload. Throws on every
@@ -293,7 +321,11 @@ export async function executeAgentTool(
 
   if (toolName === "list_sessions") {
     ctx.guard.checkRate(ctx.sourceSessionId);
-    return { sessions: await ops.listSessions() };
+    const labels = new Map(ops.listHosts().map((h) => [h.id, h.label]));
+    const sessions = await ops.listSessions();
+    return {
+      sessions: sessions.map(({ hostId, ...session }) => ({ ...session, host: labels.get(hostId) ?? hostId })),
+    };
   }
 
   if (toolName === "new_session") {
@@ -306,8 +338,13 @@ export async function executeAgentTool(
     const { provider, modelId } = parseModel(record);
     const name = optionalString(record, "name");
     if (name && name.length > 200) throw new Error("Agent tool argument \"name\" exceeds 200 characters.");
+    const host = resolveHost(ops.listHosts(), optionalString(record, "host"));
+    if (!host.allowAgentStart && !(await ctx.confirm(`Start a session on ${host.label} in ${cwd}?`))) {
+      throw new Error(`The user declined to start a session on ${host.label}.`);
+    }
     const created = await ops.createSession({
       cwd,
+      hostId: host.id,
       prompt: prompt ? formatAttributedMessage(ctx.sourceSessionId, prompt) : null,
       provider,
       modelId,

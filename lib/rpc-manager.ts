@@ -5,13 +5,7 @@ import { hasVisibleAssistantContent } from "./assistant-response";
 import { invalidateModelsCache } from "./models-cache";
 import { RpcCommandError, RpcCommandTimeoutError, RpcProcess, type RpcFrame } from "./omp/rpc-process";
 import { editSessionHistory, isSessionEditReply, SESSION_EDIT_COMMAND, SessionEditAgentInvocationError, type SessionEditResult } from "./omp/session-edit";
-import {
-  cacheSessionPath,
-  invalidateSessionListCache,
-  listAllSessions,
-  readSessionHeader,
-  resolveSessionPath,
-} from "./session-reader";
+import { cacheSessionPath, invalidateSessionListCache } from "./session-reader";
 import { allowFileRoot } from "./file-access";
 import { loadWebServerSettings } from "./web-settings";
 import {
@@ -39,9 +33,10 @@ import type {
 } from "./pi-types";
 import type { AgentMessage, CrossSessionHostToolCall, ExitedRpcSession, ExtensionWidgetItem } from "./types";
 import { isLinkUp, type Host, type HostStatus } from "./hosts/host";
-import { getHost, lastUplinkAt, orphanExit, RemoteRpcTransport } from "./hosts/hub";
-import { localHost, resolveSpawnCwdResult } from "./hosts/local-host";
-import { invalidateHostSessionList, sessionSpawnTarget } from "./hosts/session-index";
+import { getHost, lastUplinkAt, listHosts, orphanExit, RemoteRpcTransport } from "./hosts/hub";
+import { localHost } from "./hosts/local-host";
+import type { OpResult } from "./hosts/session-ops";
+import { hostForSessionId, invalidateHostSessionList, listSessionsAllHosts, sessionSpawnTarget } from "./hosts/session-index";
 import type { SessionLiveSnapshot, SessionLiveToolEvent, SessionStreamCursor } from "./session-sync";
 
 // ============================================================================
@@ -241,6 +236,8 @@ export class AgentSessionWrapper {
   private listeners: EventListener[] = [];
   private pendingUiRequests = new Map<string, UnsequencedAgentEvent>();
   private uiExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Dialogs omp-web itself raised (confirmFromServer): answered here, never forwarded to omp. */
+  private serverUiRequests = new Map<string, (confirmed: boolean) => void>();
   private extensionStatuses = new Map<string, string>();
   private extensionWidgets = new Map<string, ExtensionWidgetItem>();
   private promptRunning = false;
@@ -830,6 +827,8 @@ export class AgentSessionWrapper {
         break;
       case "agent_end":
         if (event.isTerminal !== false) {
+          // A server dialog belongs to a tool call of this run; nobody can answer it after the run.
+          this.dropServerUiRequests();
           this.streaming = false;
           this.promptRunning = false;
           this.awaitingAgentStart = false;
@@ -1026,9 +1025,34 @@ export class AgentSessionWrapper {
   }
 
   private clearPendingUiRequests(): void {
+    this.dropServerUiRequests();
     for (const timer of this.uiExpiryTimers.values()) clearTimeout(timer);
     this.uiExpiryTimers.clear();
     this.pendingUiRequests.clear();
+  }
+
+  /** Settle every server dialog as declined and close it in attached tabs. */
+  private dropServerUiRequests(): void {
+    for (const [id, resolve] of this.serverUiRequests) {
+      this.serverUiRequests.delete(id);
+      this.forgetPendingUiRequest(id);
+      this.emit({ type: "extension_ui_request", id: `cancel:${id}`, method: "cancel", targetId: id });
+      resolve(false);
+    }
+  }
+
+  /**
+   * Ask this session's user to confirm, as an omp dialog would: same tabs,
+   * replay and input-needed notification. Resolves false when declined, when
+   * the run ends, or when the session stops.
+   */
+  confirmFromServer(title: string): Promise<boolean> {
+    if (!this._alive) return Promise.resolve(false);
+    const id = `omp-web:${randomUUID()}`;
+    const { promise, resolve } = Promise.withResolvers<boolean>();
+    this.serverUiRequests.set(id, resolve);
+    this.handleFrame({ type: "extension_ui_request", id, method: "confirm", title, message: "" });
+    return promise;
   }
 
   private trackExtensionUiRequest(event: UnsequencedAgentEvent): boolean {
@@ -1378,6 +1402,7 @@ export class AgentSessionWrapper {
         sourceCwd: this.cwd,
         enabled: loadWebServerSettings().agentToolsEnabled,
         guard: getAgentToolGuard(),
+        confirm: (title) => this.confirmFromServer(title),
       });
       sendResult(typeof result === "string" ? result : JSON.stringify(result));
     } catch (error) {
@@ -2096,7 +2121,13 @@ export class AgentSessionWrapper {
         }
         const wasPending = this.pendingUiRequests.has(id);
         this.forgetPendingUiRequest(id);
-        this.proc.sendFrame({ type: "extension_ui_response", id, ...rest });
+        const serverRequest = this.serverUiRequests.get(id);
+        if (serverRequest) {
+          this.serverUiRequests.delete(id);
+          serverRequest(rest.confirmed === true);
+        } else {
+          this.proc.sendFrame({ type: "extension_ui_response", id, ...rest });
+        }
         // omp sends no cancel for an answered dialog; other tabs on this
         // session would keep showing it, so settle it for them here.
         if (wasPending) this.emit({ type: "extension_ui_request", id: `cancel:${id}`, method: "cancel", targetId: id });
@@ -2492,16 +2523,23 @@ function createAgentToolOps(): AgentToolSessionOps {
   return {
     async listSessions() {
       const running = new Set(getRunningRpcSessionIds());
-      const sessions = await listAllSessions();
-      return sessions.map((s) => ({ id: s.id, name: s.name, cwd: s.cwd, running: running.has(s.id) }));
+      const sessions = await listSessionsAllHosts();
+      return sessions.map((s) => ({ id: s.id, name: s.name, cwd: s.cwd, running: running.has(s.id), hostId: s.hostId ?? localHost.id }));
+    },
+
+    listHosts() {
+      return [
+        { id: localHost.id, label: localHost.label, online: true, allowAgentStart: true },
+        ...listHosts().map((h) => ({ id: h.id, label: h.label, online: isLinkUp(h.status), allowAgentStart: h.allowAgentStart })),
+      ];
     },
 
     async createSession(input) {
-      if (!existsSync(input.cwd)) throw new Error(`Directory does not exist: ${input.cwd}`);
-      const tempKey = `__new__${randomUUID()}`;
-      const { session, realSessionId } = await startRpcSession(tempKey, "", input.cwd, undefined, undefined);
-      allowFileRoot(input.cwd);
-      invalidateSessionListCache();
+      const host = getHost(input.hostId);
+      if (!host) throw new Error(`Unknown host: ${input.hostId}`);
+      const started = await startNewRpcSession(host, input.cwd);
+      if (!started.ok) throw new Error(started.error);
+      const { session, realSessionId } = started.value;
       try {
         if (input.provider && input.modelId) {
           await session.send({ type: "set_model", provider: input.provider, modelId: input.modelId });
@@ -2509,7 +2547,8 @@ function createAgentToolOps(): AgentToolSessionOps {
         if (input.name) await session.send({ type: "set_session_name", name: input.name });
         if (input.prompt) await session.send({ type: "prompt", message: input.prompt });
       } catch (error) {
-        await session.destroyAndWait();
+        // As /api/agent/new: behind a dropped link the prompt may be running there, so the wrapper stays.
+        if (!(error instanceof WebRpcError && error.code === "host_offline")) await session.destroyAndWait();
         throw error;
       }
       return { sessionId: realSessionId };
@@ -2519,11 +2558,10 @@ function createAgentToolOps(): AgentToolSessionOps {
       const live = getRpcSession(input.sessionId);
       let wrapper = live?.isAlive() ? live : undefined;
       if (!wrapper) {
-        const filePath = await resolveSessionPath(input.sessionId);
-        if (!filePath) throw new Error(`Session not found: ${input.sessionId}`);
-        const header = readSessionHeader(filePath);
-        const { cwd } = resolveSpawnCwdResult(header?.cwd);
-        const started = await startRpcSession(input.sessionId, filePath, cwd, undefined, undefined, header?.cwd);
+        const host = await hostForSessionId(input.sessionId);
+        const target = host && await sessionSpawnTarget(input.sessionId, host);
+        if (!host || !target) throw new Error(`Session not found: ${input.sessionId}`);
+        const started = await startRpcSession(input.sessionId, target.sessionFile, target.cwd, undefined, undefined, target.recordedCwd, undefined, host);
         wrapper = started.session;
       }
       const wasRunning = wrapper.isRunning();
@@ -2550,6 +2588,39 @@ function createAgentToolOps(): AgentToolSessionOps {
       };
     },
   };
+}
+
+/**
+ * Spawn a brand-new session on `host` in `cwd`, checked where it lives: the
+ * host answers with the path it will use. Registers the cwd with this
+ * machine's file routes, or refreshes the host's session list.
+ */
+export async function startNewRpcSession(
+  host: Host,
+  cwd: string,
+  toolNames?: string[],
+  advisor?: boolean,
+): Promise<OpResult<{ session: AgentSessionWrapper; realSessionId: string }>> {
+  let spawnCwd = cwd;
+  if (host === localHost) {
+    if (!existsSync(cwd)) return { ok: false, status: 400, code: "directory_not_found", error: `Directory does not exist: ${cwd}` };
+  } else {
+    const validated = await host.sessionOps.validateCwd(cwd);
+    if (!validated.ok) return validated;
+    spawnCwd = validated.value.cwd;
+  }
+  // Unique per call: startRpcSession coalesces concurrent callers that share a key onto one session.
+  const tempKey = `__new__${randomUUID()}`;
+  const started = await startRpcSession(tempKey, "", spawnCwd, toolNames, advisor, undefined, undefined, host);
+  if (host === localHost) {
+    // Without this a file request under a brand-new cwd would 403 for up to the allowed-roots cache TTL.
+    // Never for another host: its paths do not exist on this machine.
+    allowFileRoot(spawnCwd);
+    invalidateSessionListCache();
+  } else {
+    invalidateHostSessionList(host.id);
+  }
+  return { ok: true, value: started };
 }
 
 export async function startRpcSession(
