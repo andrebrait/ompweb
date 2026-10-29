@@ -9,7 +9,8 @@ import { fileURLToPath } from "node:url";
 
 const bin = fileURLToPath(new URL("./omp-web.js", import.meta.url));
 
-test("SIGTERM to `ompweb host` stops the daemon itself, leaving no orphan", async (t) => {
+// Windows has no signals: child.kill("SIGTERM") terminates the process outright, so the daemon's handler never runs.
+test("SIGTERM to `ompweb host` stops the daemon itself, leaving no orphan", { skip: process.platform === "win32" && "Windows kills on SIGTERM without running handlers" }, async (t) => {
   const scratch = mkdtempSync(join(tmpdir(), "omp-web-host-cli-"));
   const agentDir = join(scratch, "agent");
   mkdirSync(join(agentDir, "omp-web"), { recursive: true });
