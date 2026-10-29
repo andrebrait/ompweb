@@ -624,6 +624,10 @@ function remoteSessionOps(hostId: string): SessionOps {
 export class RemoteRpcTransport implements RpcTransport {
   readonly hostId: string;
   readonly ch: string;
+  /** RpcTransport.id: the channel id, for log correlation. */
+  get id(): string {
+    return this.ch;
+  }
   /** Set for an orphan the daemon listed in `hello` (the session it runs); null for children this server spawned. */
   readonly sessionId: string | null;
   /** The daemon confirmed the spawn (or listed the channel); until then a `hello` without it is not a loss. */
