@@ -80,7 +80,7 @@ export async function POST(req: Request) {
       // wrapper stays for the reconnect (and disposing it would wait for the link).
       // Its id lets the client open it instead of starting a second session.
       if (error instanceof WebRpcError && error.code === "host_offline") {
-        return NextResponse.json({ error: error.message, code: error.code, hostOffline: true, sessionId: realSessionId }, { status: 503 });
+        return NextResponse.json({ error: error.message, code: error.code, hostOffline: true, delivery: error.delivery, sessionId: realSessionId }, { status: 503 });
       }
       await session.destroyAndWait();
       throw error;

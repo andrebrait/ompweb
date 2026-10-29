@@ -202,6 +202,14 @@ export interface UseAgentSessionOptions {
   onOpenUrl?: (url: string) => string;
 }
 
+/** Toast a send its host's link stopped. True when the link dropped after the
+ *  send left, so it may still run there: the composer must not offer it again. */
+function toastHostOffline(error: HostOfflineError): boolean {
+  if (error.mayHaveRun) toast.info(translate("agentSession.hostOfflineMaybeSent", { detail: error.message }));
+  else toast.error(translate("agentSession.hostOfflineSend", { detail: error.message }));
+  return error.mayHaveRun;
+}
+
 export function useAgentSession(opts: UseAgentSessionOptions) {
   const {
     session, newSessionCwd, newSessionHostId, onAgentEnd, onSessionCreated, onSessionForked, onSessionMoved,
@@ -1046,13 +1054,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           ...(advisorEnabled ? { advisor: true } : {}),
         }),
       });
-      if (!res.ok) {
-        const failure = await res.json().catch(() => ({})) as { error?: string; code?: string; hostOffline?: boolean };
-        if (res.status === 503 && failure.hostOffline) throw new HostOfflineError(formatApiError(failure));
-        throw new Error(`HTTP ${res.status}`);
+      const body = await res.json().catch(() => ({})) as { sessionId?: unknown; error?: string; code?: string; hostOffline?: boolean; delivery?: string };
+      const offline = res.status === 503 && body.hostOffline === true;
+      if (!res.ok && !offline) throw new Error(`HTTP ${res.status}`);
+      // A host that dropped after the spawn keeps the session (503 with its id):
+      // adopt it, so a retry sends there instead of starting a second session.
+      const realId = typeof body.sessionId === "string" && body.sessionId ? body.sessionId : null;
+      if (!realId) {
+        if (offline) throw new HostOfflineError(formatApiError(body), body.delivery === "unknown");
+        return null;
       }
-      const result = await res.json() as { sessionId: string };
-      const realId = result.sessionId;
       sessionIdRef.current = realId;
       // The toggle handler could not persist while the chat had no id; carry
       // the pre-prompt choice over so it survives a reload after this point.
@@ -1069,6 +1080,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (hookAliveRef.current && !promptDispatchPendingRef.current && !btwAskPendingRef.current) {
         observeCreatedSessionRef.current?.(realId);
       }
+      if (offline) throw new HostOfflineError(formatApiError(body), body.delivery === "unknown");
       return realId;
     })();
 
@@ -2865,11 +2877,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       promptDispatchPendingRef.current = false;
       console.error("Failed to send message:", e);
       // Every failure here (stream connect, startup, set_model, or the prompt
-      // POST itself) means the prompt never started, so roll back the optimistic bubble.
+      // POST itself) leaves no run to show, so roll back the optimistic bubble.
       setOptimisticUserMessage(null);
-      if (e instanceof HostOfflineError) {
-        toast.error(translate("agentSession.hostOfflineSend", { detail: e.message }));
-      } else {
+      const mayHaveRun = e instanceof HostOfflineError && toastHostOffline(e);
+      if (!(e instanceof HostOfflineError)) {
         addNotice({
           type: "error",
           message: e instanceof EventStreamConnectionError
@@ -2889,7 +2900,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       lastRunErrorRef.current = null;
       slashCommandRunRef.current = false;
       dispatch({ type: "end" });
-      return { status: "rejected", recoveryKey };
+      return mayHaveRun ? { status: "accepted" } : { status: "rejected", recoveryKey };
     }
   }, [catchUp, eventCoalescer, isNew, newSessionCwd, newSessionModel, session, ensureNewSession, ensureEventsConnected, promoteNewSession, onSessionCreated, waitForPromptSettlement, addNotice, refreshSubagentRoster, registerHostTools, registerHostUriSchemes, clearLiveToolResults, clearTerminalReconcileTimer, snapshotRunEntries]);
 
@@ -3724,10 +3735,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // optimistic chat bubble here would duplicate the queue panel and turn into
   // a ghost message if the queue is recalled.
   const toPiImages = (images?: AttachedImage[]) => images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
-  /** A refused steer/follow-up: an unreachable host toasts (the composer keeps the text), anything else is a chat notice. */
-  const reportQueueFailure = useCallback((e: unknown) => {
-    if (e instanceof HostOfflineError) toast.error(translate("agentSession.hostOfflineSend", { detail: e.message }));
-    else addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+  /** A refused steer/follow-up: an unreachable host toasts (the composer keeps the text), anything else is a chat notice.
+   *  True when the link dropped after the send left: it may still run, so the composer drops the text. */
+  const reportQueueFailure = useCallback((e: unknown): boolean => {
+    if (e instanceof HostOfflineError) return toastHostOffline(e);
+    addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+    return false;
   }, [addNotice]);
   const handleSteer = useCallback(async (message: string, images?: AttachedImage[]) => {
     const sid = sessionIdRef.current;
@@ -3745,8 +3758,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       return true;
     } catch (e) {
       console.error("Failed to steer:", e);
-      reportQueueFailure(e);
-      return false;
+      return reportQueueFailure(e);
     }
   }, [addNotice, reportQueueFailure]);
 
@@ -3771,8 +3783,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       return true;
     } catch (e) {
       console.error("Failed to queue prompt:", e);
-      reportQueueFailure(e);
-      return false;
+      return reportQueueFailure(e);
     }
   }, [addNotice, reportQueueFailure]);
 
@@ -3789,8 +3800,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       return true;
     } catch (e) {
       console.error("Failed to follow up:", e);
-      reportQueueFailure(e);
-      return false;
+      return reportQueueFailure(e);
     }
   }, [reportQueueFailure]);
 
