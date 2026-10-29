@@ -290,24 +290,23 @@ machine already has. The rules below limit anything beyond it.
 
 ## Agent-initiated sessions
 
-omp-web already registers host tools with omp (`set_host_tools`,
-`lib/rpc-manager.ts`), today supplied by the browser tab. The server also
-registers its own tool for every session it runs, merged with the tab's
-tools:
+omp-web already answers three agent tools itself (`list_sessions`,
+`new_session`, `send_to_session` in `lib/agent-tools.ts`, gated by the
+`agentToolsEnabled` web setting). They are extended, not duplicated:
 
-- `start_session {host, cwd, prompt, model?}`: starts a session on the named
-  host (label or id; `local` for this machine) and sends `prompt`. Returns the
-  new session id and its omp-web URL.
+- `new_session` gains an optional `host` (id or label; omitted or `local`
+  means this machine).
+- `list_sessions` covers every host and names each session's host.
+- `send_to_session` reaches a session on any host.
 
-The call arrives over a session omp-web already owns, so it needs no new
+The calls arrive over a session omp-web already owns, so they need no new
 credential and cannot be reached from outside omp-web.
 
-**Guard:** when the target host's `allowAgentStart` is `false` (the
-default), the call shows a `confirm` request through the existing extension-UI
-flow ("Start a session on <host> in <cwd>?"), which also raises the existing
-input-needed notification. Declining returns an error result to the agent.
-`local` follows the same rule through a "This machine" toggle in Settings →
-Hosts.
+**Guard:** creating a session on a remote host whose `allowAgentStart` is
+`false` (the default) first shows a `confirm` request through the existing
+extension-UI flow ("Start a session on <host> in <cwd>?"), which also raises
+the existing input-needed notification. Declining returns an error result to
+the agent. Local creation keeps today's behavior.
 
 ## Error handling
 
@@ -334,7 +333,7 @@ Hosts.
   - `RemoteHost` + `RpcProcess` over an in-memory link
   - buffer overflow → `resync` → reconcile
   - remote path scoping and blob-hash validation
-  - `start_session` confirm gate, with `allowAgentStart` on and off
+  - `new_session` remote confirm gate, with `allowAgentStart` on and off
 - **Integration:** a real `omp-web host` process with its own `HOME` (a second
   "machine") linked to the dev server on loopback. Start a session, stream a
   reply, cut the link, reconnect, check reattach and that no frame is lost or
