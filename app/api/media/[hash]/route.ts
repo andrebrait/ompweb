@@ -41,21 +41,19 @@ export async function GET(req: Request, { params }: { params: Promise<{ hash: st
     if (!file) break;
     bytes = await readIfPresent(file);
   }
-  if (!bytes) {
-    // A remote session's image: ask the linked hosts (only bytes that hash to `hash` come back).
-    const remote = await fetchMediaFromHosts(hash);
-    if (remote) {
-      bytes = Buffer.from(remote.buffer, remote.byteOffset, remote.byteLength);
-      try {
-        storeMediaCopy(hash, remote);
-      } catch {
-        // Disk trouble: still serve it, the next request asks again.
-      }
-    }
-  }
+  // A remote session's image: ask the linked hosts (only bytes that hash to `hash` come back).
+  const remote = bytes ? null : await fetchMediaFromHosts(hash);
+  if (remote) bytes = Buffer.from(remote.buffer, remote.byteOffset, remote.byteLength);
   if (!bytes) return new Response("Not found", { status: 404 });
   const type = imageMimeType(bytes);
   if (!type) return new Response("Not an image", { status: 415 });
+  if (remote) {
+    try {
+      storeMediaCopy(hash, remote);
+    } catch {
+      // Disk trouble: still serve it, the next request asks again.
+    }
+  }
   if (thumb) {
     const preview = await createThumbnail(hash, bytes);
     if (preview) return image(preview, "image/webp");

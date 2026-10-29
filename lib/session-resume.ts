@@ -1,7 +1,7 @@
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "fs";
 import { uptime } from "os";
 import { resolve } from "path";
-import { getHost, onHostHello, orphanExit } from "./hosts/hub";
+import { getHost, isLinkUp, onHostHello } from "./hosts/hub";
 import { getAgentDir } from "./omp/paths";
 import { isValidSessionId } from "./session-file-references-core";
 import { isRecord } from "./type-guards";
@@ -197,18 +197,18 @@ export function takeInterruptedSessions(): InterruptibleSession[] {
 }
 
 /**
- * Resume remote entries once their host links: each after every orphan child
- * of that session the host still ran has exited (spec Rules → Reattach), and
- * once only. A host already linked in this run said hello before this ran; a
- * host revoked since is skipped.
+ * Resume remote entries once their host links, once only. startRpcSession
+ * waits for any orphan child of the session the host still runs (spec Rules
+ * → Reattach). A host already linked in this run said hello before this ran;
+ * a host revoked since is skipped.
  */
 export function resumeOnHostLink(entries: InterruptibleSession[], resume: (entry: InterruptibleSession) => Promise<void>): void {
   // An unhandled rejection stops the server (instrumentation.node.ts).
-  const start = (entry: InterruptibleSession) => void orphanExit(entry.hostId, entry.id).then(() => resume(entry)).catch(() => {});
+  const start = (entry: InterruptibleSession) => void resume(entry).catch(() => {});
   const waiting = new Map<string, InterruptibleSession[]>();
   for (const entry of entries) {
     const status = getHost(entry.hostId)?.status();
-    if (status === "online" || status === "omp-missing") start(entry);
+    if (status && isLinkUp(status)) start(entry);
     else if (status) waiting.set(entry.hostId, [...(waiting.get(entry.hostId) ?? []), entry]);
   }
   if (waiting.size === 0) return;

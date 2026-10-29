@@ -4,6 +4,7 @@ import { existsSync } from "fs";
 import { randomUUID } from "crypto";
 import { allowFileRoot } from "@/lib/file-access";
 import { localHost } from "@/lib/hosts/local-host";
+import { isLinkUp } from "@/lib/hosts/hub";
 import { invalidateHostSessionList } from "@/lib/hosts/session-index";
 import { invalidateSessionListCache } from "@/lib/session-reader";
 import { WebRpcError, startRpcSession } from "@/lib/rpc-manager";
@@ -18,10 +19,8 @@ function newSessionErrorResponse(error: unknown) {
   if (error instanceof SyntaxError) {
     return NextResponse.json({ error: "Invalid JSON request body", code: "invalid_json" }, { status: 400 });
   }
-  if (error instanceof WebRpcError && error.code === "host_offline") {
-    return NextResponse.json({ error: error.message, code: error.code, hostOffline: true }, { status: 503 });
-  }
-  if (error instanceof WebRpcError || error instanceof RpcCommandError) {
+  // host_offline falls through to apiErrorResponse: 503 {hostOffline: true}.
+  if ((error instanceof WebRpcError && error.code !== "host_offline") || error instanceof RpcCommandError) {
     return NextResponse.json(
       { error: error.message, code: error instanceof WebRpcError ? error.code : (error.code ?? "rpc_command_failed") },
       { status: 400 },
@@ -108,7 +107,9 @@ export async function POST(req: Request) {
       // The child was spawned but the prompt never ran: without this cleanup a
       // failed set_model/set_thinking_level/prompt leaves an orphaned omp
       // process and a registry entry nobody will ever use.
-      await session.destroyAndWait();
+      // Behind a down link the kill waits in the outbox: answer now, the child goes when the link returns.
+      const disposed = session.destroyAndWait();
+      if (isLinkUp(host.status())) await disposed;
       throw error;
     }
   } catch (error) {

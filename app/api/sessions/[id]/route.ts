@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { apiErrorResponse, opErrorResponse, resolveSessionHostOr404 } from "@/lib/api-utils";
+import { apiErrorResponse, hostOfflineResponse, opErrorResponse, resolveSessionHostOr404 } from "@/lib/api-utils";
 import { HostOpError } from "@/lib/hosts/link-protocol";
 import { invalidateHostSessionList } from "@/lib/hosts/session-index";
 import { invalidateSessionCaches } from "@/lib/session-reader";
@@ -126,6 +126,9 @@ export async function DELETE(
     if ("response" in resolved) return resolved.response;
     // Await the child's exit before unlinking: omp flushes session state on
     // shutdown and would recreate the file if it were still running.
+    // Disposing a child behind a down link would wait for the link to return.
+    const offline = hostOfflineResponse(resolved.host);
+    if (offline) return offline;
     await getRpcSession(id)?.destroyAndWait?.();
     // Live children are skipped by the re-parent rewrite: their omp process
     // owns the file and would clobber it on its next flush.

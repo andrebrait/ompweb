@@ -39,7 +39,7 @@ import type {
 } from "./pi-types";
 import type { AgentMessage, CrossSessionHostToolCall, ExitedRpcSession, ExtensionWidgetItem } from "./types";
 import type { Host, HostStatus } from "./hosts/host";
-import { getHost, RemoteRpcTransport } from "./hosts/hub";
+import { getHost, isLinkUp, linkQuietFor, orphanExit, RemoteRpcTransport } from "./hosts/hub";
 import { localHost, resolveSpawnCwdResult } from "./hosts/local-host";
 import { invalidateHostSessionList, sessionSpawnTarget } from "./hosts/session-index";
 import type { SessionLiveSnapshot, SessionLiveToolEvent, SessionStreamCursor } from "./session-sync";
@@ -477,7 +477,18 @@ export class AgentSessionWrapper {
 
   /** The host's link is down ("transport down", never "exited"): the child runs on, unreachable. */
   private hostDown(): boolean {
-    return this.host.status() !== "online";
+    return !isLinkUp(this.host.status());
+  }
+
+  private hostOfflineError(): WebRpcError {
+    return new WebRpcError(`${this.host.label} is offline. The run continues there; it reconnects automatically.`, "host_offline");
+  }
+
+  /** The command timed out because its host's link went quiet, not because omp
+   * wedged: the child runs on there, so it is not recycled (the kill would wait
+   * for the link anyway), and the reconcile on reconnect settles the run. */
+  private linkLostDuring(timeout: RpcCommandTimeoutError): boolean {
+    return this.hostDown() || linkQuietFor(this.host.id, timeout.timeoutMs);
   }
 
   /** A remote link that dropped this child's buffered output asks for a reconcile. */
@@ -1467,6 +1478,7 @@ export class AgentSessionWrapper {
         );
       }
       if (expired) {
+        if (error instanceof RpcCommandTimeoutError && this.linkLostDuring(error)) throw this.hostOfflineError();
         // Nothing on this child will ever resolve the waiter; recycle it like
         // the prompt-ack timeout path so the next request gets a fresh child.
         await this.destroyAndWait();
@@ -1658,6 +1670,7 @@ export class AgentSessionWrapper {
       return result;
     } catch (error) {
       if (error instanceof RpcCommandTimeoutError) {
+        if (this.linkLostDuring(error)) throw this.hostOfflineError();
         // A timed-out navigation may still be running in a hook. Do not let a
         // later mutation race it once the web-side fence is released.
         await this.destroyAndWait();
@@ -1780,7 +1793,7 @@ export class AgentSessionWrapper {
     if (this.restarting) throw new WebRpcError(RESTARTING_MESSAGE, "session_restarting");
     if (this.mcpListInFlight) throw new WebRpcError("MCP management is in progress. Try again when it finishes.", "session_busy");
     if (!this.isAlive()) throw new Error("Session is no longer running");
-    if (this.hostDown()) throw new WebRpcError(`${this.host.label} is offline. The run continues there; it reconnects automatically.`, "host_offline");
+    if (this.hostDown()) throw this.hostOfflineError();
     if (typeof command.type === "string" && command.type.startsWith("abort")) {
       console.info("[omp-web] cancellation-command", JSON.stringify({ sessionId: this._sessionId, type: command.type, at: new Date().toISOString() }));
     }
@@ -1865,6 +1878,7 @@ export class AgentSessionWrapper {
           this.clearLiveSnapshots();
           notifyRunningChange();
           if (error instanceof RpcCommandTimeoutError) {
+            if (this.linkLostDuring(error)) throw this.hostOfflineError();
             // The child took the frame but never acked it, so nothing will ever
             // report this run: recycle the unacknowledged prompt. A read-only
             // get_state timeout deliberately does not take this destructive path.
@@ -2606,6 +2620,9 @@ export async function startRpcSession(
     // The wrapper needs the process and the process's onExit needs the wrapper;
     // the holder breaks that cycle (onExit only fires once the child dies).
     const holder: { wrapper?: AgentSessionWrapper } = {};
+    // A child of this session the host still ran from before a restart of this
+    // server is being killed: two children must never write one session file.
+    if (sessionFile && host !== localHost) await orphanExit(host.id, sessionId);
     const spawned = await host.spawnRpc({ cwd, recordedCwd: recordedCwd ?? null, sessionFile, toolNames, advisor: advisor === true, spawnModel });
     const proc = new RpcProcess({
       cwd: spawned.cwd,

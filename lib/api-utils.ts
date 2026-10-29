@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import type { Host } from "./hosts/host";
-import { getHost } from "./hosts/hub";
+import { getHost, isLinkUp } from "./hosts/hub";
 import { HostOpError } from "./hosts/link-protocol";
 import { localHost } from "./hosts/local-host";
 import type { OpResult } from "./hosts/session-ops";
 import { hostForSessionId } from "./hosts/session-index";
+import { WebRpcError } from "./rpc-manager";
 
 const SESSION_NOT_FOUND = { error: "Session not found", code: "session_not_found" } as const;
 
@@ -18,8 +19,7 @@ export async function resolveSessionHostOr404(
 
 /** 503 `{hostOffline: true}` while a host's link is down; null when it takes requests. */
 export function hostOfflineResponse(host: Host): NextResponse | null {
-  const status = host.status();
-  if (status !== "offline" && status !== "needs-upgrade") return null;
+  if (isLinkUp(host.status())) return null;
   return apiErrorResponse(new HostOpError(503, "host_offline", `${host.label} is offline`));
 }
 
@@ -37,12 +37,14 @@ export function opErrorResponse(result: Extract<OpResult<unknown>, { ok: false }
 }
 
 /** Uniform JSON error body used by most API routes. A host link failure keeps
- * its status (503 offline, 504 timeout) and code. */
+ * its status (503 offline, 504 timeout) and code; a session whose host is
+ * offline answers 503 `{hostOffline: true}`. */
 export function apiErrorResponse(error: unknown, status = 500): NextResponse {
-  if (error instanceof HostOpError) {
+  if (error instanceof HostOpError || (error instanceof WebRpcError && error.code === "host_offline")) {
+    const offline = error.code === "host_offline";
     return NextResponse.json(
-      { error: error.message, code: error.code, ...(error.code === "host_offline" ? { hostOffline: true } : {}) },
-      { status: error.status },
+      { error: error.message, code: error.code, ...(offline ? { hostOffline: true } : {}) },
+      { status: error instanceof HostOpError ? error.status : 503 },
     );
   }
   return NextResponse.json({ error: String(error) }, { status });
