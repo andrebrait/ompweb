@@ -4,7 +4,7 @@
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 require("./node-version").exitIfUnsupportedNode();
 
-// Forward service subcommands (and `host`) from the main bin. This makes both
+// Forward service subcommands from the main bin. This makes both
 // `npx @kahme247/ompweb@latest ompweb-launchd ...` and
 // `npx @kahme247/ompweb@latest ompweb-systemd ...` work without requiring
 // callers to know the path of the secondary executable.
@@ -13,7 +13,6 @@ const forwardedServiceScripts = {
   "ompweb-launchd": "omp-web-launchd.js",
   systemd: "omp-web-systemd.js",
   "ompweb-systemd": "omp-web-systemd.js",
-  host: "omp-web-host.js",
 };
 
 // `ompweb hash-password` reads the password on stdin and prints the value for
@@ -33,6 +32,13 @@ if (process.argv[2] === "hash-password" || process.argv[2] === "hash_password") 
 }
 
 function startLauncher() {
+// `ompweb host` runs in this process: a supervisor's SIGTERM must reach the daemon, not a wrapper.
+if (process.argv[2] === "host") {
+  process.argv.splice(2, 1);
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("./omp-web-host.js");
+  return;
+}
 const forwardedServiceScript = forwardedServiceScripts[process.argv[2]];
 if (forwardedServiceScript) {
   // eslint-disable-next-line @typescript-eslint/no-require-imports

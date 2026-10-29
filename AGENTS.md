@@ -202,7 +202,7 @@ hooks/
   useBtw.ts                /btw records/active panel/history dialog fed by btw_* SSE frames
 
 bin/
-  omp-web-host.js     `ompweb host [login]`: daemon CLI; token read from stdin, never argv
+  omp-web-host.js     `ompweb host [login]`: daemon CLI; token read from stdin, never argv. `omp-web.js host` requires it in-process (no child) so SIGTERM/SIGINT reach the daemon's stop
 ```
 
 ---
