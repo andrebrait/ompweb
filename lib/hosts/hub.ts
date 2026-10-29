@@ -535,20 +535,40 @@ function request(hostId: string, op: HostOpName, args: Record<string, unknown>):
   return promise;
 }
 
-/** Shape check for daemon results other than the lists: an OpResult. */
-function validResult(op: keyof SessionOps, result: unknown): boolean {
+/** Shape check for daemon results other than the lists: an OpResult whose
+ * value has the fields main reads (a 500 TypeError in a route otherwise). */
+function validResult(op: keyof SessionOps, result: unknown, args: unknown[]): boolean {
   if (!isRecord(result)) return false;
   if (result.ok === false) return isStatus(result.status) && typeof result.code === "string" && typeof result.error === "string";
   if (result.ok !== true || !("value" in result)) return false;
-  // Media bytes only ever arrive through the blob leg.
-  if (op === "readMedia") return result.value instanceof Uint8Array;
-  // Main uses these paths (spawn cwd, project keys): they must be strings.
-  if (op === "validateCwd") return isRecord(result.value) && typeof result.value.cwd === "string" && typeof result.value.projectRoot === "string";
-  return true;
+  const { value } = result;
+  switch (op) {
+    // Media bytes only ever arrive through the blob leg.
+    case "readMedia":
+      return value instanceof Uint8Array;
+    // Main uses these paths (spawn cwd, project keys): they must be strings.
+    case "validateCwd":
+      return isRecord(value) && typeof value.cwd === "string" && typeof value.projectRoot === "string";
+    case "exportSession":
+      return isRecord(value) && typeof value.html === "string" && typeof value.fileName === "string";
+    case "readSession":
+      return isRecord(value) && isRecord(value.info) && isRecord(value.context);
+    case "readContext": {
+      // The context route reads a different shape per mode.
+      const options = isRecord(args[2]) ? args[2] : {};
+      if (!isRecord(value)) return false;
+      if (options.boundary) return Array.isArray(value.entryIds);
+      if (options.sync) return isRecord(value.history) && nullableString(value.leafId) && nullableString(value.tipId);
+      return isRecord(value.context);
+    }
+    default:
+      return true;
+  }
 }
 
 const optionalString = (value: unknown) => value === undefined || typeof value === "string";
 const optionalNumber = (value: unknown) => value === undefined || (typeof value === "number" && Number.isFinite(value));
+const nullableString = (value: unknown) => value === null || typeof value === "string";
 
 /** A daemon's session-list entry reduced to SessionInfo's fields; null when one has the wrong type. */
 function sessionEntry(value: unknown): SessionInfo | null {
@@ -591,7 +611,7 @@ function remoteSessionOps(hostId: string): SessionOps {
       const list: ((value: unknown) => object | null) | null = op === "listSessions" ? sessionEntry : op === "listProjects" ? projectEntry : null;
       // Untrusted list entries: malformed ones are dropped, the rest keep only their known fields.
       if (list && Array.isArray(result)) return result.map(list).filter((entry) => entry !== null);
-      if (!list && validResult(op, result)) return result;
+      if (!list && validResult(op, result, args)) return result;
       throw new HostOpError(502, "host_bad_result", `${labelOf(hostId)} sent an invalid ${op} result`);
     };
   }
