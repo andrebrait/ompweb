@@ -1,4 +1,4 @@
-// Main-server end of the host link (spec "Link protocol"): accepts `omp-web
+// Main-server end of the host link (spec "Link protocol"): accepts `ompweb
 // host` daemons on /api/hosts/link and exposes each linked machine as a
 // `RemoteHost`. Everything a daemon sends is untrusted input.
 // No `next/*` or `@/` imports.
@@ -50,6 +50,8 @@ interface PendingOp {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  /** Downlink seq of its `req`; dropped from the outbox when the op fails, so it never runs after. */
+  seq: number;
   /** Result bytes uploaded on the blob leg ahead of their `res`. */
   blob: Uint8Array<ArrayBuffer> | null;
 }
@@ -159,15 +161,31 @@ function enqueue(link: Link, line: string): void {
   }
 }
 
-/** Number, keep until acked, and send. Throws LinkLimitError before recording anything. */
-function sendDown(link: Link, body: Unsequenced<DownMessage>): void {
+/** Number, keep until acked, and send; returns the seq. Throws LinkLimitError before recording anything. */
+function sendDown(link: Link, body: Unsequenced<DownMessage>): number {
   const seq = link.downSeq + 1;
   const line = encodeLine({ ...body, seq } as DownMessage);
   link.downSeq = seq;
   link.outbox.push({ seq, line });
   enqueue(link, line);
+  return seq;
 }
 
+/** Fail an op for good: a `req` not yet acked is never resent (one already written may still run). */
+function failOp(link: Link, id: string, error: Error): void {
+  const pending = link.pending.get(id);
+  if (!pending) return;
+  link.pending.delete(id);
+  clearTimeout(pending.timer);
+  link.outbox.drop((m) => m.seq === pending.seq);
+  pending.reject(error);
+}
+
+function failAllOps(link: Link, error: () => Error): void {
+  for (const id of [...link.pending.keys()]) failOp(link, id, error());
+}
+
+/** The downlink is gone: ops in flight fail now rather than at their timeout. */
 function endStream(link: Link): void {
   const stream = link.stream;
   link.stream = null;
@@ -176,6 +194,7 @@ function endStream(link: Link): void {
   } catch {
     // Already closed.
   }
+  failAllOps(link, () => new HostOpError(503, "host_offline", `${labelOf(link.id)} is offline`));
 }
 
 function stopTimers(link: Link): void {
@@ -247,14 +266,14 @@ export async function handleLinkGet(req: Request): Promise<Response> {
   // Compared before decoding: another protocol version may shape its hello differently.
   const version = isRecord(raw) ? raw.v : undefined;
   if (version !== LINK_PROTOCOL_VERSION) {
-    // Kept for Settings: "needs upgrade (host vN, server vM)".
-    link.hostVersion = typeof version === "number" && Number.isInteger(version) ? version : null;
-    setStatus(link, "needs-upgrade");
-    return json({
-      error: "Link protocol version mismatch",
-      hostVersion: link.hostVersion,
-      serverVersion: LINK_PROTOCOL_VERSION,
-    }, 426);
+    const hostVersion = typeof version === "number" && Number.isInteger(version) ? version : null;
+    // A stray old daemon with this token must not take down the healthy link.
+    if (!link.stream) {
+      // Kept for Settings: "needs upgrade (host vN, server vM)".
+      link.hostVersion = hostVersion;
+      setStatus(link, "needs-upgrade");
+    }
+    return json({ error: "Link protocol version mismatch", hostVersion, serverVersion: LINK_PROTOCOL_VERSION }, 426);
   }
   let hello: UpMessage;
   try {
@@ -462,15 +481,13 @@ function request(hostId: string, op: HostOpName, args: Record<string, unknown>):
   }
   const { promise, resolve, reject } = Promise.withResolvers<unknown>();
   const id = randomUUID();
-  const timer = setTimeout(() => {
-    link.pending.delete(id);
-    reject(new HostOpError(504, "host_timeout", `${label} did not answer ${op} in time`));
-  }, linkTimings.opTimeoutMs);
+  const timer = setTimeout(() => failOp(link, id, new HostOpError(504, "host_timeout", `${label} did not answer ${op} in time`)), linkTimings.opTimeoutMs);
   // A deadline, like the ping and offline timers: never what keeps the server running.
   timer.unref?.();
-  link.pending.set(id, { op, resolve, reject, timer, blob: null });
+  const pending: PendingOp = { op, resolve, reject, timer, seq: 0, blob: null };
+  link.pending.set(id, pending);
   try {
-    sendDown(link, { type: "req", id, op, args });
+    pending.seq = sendDown(link, { type: "req", id, op, args });
   } catch (error) {
     clearTimeout(timer);
     link.pending.delete(id);
@@ -826,11 +843,8 @@ export function closeHostLink(id: string): void {
   if (!link) return;
   hub().links.delete(id);
   stopTimers(link);
+  failAllOps(link, () => new HostOpError(503, "host_offline", "The host link was closed"));
   endStream(link);
-  for (const pending of link.pending.values()) {
-    clearTimeout(pending.timer);
-    pending.reject(new HostOpError(503, "host_offline", "The host link was closed"));
-  }
   // Nothing will report these children again.
   for (const transport of link.channels.values()) transport.deliverExit(null, null);
   setStatus(link, "offline");
