@@ -742,11 +742,10 @@ export function isLinkUp(status: HostStatus): boolean {
   return status === "online" || status === "omp-missing";
 }
 
-/** A linked host sent nothing for `ms` (and for two ping rounds, so a healthy
- * link's pongs always count): its link is down even before it is marked offline. */
-export function linkQuietFor(hostId: string, ms: number): boolean {
+/** When the host last sent anything on its uplink (pongs included); null when it has no link here. */
+export function lastUplinkAt(hostId: string): number | null {
   const lastSeenAt = hub().links.get(hostId)?.lastSeenAt;
-  return !!lastSeenAt && Date.now() - Date.parse(lastSeenAt) >= Math.max(ms, 2 * linkTimings.pingMs);
+  return lastSeenAt ? Date.parse(lastSeenAt) : null;
 }
 
 export function onHostsChange(listener: () => void): () => void {
@@ -767,14 +766,30 @@ export function onHostHello(listener: (hostId: string, channels: HelloChannel[])
   };
 }
 
-/** Resolves once every orphan of `sessionId` the host listed in a hello has exited. */
+/** Resolves once every orphan of `sessionId` the host listed in a hello has exited.
+ * Rejects with 503 if the host goes offline first: waiting through an outage
+ * would hold the session's start lock until the host redials. */
 export async function orphanExit(hostId: string, sessionId: string): Promise<void> {
-  const orphans = [...(hub().links.get(hostId)?.channels.values() ?? [])].filter((transport) => transport.sessionId === sessionId);
-  await Promise.all(orphans.map((orphan) => {
-    const { promise, resolve } = Promise.withResolvers<void>();
-    orphan.onExit(() => resolve());
-    return promise;
-  }));
+  const link = hub().links.get(hostId);
+  const orphans = [...(link?.channels.values() ?? [])].filter((transport) => transport.sessionId === sessionId);
+  if (!link || orphans.length === 0) return;
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  const onStatus = (status: HostStatus) => {
+    if (!isLinkUp(status)) reject(new HostOpError(503, "host_offline", `${labelOf(hostId)} is offline`));
+  };
+  onStatus(link.status);
+  link.statusListeners.add(onStatus);
+  let running = orphans.length;
+  for (const orphan of orphans) {
+    orphan.onExit(() => {
+      if (--running === 0) resolve();
+    });
+  }
+  try {
+    await promise;
+  } finally {
+    link.statusListeners.delete(onStatus);
+  }
 }
 
 /** End a host's link now (revoke). Its daemon gets 401 when it redials and stops its children. */
