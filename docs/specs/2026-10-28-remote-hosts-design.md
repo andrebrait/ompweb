@@ -62,16 +62,17 @@ it runs omp-web's own `lib/` server code on the remote machine.
 - It spawns `omp --mode rpc-ui` children on request and forwards their NDJSON
   both ways unchanged, tagged with a channel id.
 - It answers host ops (below) by calling the existing `lib/` functions.
-  There is no generic exec or file-read op.
+  There is no generic exec or file-read op. It loads that code with `jiti`,
+  already a runtime dependency used by `bin/` to load `lib/*.ts`.
 - omp children outlive a dropped link; their output is buffered (see Link).
-- It owns auto-resume for its own sessions: the existing
-  `lib/session-resume.ts` mechanism runs inside the daemon with the daemon's pid,
-  following the main omp-web's `autoResumeSessions` setting, which it receives
-  in the `hello` response.
+- Auto-resume stays with the main omp-web, which already knows which sessions
+  are mid-run. Its interrupted-session list records each session's `hostId`;
+  remote entries are resumed once their host links again (see Rules →
+  Reattach).
 
 ### Host hub (main omp-web)
 
-`lib/host-hub.ts` accepts daemon links on `/api/hosts/link` and keeps a
+`lib/hosts/hub.ts` accepts daemon links on `/api/hosts/link` and keeps a
 `globalThis` registry `hostId → link`, the same pattern as `lib/rpc-manager.ts`
 (survives hot reload).
 
@@ -79,9 +80,14 @@ it runs omp-web's own `lib/` server code on the remote machine.
 
 `lib/hosts/host.ts` defines the one seam between omp-web and a machine:
 
-- `spawnRpc(options) → RpcTransport`: what `RpcProcess` writes to and reads
-  from.
-- One async method per host op.
+- `spawnRpc(request) → { transport, cwd, fellBack, launchAdvisor }`: the host
+  computes the spawn cwd fallback, project launch config, environment
+  overrides and arguments on its own machine; `transport` is what `RpcProcess`
+  writes to and reads from.
+- `sessionFileExists(path)`, `invalidateSessionLists(path?)` and
+  `autoApproveExtension()`: the remaining machine-local reads
+  `AgentSessionWrapper` does today.
+- `sessionOps`: the session-file operations (see Host ops).
 - `status`: `online | offline | needs-upgrade | omp-missing`.
 
 Two implementations:
@@ -109,10 +115,14 @@ renames; revokes; toggles `allowAgentStart`.
 
 ### Routing
 
-Every `SessionInfo` carries `hostId`. Session ids are UUIDs, so they do not
-collide across hosts. `listAllSessions()` merges every host's list;
-API routes resolve `id → hostId` from that merged list once and call the
-owning host. A session whose host is unknown (revoked) is not listed.
+Every `SessionInfo` carries `hostId`. API routes resolve `id → host` once
+(`resolveSessionHostOr404`, replacing `resolveSessionPathOr404`) and call that
+host's `sessionOps` with the session id; the host resolves the file path
+itself, so main never sends a remote path. A session whose host is unknown
+(revoked) is not listed. Session ids are UUIDs, but a sessions directory
+copied between machines repeats them: an id present on several hosts is
+listed once, under "This machine" if it is local, else under the first host
+by label.
 
 ## Link protocol
 
@@ -130,13 +140,18 @@ two HTTP legs, both opened by the daemon (which also works behind NAT):
 
 ### Messages
 
-One JSON object per line.
+One JSON object per line. Every message except `hello`, `welcome`, `ping` and
+`pong` carries a per-direction sequence number `seq`, and every uplink POST and
+`hello` carries `ack` (the highest downlink `seq` the daemon applied); every
+POST response carries `ack` (the highest uplink `seq` main applied). Each side
+keeps unacknowledged messages, resends them after a reconnect, and drops any
+`seq` it already applied, so no line is lost or applied twice when a leg
+breaks mid-write. stdin lines omp has not received would otherwise vanish.
 
 | Message | Direction | Purpose |
 |---|---|---|
-| `hello {v, ompVersion, platform, home, channels[]}` | up | Handshake; `channels` lists live omp children from before a reconnect. `ompVersion` is `null` when `omp` is not found. |
-| `welcome {v, hostId, settings}` | down | Accepted; `settings` carries `autoResumeSessions`. |
-| `open {ch, sessionId?, cwd, args}` | down | Spawn `omp --mode rpc-ui`. |
+| `hello {v, ompVersion, platform, home, ack, channels[{ch, sessionId}]}` | up | Handshake; `channels` lists live omp children from before a reconnect. `ompVersion` is `null` when `omp` is not found. |
+| `welcome {v, hostId}` | down | Accepted. |
 | `stdin {ch, line}` | down | One raw omp NDJSON line. |
 | `stdout {ch, line}` | up | One raw omp NDJSON line. |
 | `stderr {ch, chunk}` | up | Child stderr, for the existing logging. |
@@ -164,36 +179,49 @@ One JSON object per line.
   and sends `resync {ch}` after reconnecting; main then runs the existing
   `get_state` reconcile for that session.
 - **Reattach.** On `hello`, main reattaches every listed `ch` to its
-  `AgentSessionWrapper`. A wrapper whose channel is missing from `hello` gets a
-  synthesized `process_exit`. A wrapper whose host link is down is in a
-  "transport down" state, never "process exited"; its idle
+  `AgentSessionWrapper` and kills (`kill`) listed channels it has no wrapper
+  for (orphans of a main restart). A wrapper whose channel is missing from
+  `hello` gets a synthesized `process_exit`. A wrapper whose host link is down
+  is in a "transport down" state, never "process exited"; its idle
   (`IDLE_DESTROY_MS`) and disconnect (`DISCONNECT_DESTROY_MS`) timers pause
-  until the link returns.
-- **Binary results.** Op results over 1 MB (blobs, thumbnails) are sent as
-  raw bytes to `POST /api/hosts/link/blob/<reqId>`, never as base64 inside
-  NDJSON.
+  until the link returns. With `autoResumeSessions` on, a session that was
+  mid-run when its channel went missing or was killed as an orphan is
+  restarted on that host (after the orphan's `exit`) and sent `RESUME_PROMPT`,
+  as local sessions are after a restart.
+- **Large results.** An op result whose JSON exceeds 1 MB, and every
+  `readMedia` result, is sent as raw bytes to
+  `POST /api/hosts/link/blob/<reqId>` instead of inside NDJSON; the `res` line
+  then carries `{blob: true, bytes}`.
 - **Limits.** Uplink batches are capped at 16 MB and blob uploads at 64 MB;
   over-limit requests get 413. A single `stdout` line over 8 MB closes that
   channel with `resync`.
 
 ## Host ops (this sub-project)
 
-Each op runs the existing `lib/` function on the daemon's machine and returns
-what that function returns today.
+Every op name is in one allow-list shared by both sides; the daemon rejects
+anything else. Session ops take the session id and run the file-reading part
+of today's route handlers, moved into `lib/hosts/session-ops.ts`, which
+`LocalHost` calls directly and the daemon calls for `RemoteHost`. Live-wrapper
+parts of those routes stay on main.
 
-| Op | Backing code |
+| Op | Moved from |
 |---|---|
 | `listSessions` | `listAllSessions()` (`lib/session-reader.ts`) |
-| `readSession {id}` | session file load (`lib/session-reader.ts`) |
-| `readContext {id, leafId}` | `buildSessionContext` |
-| `readSubagentHistory {id}` | `extractSubagentHistory` (`lib/subagent-history.ts`) |
-| `readSubagentTranscript {id, subagentId, mode, cursor}` | `/api/sessions/[id]/subagents*` readers |
-| `readBlob {hash}` | omp blob store / `lib/media-cache.ts` source lookup |
-| `renameSession {id, title}` | existing rename path |
-| `deleteSession {id}` | existing delete path |
-| `exportSession {id}` | `/api/sessions/[id]/export` renderer |
-| `listProjects` / `addProject {path}` / `hideProject {path}` | `lib/project-registry.ts` |
-| `validateCwd {path}` | `/api/cwd/validate` logic |
+| `readSession {id, options}` | `GET /api/sessions/[id]` |
+| `readContext {id, leafId, options}` | `GET /api/sessions/[id]/context` |
+| `readThinking {id, entryId, block}` | `GET /api/sessions/[id]/entries/[entryId]/thinking` |
+| `readSessionState {id}` | `GET /api/sessions/[id]/state` |
+| `readSubagentHistory {id}` | `GET /api/sessions/[id]/subagents` |
+| `readSubagentTranscript {id, subagentId, mode, cursor}` | `GET /api/sessions/[id]/subagents/[subagentId]` |
+| `renameSessionFile {id, title}` | `PATCH /api/sessions/[id]` on-disk fallback |
+| `deleteSession {id}` | `DELETE /api/sessions/[id]` |
+| `archiveSession {id}` | `POST /api/sessions/[id]/archive` |
+| `exportSession {id}` | `GET /api/sessions/[id]/export` |
+| `readMedia {hash}` | `mediaFilePath()` (`lib/media-cache.ts`) |
+| `listProjects` / `addProject {path}` / `updateProject {path, updates}` / `hideProject {path}` | `/api/projects` |
+| `validateCwd {path}` | `/api/cwd/validate` |
+| `spawn {ch, cwd, sessionFile, toolNames, advisor}` | `startRpcSession` spawn |
+| `sessionFileExists {path}` / `invalidateSessionLists {path}` | `AgentSessionWrapper` |
 
 Op timeout: 30 s, then 504 naming the host.
 
@@ -203,12 +231,17 @@ Op timeout: 30 s, then 504 naming the host.
   each host's list separately (30 s TTL, matching the local list cache). An
   `agent_end`, `session_info_update`, compaction or rename on a host
   invalidates only that host's cache. An offline host keeps its last list.
-- **Open a session.** Resolve `id → hostId`, call `host.readSession`.
+- **Open a session.** Resolve `id → host`, call `host.sessionOps.readSession`.
 - **Send a message.** `startRpcSession()` asks the session's host for a
   transport (`host.spawnRpc`); everything above `RpcProcess` is unchanged.
-- **Images.** `lib/media-cache.ts` fetches a remote blob through `readBlob`
-  and stores the copy in the main omp-web's media directory, so
-  `/api/media/<hash>` serves remote and local images the same way.
+- **Images.** On a local miss, `/api/media/<hash>` asks each online remote
+  host for `readMedia {hash}`, accepts the first answer whose sha256 equals
+  the hash, and stores it in the main omp-web's media directory, so later
+  requests are local. No host id rides in image URLs.
+- **Host status.** A new `hosts` event-stream channel publishes host status
+  changes (sidebar dots, Settings → Hosts). Each wrapper on a host also emits
+  a `host_status {status}` frame on its `session` channel when the link drops
+  or returns, which drives the offline banner.
 - **Live events.** Unchanged: the `running`, `session`, `notifications` and
   `host-tools` channels carry wrapper frames regardless of host.
 
@@ -251,6 +284,9 @@ machine already has. The rules below limit anything beyond it.
   (computed on its machine from its session cwds and project registry); it
   never trusts a path because main sent it. `validateCwd` and `addProject` are
   how a new root becomes allowed, as `allowFileRoot()` does locally.
+  `sessionFileExists` and `invalidateSessionLists` accept only paths inside
+  the daemon's sessions directory (`getAgentDir()/sessions`); `spawn` accepts
+  a `sessionFile` only from the same directory.
 
 ## Agent-initiated sessions
 
@@ -279,7 +315,7 @@ Hosts.
 |---|---|
 | No `pong` for 30 s | Host is offline. Its sessions show a banner: "<host> is offline. The run continues there; it reconnects automatically." Sends return 503 `{hostOffline: true}`; the composer keeps the draft and shows a toast. |
 | Link returns, children alive | Wrappers reattach; `get_state` reconcile runs; `resync` channels reconcile too. |
-| Daemon restarted, children gone | Synthesized `process_exit` per missing channel, which raises the existing "Run failed" notification. If the daemon's auto-resume restarts the session, the wrapper rebinds by session id. |
+| Daemon restarted, children gone | Synthesized `process_exit` per missing channel, which raises the existing "Run failed" notification. With `autoResumeSessions` on, main restarts sessions that were mid-run and sends `RESUME_PROMPT` (Rules → Reattach). |
 | Second daemon with the same token | Newest link wins; the old daemon receives `replaced` and exits. |
 | Host op over 30 s | 504 naming the host; the sidebar keeps that host's last list. |
 | Version mismatch | 426; host status `needs-upgrade`. |
