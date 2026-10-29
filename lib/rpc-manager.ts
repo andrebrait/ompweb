@@ -33,7 +33,7 @@ import type {
 } from "./pi-types";
 import type { AgentMessage, CrossSessionHostToolCall, ExitedRpcSession, ExtensionWidgetItem } from "./types";
 import { isLinkUp, type Host, type HostStatus } from "./hosts/host";
-import { getHost, lastUplinkAt, listHosts, orphanExit, RemoteRpcTransport } from "./hosts/hub";
+import { getHost, lastUplinkAt, listHosts, orphanExit } from "./hosts/hub";
 import { localHost } from "./hosts/local-host";
 import type { OpResult } from "./hosts/session-ops";
 import { hostForSessionId, invalidateHostSessionList, listSessionsAllHosts, sessionSpawnTarget } from "./hosts/session-index";
@@ -491,11 +491,10 @@ export class AgentSessionWrapper {
     return lastUplink !== null && (this.hostDown() || lastUplink <= timeout.dispatchedAt);
   }
 
-  /** A remote link that dropped this child's buffered output asks for a reconcile. */
+  /** A remote link that dropped this child's buffered output asks for a reconcile.
+   * Duck-typed: route bundles and instrumentation load separate hub modules. */
   private watchResync(proc: RpcProcess): void {
-    const transport = proc.transport;
-    if (!(transport instanceof RemoteRpcTransport)) return;
-    transport.onResync(() => {
+    proc.transport?.onResync?.(() => {
       if (this.proc === proc) void this.reconcileAfterGap();
     });
   }
@@ -739,8 +738,7 @@ export class AgentSessionWrapper {
     const status = signal ? `signal ${signal}` : `code ${code ?? "null"}`;
     // Spec Rules → Reattach: a run whose child vanished while its host link was
     // down starts again on that host, like a local run after a restart.
-    const transport = sourceProc.transport;
-    const resume: InterruptibleSession | null = transport instanceof RemoteRpcTransport && transport.lost && this._sessionId && (this.streaming || this.promptRunning)
+    const resume: InterruptibleSession | null = sourceProc.transport?.lost === true && this._sessionId && (this.streaming || this.promptRunning)
       ? { id: this._sessionId, advisor: this.advisorSpawned, hostId: this.host.id }
       : null;
     // Recorded before destroy(): its running-change broadcast must carry the
@@ -2246,7 +2244,7 @@ export class AgentSessionWrapper {
   async destroyAndWait(reason = "unspecified"): Promise<void> {
     // Re-entrant calls join the in-flight dispose; without this a new spawn
     // can overlap the old child's shutdown (see startRpcSession).
-    if (this.destroyPromise) return this.destroyPromise;
+    if (this.destroyPromise) return untilHostDown(this.host, this.destroyPromise);
     if (!this._alive) return;
     console.info("[omp-web] session-dispose", JSON.stringify({ sessionId: this._sessionId, reason, running: this.isRunning(), pendingDialogs: this.pendingUiRequests.size, at: new Date().toISOString(), caller: new Error().stack?.split("\n").slice(2, 5).map((line) => line.trim()) }));
     this._alive = false;
@@ -2278,16 +2276,28 @@ export class AgentSessionWrapper {
       this.mcpListWaiter.reject(new Error("Session was closed while loading MCP servers"));
       this.mcpListWaiter = null;
     }
-    const disposed = this.proc.dispose().catch(() => {});
+    // The registry drops this wrapper only once the child has really exited.
+    const disposed = this.proc.dispose().catch(() => {}).then(() => this.onDestroyCallback?.());
     this.destroyPromise = disposed;
     this.pendingHostTools.clear();
     this.hostToolNames.clear();
     this.pendingHostUris.clear();
     this.hostUriSchemes.clear();
     notifyRunningChange();
-    await disposed;
-    this.onDestroyCallback?.();
+    await untilHostDown(this.host, disposed);
   }
+}
+
+/** `promise`, or sooner once `host`'s link is down: a child behind a dropped
+ * link exits only when it returns, and nothing may wait that long. */
+function untilHostDown(host: Host, promise: Promise<void>): Promise<void> {
+  if (!isLinkUp(host.status())) return Promise.resolve();
+  const { promise: settled, resolve } = Promise.withResolvers<void>();
+  const unsubscribe = host.onStatus((status) => {
+    if (!isLinkUp(status)) resolve();
+  });
+  void promise.then(resolve);
+  return settled.finally(unsubscribe);
 }
 
 // ============================================================================
@@ -2381,7 +2391,8 @@ export function getLiveRpcSessionIds(): string[] {
 /** Stop all live omp children after an explicit runtime update. The browser will
  * reconnect sessions on demand and start them with the updated executable. */
 export async function restartAllRpcSessions(): Promise<number> {
-  const sessions = [...new Set(getRegistry().values())];
+  // An update changes this machine's omp only; remote runs keep going.
+  const sessions = [...new Set(getRegistry().values())].filter((session) => session.host.id === localHost.id);
   await Promise.all(sessions.map((session) => session.destroyAndWait()));
   return sessions.length;
 }
@@ -2673,7 +2684,7 @@ export async function startRpcSession(
   // A wrapper whose omp child is still flushing/exiting must fully dispose
   // before a replacement spawns — two children touching the same .jsonl would
   // race on resume/delete/archive.
-  if (existing?.destroyPromise) await existing.destroyPromise;
+  if (existing?.destroyPromise) await untilHostDown(existing.host, existing.destroyPromise);
 
   // omp >= 18.5 lets only one process own a session file; a second `--resume`
   // child would fork into a new nested session on its first write. Reuse the
