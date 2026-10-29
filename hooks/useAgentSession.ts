@@ -15,10 +15,12 @@ import type {
 import { normalizeToolCalls } from "@/lib/normalize";
 import { hasVisibleAssistantContent } from "@/lib/assistant-response";
 import type { ThinkingModelMeta } from "@/lib/thinking-levels";
-import { sendAgentCommand, setSessionAdvisorSpawn } from "@/lib/agent-client";
+import { HostOfflineError, sendAgentCommand, setSessionAdvisorSpawn } from "@/lib/agent-client";
+import type { HostStatus } from "@/lib/hosts/host";
 import { parseSkillDiagnosticsSnapshot, type SkillDiagnosticsSnapshot } from "@/lib/skill-diagnostics";
 import { clearDraft, getDraft, mergeRecoveredText, recoverDraft, setDraft, toDraftImages, type ChatDraft, type ChatDraftImage } from "@/lib/draft-store";
 import { formatExitedSessionNotice, translate } from "@/lib/i18n";
+import { formatApiError } from "@/lib/i18n/api-error";
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import { toastBtwError, useBtw } from "@/hooks/useBtw";
 import { createMessageUpdateCoalescer, type MessageUpdateCoalescer } from "@/lib/message-update-coalescer";
@@ -177,6 +179,8 @@ function readTerminalAgentError(event: AgentEvent): string | null {
 export interface UseAgentSessionOptions {
   session: SessionInfo | null;
   newSessionCwd: string | null;
+  /** Host a fresh chat is created on; a started session carries its own `hostId`. This machine when absent. */
+  newSessionHostId?: string;
   advisorEnabled?: boolean;
   onAgentEnd?: () => void;
   onSessionCreated?: (session: SessionInfo) => void;
@@ -199,7 +203,7 @@ export interface UseAgentSessionOptions {
 
 export function useAgentSession(opts: UseAgentSessionOptions) {
   const {
-    session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, onSessionMoved,
+    session, newSessionCwd, newSessionHostId, onAgentEnd, onSessionCreated, onSessionForked, onSessionMoved,
     modelsRefreshKey, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsPanelOpen,
     onOpenFile, onOpenUrl,
   } = opts;
@@ -221,6 +225,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const streamStateRef = useRef(streamState);
   streamStateRef.current = streamState;
   const [agentRunning, setAgentRunning] = useState(false);
+  // The latest link-status change the session's host reported; tagged with the
+  // session so a frame never outlives the chat it described.
+  const [hostFrame, setHostFrame] = useState<{ sessionId: string | null; status: HostStatus } | null>(null);
   const [bashRunning, setBashRunning] = useState(false);
   const [pendingBash, setPendingBash] = useState<{ command: string; excludeFromContext: boolean } | null>(null);
   // False once this hook instance unmounts: background loops (prompt/bash
@@ -1007,8 +1014,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       modified: new Date().toISOString(),
       messageCount,
       firstMessage,
+      ...(newSessionHostId ? { hostId: newSessionHostId } : {}),
     });
-  }, [isNew, newSessionCwd, onSessionCreated]);
+  }, [isNew, newSessionCwd, newSessionHostId, onSessionCreated]);
 
   // Assigned after connectEvents is defined. A runtime created for an empty
   // chat emits its startup frames before any stream exists, so it must be
@@ -1029,6 +1037,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           cwd: newSessionCwd,
+          ...(newSessionHostId ? { hostId: newSessionHostId } : {}),
           type: "ensure_session",
           toolNames,
           ...(selectedModel ? { provider: selectedModel.provider, modelId: selectedModel.modelId } : {}),
@@ -1036,7 +1045,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           ...(advisorEnabled ? { advisor: true } : {}),
         }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const failure = await res.json().catch(() => ({})) as { error?: string; code?: string; hostOffline?: boolean };
+        if (res.status === 503 && failure.hostOffline) throw new HostOfflineError(formatApiError(failure));
+        throw new Error(`HTTP ${res.status}`);
+      }
       const result = await res.json() as { sessionId: string };
       const realId = result.sessionId;
       sessionIdRef.current = realId;
@@ -1064,7 +1077,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       ensuringNewSessionRef.current = null;
     }
-  }, [advisorEnabled, isNew, newSessionCwd, newSessionModel, newSessionDefaultModel, toolPreset, thinkingLevel]);
+  }, [advisorEnabled, isNew, newSessionCwd, newSessionHostId, newSessionModel, newSessionDefaultModel, toolPreset, thinkingLevel]);
 
   // The system panel may initialize a dormant session, but must not create a
   // prompt or model run just to inspect the resolved system prompt.
@@ -2005,6 +2018,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         applySkillDiagnosticsSnapshot(revision, event.data);
         break;
       }
+      case "host_status":
+        setHostFrame({ sessionId: sessionIdRef.current, status: event.status as HostStatus });
+        break;
       case "queue_update": {
         const snapshot = readQueueSnapshot(event);
         if (snapshot) {
@@ -2850,12 +2866,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // Every failure here (stream connect, startup, set_model, or the prompt
       // POST itself) means the prompt never started, so roll back the optimistic bubble.
       setOptimisticUserMessage(null);
-      addNotice({
-        type: "error",
-        message: e instanceof EventStreamConnectionError
-          ? e.message
-          : translate("agentSession.sendFailed", { detail: e instanceof Error ? e.message : String(e) }),
-      });
+      if (e instanceof HostOfflineError) {
+        toast.error(translate("agentSession.hostOfflineSend", { detail: e.message }));
+      } else {
+        addNotice({
+          type: "error",
+          message: e instanceof EventStreamConnectionError
+            ? e.message
+            : translate("agentSession.sendFailed", { detail: e instanceof Error ? e.message : String(e) }),
+        });
+      }
       // The composer owns refused-send recovery (text, file contents and images)
       // using the draft key captured at submission, including after navigation.
       agentRunningRef.current = false;
@@ -4088,6 +4108,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setSessionStatsOverride(null);
   }, [messages.length, contextUsage?.tokens, contextUsage?.percent, contextUsage?.contextWindow]);
 
+  const hostStatus = hostFrame && hostFrame.sessionId === sessionIdRef.current ? hostFrame.status : null;
+
   return {
     // State
     data, loading, error, activeLeafId, messages, entryIds, showPreCompactionHistory, streamState,
@@ -4095,7 +4117,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     liveModelMeta,
     retryInfo, contextUsage, systemPrompt, skillDiagnostics, forkingEntryId, editingEntryId,
     isCompacting, compactError, compactResult, tokensPerSecond, currentModel, displayModel, isAutoModelSelection: !displayModel, sessionStats, agentPhase,
-    slashCommands, slashCommandsLoading, queuedMessages,
+    slashCommands, slashCommandsLoading, queuedMessages, hostStatus,
     notices: noticeState.visible, dismissNotice, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
     advisorActive: advisorActiveAt > 0, advisorEnabled, handleAdvisorChange,
     subagents, subagentEvents, subagentTranscriptVersions, activeSubagentCount, currentTodoPhase, todoPhases,

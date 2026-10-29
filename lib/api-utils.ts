@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import type { Host } from "./hosts/host";
-import { getHost, isLinkUp } from "./hosts/hub";
+import { isLinkUp, type Host } from "./hosts/host";
+import { getHost } from "./hosts/hub";
 import { HostOpError } from "./hosts/link-protocol";
 import { localHost } from "./hosts/local-host";
 import type { OpResult } from "./hosts/session-ops";

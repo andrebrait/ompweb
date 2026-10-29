@@ -10,7 +10,7 @@ import type { ProjectRegistryEntry } from "../project-registry";
 import { isValidSessionId } from "../session-file-references-core";
 import { isRecord } from "../type-guards";
 import type { SessionInfo } from "../types";
-import type { Host, HostStatus, SpawnRequest, SpawnResult } from "./host";
+import { isLinkUp, type Host, type HostStatus, type SpawnRequest, type SpawnResult } from "./host";
 import {
   decodeUp,
   encodeLine,
@@ -768,12 +768,6 @@ export async function hostsSnapshot(): Promise<{ hosts: HostRow[] }> {
 /** Tell `hosts` subscribers the registry changed (rename, toggle, revoke); link changes notify on their own. */
 export function notifyHostsChange(): void {
   notify(hub().changeListeners);
-}
-
-/** The link carries traffic: sends, ops and children work. An omp-missing host
- * is linked too; only spawning there fails, with its own error. */
-export function isLinkUp(status: HostStatus): boolean {
-  return status === "online" || status === "omp-missing";
 }
 
 /** When the host last sent anything on its uplink (pongs included); null when it has no link here. */

@@ -1,7 +1,8 @@
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "fs";
 import { uptime } from "os";
 import { resolve } from "path";
-import { getHost, isLinkUp, onHostHello } from "./hosts/hub";
+import { isLinkUp } from "./hosts/host";
+import { getHost, onHostHello } from "./hosts/hub";
 import { getAgentDir } from "./omp/paths";
 import { isValidSessionId } from "./session-file-references-core";
 import { isRecord } from "./type-guards";

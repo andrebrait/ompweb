@@ -3,6 +3,12 @@ import type { SessionOps } from "./session-ops";
 
 export type HostStatus = "online" | "offline" | "needs-upgrade" | "omp-missing";
 
+/** The link carries traffic: sends, ops and children work. An omp-missing host
+ * is linked too; only spawning there fails, with its own error. */
+export function isLinkUp(status: HostStatus): boolean {
+  return status === "online" || status === "omp-missing";
+}
+
 export interface SpawnRequest {
   cwd: string;
   recordedCwd: string | null;

@@ -38,10 +38,17 @@ import {
   VISIBLE_PAGE_SIZE,
 } from "@/lib/chat-lazy-load";
 import { getDraftSummary, type ChatDraft } from "@/lib/draft-store";
+import { isLinkUp, type HostStatus } from "@/lib/hosts/host";
 
 interface Props {
   session: SessionInfo | null;
   newSessionCwd: string | null;
+  /** Host a fresh chat starts on (this machine when absent). */
+  newSessionHostId?: string;
+  /** The chat's host from the `hosts` channel: the source of truth until a
+   *  `host_status` frame reports a change, and for a chat opened mid-outage. */
+  hostStatus?: HostStatus;
+  hostLabel?: string;
   newSessionWorkspace?: ReactNode;
   toolCallsDefaultCollapsed?: boolean;
   /** UI `hideToolActivity`: fold a running turn's tool calls into one row. */
@@ -471,7 +478,7 @@ const CommittedTranscript = memo(function CommittedTranscript({
   );
 });
 
-export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCallsDefaultCollapsed = true, hideToolActivity = true, expandThinkingByDefault = false, hideThinkingBlock = false, onAgentEnd, onSessionCreated, onSessionForked, onSessionMoved, modelsRefreshKey, chatInputRef, sessionInfoContainer, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onProviderUsageContextChange, onGenerationSpeedChange, onOpenFile, onOpenUrl, onOpenProviders }: Props) {
+export function ChatWindow({ session, newSessionCwd, newSessionHostId, hostStatus: channelHostStatus, hostLabel, newSessionWorkspace, toolCallsDefaultCollapsed = true, hideToolActivity = true, expandThinkingByDefault = false, hideThinkingBlock = false, onAgentEnd, onSessionCreated, onSessionForked, onSessionMoved, modelsRefreshKey, chatInputRef, sessionInfoContainer, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onProviderUsageContextChange, onGenerationSpeedChange, onOpenFile, onOpenUrl, onOpenProviders }: Props) {
   const { t, tn } = useI18n();
   const { playDoneSound, unlockAudio } = useAudio();
   const isMobile = useIsMobile();
@@ -526,7 +533,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
     agentPhase, activeGoal, activePlan,
     liveToolResults,
     subagents, subagentEvents, subagentTranscriptVersions, activeSubagentCount, currentTodoPhase, todoPhases,
-    isNew,
+    isNew, hostStatus: frameHostStatus,
     sessionIdRef, messagesEndRef, scrollContainerRef,
     handleSend, handleAbort, handleFork, handleEdit, handleModelChange, retrySession,
     handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction, handleCompact,
@@ -536,7 +543,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
     handleToolPresetChange,
     btw, askBtw,
   } = useAgentSession({
-    session, newSessionCwd, onAgentEnd: wrappedOnAgentEnd, onSessionCreated, onSessionForked, onSessionMoved: handleSessionMoved,
+    session, newSessionCwd, newSessionHostId, onAgentEnd: wrappedOnAgentEnd, onSessionCreated, onSessionForked, onSessionMoved: handleSessionMoved,
     modelsRefreshKey, chatInputRef: composerRef, onBranchDataChange, onSystemPromptChange, onSystemPromptLoaderChange, onSessionStatsPanelOpen,
     onOpenFile, onOpenUrl,
   });
@@ -692,6 +699,8 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
   // The empty new-session screen has its own scroller, so the conversation's
   // scroller mounts after the first send without a remount or a load.
   const isEmptyNew = isNew && messages.length === 0 && !streamState.isStreaming && !sessionBusy;
+  const currentHostStatus = frameHostStatus ?? channelHostStatus;
+  const hostBanner = currentHostStatus && !isLinkUp(currentHostStatus) ? <HostOfflineBanner host={hostLabel ?? ""} /> : null;
   useEffect(() => {
     if (loading || isEmptyNew) return;
     const el = scrollContainerRef.current;
@@ -1252,6 +1261,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
               <p>{t("appShell.newSessionDescription")}</p>
             </div>
             {newSessionWorkspace}
+            {hostBanner}
             <NoticeShelf notices={notices} onDismiss={dismissNotice} align="right" />
             <SkillDiagnosticsNotice snapshot={skillDiagnostics} onDisable={() => setSkillStartupDiagnostics(false)} />
             <ComposerPanels todoPhases={[]} subagents={[]} onSelectSubagent={setSelectedSubagent} btw={btwPanel} />
@@ -1263,6 +1273,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionWorkspace, toolCa
         </div>
       ) : (
       <>
+      {hostBanner}
       <div className="relative flex flex-1 overflow-hidden" style={{ minHeight: 0 }}>
         <div
           style={{
@@ -1551,6 +1562,18 @@ function ExtensionWidgets({ widgets }: { widgets: Array<{ key: string; lines: st
           ))}
         </pre>
       ))}
+    </div>
+  );
+}
+
+function HostOfflineBanner({ host }: { host: string }) {
+  const { t } = useI18n();
+  return (
+    <div
+      role="status"
+      style={{ flexShrink: 0, margin: `0 ${CHAT_COLUMN_PADDING}px 8px`, padding: "7px 10px", border: "1px solid color-mix(in srgb, var(--status-warning) 40%, var(--border))", borderRadius: "var(--radius-control)", background: "color-mix(in srgb, var(--status-warning) 8%, var(--bg))", color: "var(--text)", fontSize: 12, lineHeight: 1.4 }}
+    >
+      {t("hosts.offlineBanner", { host })}
     </div>
   );
 }
