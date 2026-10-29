@@ -303,13 +303,16 @@ machine already has. The rules below limit anything beyond it.
     magic-byte check in `/api/media/[hash]`.
   - Size limits from Link → Limits apply.
   - Remote omp output goes through the same sanitizing as local output.
-- The daemon checks every path argument against its own allowed roots
-  (computed on its machine from its session cwds and project registry); it
-  never trusts a path because main sent it. `validateCwd` and `addProject` are
-  how a new root becomes allowed, as `allowFileRoot()` does locally.
-  `sessionFileExists` and `invalidateSessionLists` accept only paths inside
-  the daemon's sessions directory (`getAgentDir()/sessions`); `spawn` accepts
-  a `sessionFile` only from the same directory.
+- `sessionFileExists` and `invalidateSessionLists` accept only paths inside
+  the daemon's sessions directory; `spawn` accepts a `sessionFile` only from
+  the same directory.
+- The sessions MVP has no file-reading op. Its other path arguments
+  (`validateCwd`, the project ops, the `spawn` cwd) choose where work starts,
+  which is what they do locally too, and the trust model already gives main a
+  shell through `spawn`. The daemon-side allowed-roots check (roots computed
+  on the daemon's machine from its session cwds and project registry, never
+  trusting a path because main sent it) arrives with the file and git ops of
+  sub-project 2, which are the ops it protects.
 
 ## Agent-initiated sessions
 
