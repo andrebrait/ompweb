@@ -39,6 +39,7 @@ import {
 } from "@/lib/chat-lazy-load";
 import { getDraftSummary, type ChatDraft } from "@/lib/draft-store";
 import { isLinkUp, type HostStatus } from "@/lib/hosts/host";
+import { remoteHostId } from "@/lib/project-ordering";
 
 interface Props {
   session: SessionInfo | null;
@@ -699,7 +700,9 @@ export function ChatWindow({ session, newSessionCwd, newSessionHostId, hostStatu
   // The empty new-session screen has its own scroller, so the conversation's
   // scroller mounts after the first send without a remount or a load.
   const isEmptyNew = isNew && messages.length === 0 && !streamState.isStreaming && !sessionBusy;
-  const currentHostStatus = frameHostStatus ?? channelHostStatus;
+  const remoteWorkspace = session ? remoteHostId(session.hostId) !== undefined : newSessionHostId !== undefined;
+  // The hosts channel is the source of truth; a frame only speaks before its first snapshot.
+  const currentHostStatus = channelHostStatus ?? frameHostStatus;
   const hostBanner = currentHostStatus && !isLinkUp(currentHostStatus) ? <HostOfflineBanner host={hostLabel ?? ""} /> : null;
   useEffect(() => {
     if (loading || isEmptyNew) return;
@@ -1127,7 +1130,8 @@ export function ChatWindow({ session, newSessionCwd, newSessionHostId, hostStatu
       onBuiltinCommand={handleBuiltinSlashCommand}
       onAudioUnlock={unlockAudio}
       draftKey={session?.id ?? (newSessionCwd ? `new:${newSessionCwd}` : undefined)}
-      cwd={session?.cwd ?? newSessionCwd}
+      // @-mentions and skill lookups read this machine's disk: not for a remote workspace yet.
+      cwd={remoteWorkspace ? null : session?.cwd ?? newSessionCwd}
       /* The pill bar and chevron only render in the non-empty layout; don't
          accept Escape-to-minimize in the fresh-chat branch where there is
          nothing to collapse. */

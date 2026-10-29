@@ -2594,7 +2594,8 @@ export function AppShell({ appName }: { appName: string }) {
               onSessionMoved={handleSessionMoved}
               modelsRefreshKey={modelsRefreshKey}
               chatInputRef={chatInputRef}
-              onOpenFile={handleOpenLinkedFile}
+              // File links open this machine's files: not for a remote workspace yet.
+              onOpenFile={remoteHost ? undefined : handleOpenLinkedFile}
               onOpenUrl={handleSessionOpenUrl}
               onBranchDataChange={handleBranchDataChange}
               onSystemPromptChange={handleSystemPromptChange}

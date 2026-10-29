@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useId, useRef, useState, type ReactNode } from "react";
 import type { AgentMessage, ExitedRpcSession, ManagedProject, ProjectLaunchConfig, SessionInfo } from "@/lib/types";
 import { formatExitedSessionNotice, useI18n } from "@/lib/i18n";
 import { ChevronDown, ChevronRight, Folder, GitBranch, MoreHorizontal, Pin, Plus } from "lucide-react";
@@ -50,13 +50,17 @@ function HostGroup({ name, color, statusText, unavailableReason, collapsed, onTo
   children: ReactNode;
 }) {
   const { t } = useI18n();
+  // The tooltip is invisible to keyboards and screen readers: say it in text too.
+  const reasonId = useId();
   return (
     <section aria-label={name} style={{ marginBottom: 6 }}>
+      {unavailableReason && <span id={reasonId} style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0, 0, 0, 0)", whiteSpace: "nowrap" }}>{unavailableReason}</span>}
       <div style={{ display: "flex", alignItems: "center", gap: 2, padding: "4px 0 2px" }} title={unavailableReason ?? undefined}>
         <button
           type="button"
           className="ui-focus-ring"
           aria-expanded={!collapsed}
+          aria-describedby={unavailableReason ? reasonId : undefined}
           aria-label={t(collapsed ? "hosts.expandGroup" : "hosts.collapseGroup", { host: name })}
           onClick={onToggle}
           style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 6, padding: "3px 4px", border: "none", borderRadius: 6, background: "none", color: "var(--text-muted)", cursor: "pointer", textAlign: "left", opacity: unavailableReason ? 0.7 : 1 }}
@@ -71,7 +75,13 @@ function HostGroup({ name, color, statusText, unavailableReason, collapsed, onTo
         </SidebarIconButton>
       </div>
       {!collapsed && (
-        <div title={unavailableReason ?? undefined} style={{ opacity: unavailableReason ? 0.55 : 1 }}>
+        <div
+          role="group"
+          aria-label={name}
+          aria-describedby={unavailableReason ? reasonId : undefined}
+          title={unavailableReason ?? undefined}
+          style={{ opacity: unavailableReason ? 0.55 : 1 }}
+        >
           {empty ? <div style={{ padding: "6px 4px", color: "var(--text-dim)", fontSize: 11.5 }}>{empty}</div> : children}
         </div>
       )}
