@@ -1,0 +1,69 @@
+#!/usr/bin/env node
+"use strict";
+
+// `omp-web host`: link this machine to a main omp-web so sessions can run here
+// (lib/hosts/daemon.ts).
+//   omp-web host login --url <url>   reads the host token from stdin
+//   omp-web host [--allow-http]      dials the saved server and keeps the link up
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+require("./node-version").exitIfUnsupportedNode();
+
+const USAGE = "Usage: omp-web host login --url <server url>   (the host token is read from stdin)\n       omp-web host [--allow-http]";
+
+/** The first line on stdin: the token never appears in argv, where `ps` would show it. */
+function readTokenLine() {
+  if (process.stdin.isTTY) process.stderr.write("Paste the host token, then press Enter: ");
+  return new Promise((resolve) => {
+    let data = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => {
+      data += chunk;
+      const newline = data.indexOf("\n");
+      if (newline !== -1) {
+        process.stdin.pause();
+        resolve(data.slice(0, newline));
+      }
+    });
+    process.stdin.on("end", () => resolve(data));
+  });
+}
+
+async function main(argv) {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { createJiti } = require("jiti");
+  const { loginHost, readHostLogin, runHostDaemon } = await createJiti(__filename).import("../lib/hosts/daemon.ts");
+
+  if (argv[0] === "login") {
+    const urlIndex = argv.indexOf("--url");
+    const url = urlIndex === -1 ? undefined : argv[urlIndex + 1];
+    if (!url || argv.length !== 3) {
+      console.error(USAGE);
+      return 2;
+    }
+    loginHost({ url, token: (await readTokenLine()).trim() });
+    console.log(`Saved. Run \`omp-web host\` to link this machine to ${url}.`);
+    return 0;
+  }
+
+  if (argv.some((arg) => arg !== "--allow-http")) {
+    console.error(USAGE);
+    return 2;
+  }
+  const login = readHostLogin();
+  if (!login) {
+    console.error("This machine is not linked yet. Run `omp-web host login --url <server url>` first.");
+    return 1;
+  }
+  const daemon = runHostDaemon({ ...login, allowHttp: argv.includes("--allow-http") });
+  for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => void daemon.stop());
+  return daemon.done;
+}
+
+main(process.argv.slice(2)).then(
+  (code) => process.exit(code),
+  (error) => {
+    console.error(`omp-web host: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  },
+);

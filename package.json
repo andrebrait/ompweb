@@ -19,7 +19,8 @@
     "ompweb-tray": "bin/omp-web-tray.js",
     "ompweb-tray-linux": "bin/linux-tray.js",
     "ompweb-launchd": "bin/omp-web-launchd.js",
-    "ompweb-systemd": "bin/omp-web-systemd.js"
+    "ompweb-systemd": "bin/omp-web-systemd.js",
+    "ompweb-host": "bin/omp-web-host.js"
   },
   "files": [
     "bin",
