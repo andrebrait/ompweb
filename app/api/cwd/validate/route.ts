@@ -1,17 +1,8 @@
 import { NextResponse } from "next/server";
-import { apiErrorResponse } from "@/lib/api-utils";
-import { statSync, type Stats } from "fs";
-import { homedir } from "os";
-import { isAbsolute, resolve } from "path";
+import { apiErrorResponse, opErrorResponse } from "@/lib/api-utils";
 import { allowFileRoot } from "@/lib/file-access";
+import { localHost } from "@/lib/hosts/local-host";
 import { projectIdentityKey } from "@/lib/paths";
-import { resolveProject } from "@/lib/worktree";
-
-function normalizeCwd(cwd: string): string {
-  if (cwd === "~") return homedir();
-  if (cwd.startsWith("~/")) return resolve(homedir(), cwd.slice(2));
-  return isAbsolute(cwd) ? cwd : resolve(cwd);
-}
 
 // POST /api/cwd/validate  body: { cwd: string }
 // Validates a candidate workspace before the UI selects it.
@@ -24,25 +15,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Path is required", code: "path_required" }, { status: 400 });
     }
 
-    const normalizedCwd = normalizeCwd(cwd);
-    let stat: Stats;
-    try {
-      stat = statSync(normalizedCwd);
-    } catch {
-      return NextResponse.json({ error: `Directory does not exist: ${cwd}`, code: "directory_not_found" }, { status: 400 });
-    }
-
-    if (!stat.isDirectory()) {
-      return NextResponse.json({ error: `Path is not a directory: ${cwd}`, code: "not_a_directory" }, { status: 400 });
-    }
-
-    allowFileRoot(normalizedCwd);
-    const project = await resolveProject(normalizedCwd);
+    const result = await localHost.sessionOps.validateCwd(cwd);
+    if (!result.ok) return opErrorResponse(result);
+    allowFileRoot(result.value.cwd);
     return NextResponse.json({
       success: true,
-      cwd: normalizedCwd,
-      projectRoot: project.projectRoot,
-      projectKey: projectIdentityKey(project.projectRoot),
+      cwd: result.value.cwd,
+      projectRoot: result.value.projectRoot,
+      projectKey: projectIdentityKey(result.value.projectRoot),
     });
   } catch (error) {
     return apiErrorResponse(error);

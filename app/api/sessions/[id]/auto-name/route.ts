@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
-import { scanSessionInfo, setSessionTitle } from "@/lib/omp/session-files";
 import { deriveSessionTitleFromFirstMessage, sanitizeSessionTitle } from "@/lib/session-title";
 import { getRpcSession, startRpcSession, WebRpcError } from "@/lib/rpc-manager";
 import { resolveSpawnCwdResult } from "@/lib/hosts/local-host";
 import { invalidateSessionCaches, readSessionHeader } from "@/lib/session-reader";
-import { resolveSessionPathOr404 } from "@/lib/api-utils";
+import { opErrorResponse, resolveSessionHostOr404, resolveSessionPathOr404 } from "@/lib/api-utils";
 
 /**
  * POST /api/sessions/[id]/auto-name
@@ -55,12 +54,12 @@ export async function POST(
       }
     }
 
-    const resolved = await resolveSessionPathOr404(id);
+    const resolved = await resolveSessionHostOr404(id);
     if ("response" in resolved) return resolved.response;
-    const filePath = resolved.filePath;
+    const { sessionOps } = resolved.host;
 
-    const info = scanSessionInfo(filePath, false);
-    const storedTitle = sanitizeSessionTitle(info?.title);
+    const info = (await sessionOps.listSessions()).find((session) => session.id === id);
+    const storedTitle = sanitizeSessionTitle(info?.name);
     if (storedTitle) {
       return NextResponse.json({ title: storedTitle, generated: false, usage: null });
     }
@@ -79,7 +78,8 @@ export async function POST(
     }
 
     // Save title both to disk and through the live process so it persists immediately.
-    setSessionTitle(filePath, derived, "auto");
+    const renamed = await sessionOps.renameSessionFile(id, derived, "auto");
+    if (!renamed.ok) return opErrorResponse(renamed);
     if (rpc?.isAlive?.()) {
       try {
         await rpc.send({ type: "set_session_name", name: derived });
@@ -87,7 +87,6 @@ export async function POST(
         // Saved on disk; ignore RPC sync failure.
       }
     }
-    invalidateSessionCaches(filePath);
     return NextResponse.json({ title: derived, generated: false, usage: null });
   } catch (error) {
     return NextResponse.json(
