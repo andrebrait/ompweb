@@ -25,12 +25,27 @@ function normalizeLabel(label: string): string {
 
 const sha256Hex = (token: string): string => createHash("sha256").update(token).digest("hex");
 
+// Keep only usable records so one bad entry cannot break token lookup for the rest.
+function parseHostRecord(raw: unknown): HostRecord | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.id !== "string" || typeof r.tokenHash !== "string") return null;
+  return {
+    id: r.id,
+    label: typeof r.label === "string" ? r.label : "",
+    tokenHash: r.tokenHash,
+    createdAt: typeof r.createdAt === "string" ? r.createdAt : "",
+    lastSeenAt: typeof r.lastSeenAt === "string" ? r.lastSeenAt : null,
+    allowAgentStart: r.allowAgentStart === true,
+  };
+}
+
 export function loadHosts(): HostRecord[] {
   const file = join(getAgentDir(), "omp-web", "hosts.json");
   if (!existsSync(file)) return [];
   try {
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<HostsFile>;
-    return Array.isArray(parsed.hosts) ? parsed.hosts : [];
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as { hosts?: unknown };
+    return Array.isArray(parsed.hosts) ? parsed.hosts.map(parseHostRecord).filter((h): h is HostRecord => h !== null) : [];
   } catch {
     return [];
   }
@@ -85,6 +100,7 @@ export function revokeHost(id: string): boolean {
 
 /** Constant-time comparison of the presented token's sha256 against every record. */
 export function hostForToken(token: string): HostRecord | null {
+  if (typeof token !== "string") return null;
   const digest = Buffer.from(sha256Hex(token));
   for (const host of loadHosts()) {
     const stored = Buffer.from(host.tokenHash);
