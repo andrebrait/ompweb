@@ -565,7 +565,8 @@ function validResult(op: keyof SessionOps, result: unknown, args: unknown[]): bo
       return isRecord(value) && typeof value.archivedPath === "string";
     // The route reads `projects` and iterates `newRoots`.
     case "updateProject":
-      return isRecord(value) && Array.isArray(value.projects) && Array.isArray(value.newRoots);
+      return isRecord(value) && Array.isArray(value.projects) && value.projects.every((project) => projectEntry(project) !== null)
+        && Array.isArray(value.newRoots) && value.newRoots.every((root) => typeof root === "string");
     default:
       return true;
   }
