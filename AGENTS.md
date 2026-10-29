@@ -302,7 +302,11 @@ bin/
   link. A wrapper therefore stays in the registry until its child really exits
   (a resume whose handshake failed is registered in the catch for this), so a
   retry awaits its `destroyPromise` instead of spawning a second `--resume`
-  child. `restartAllRpcSessions` (omp update) restarts local sessions only.
+  child. A reload (`restart`) waits for the old child the same way: if the
+  host drops first, it fails `host_offline`, the wrapper answers
+  `host_offline` until that child's exit arrives (or `lost` on the next
+  hello) and is then destroyed; no replacement spawns beside it.
+  `restartAllRpcSessions` (omp update) restarts local sessions only.
   Remote-only transport members (`onResync`, `lost`) are optional on
   `RpcTransport` and duck-typed: route bundles and instrumentation load
   separate `hub.ts` module instances, so never `instanceof RemoteRpcTransport`.

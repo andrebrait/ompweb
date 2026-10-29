@@ -309,6 +309,8 @@ export class AgentSessionWrapper {
   private proc: RpcProcess;
   /** Process whose exit is expected because reload is deliberately disposing it. */
   private expectedExitProc: RpcProcess | null = null;
+  /** A reload gave up waiting for the old child behind a dropped link; it may still run, so commands answer host_offline until it exits. */
+  private oldChildExiting = false;
   readonly cwd: string;
   /** Whether the child was spawned with --advisor. The flag is spawn-time
    * only (no runtime RPC toggles it), so applying a changed advisor setting
@@ -1747,11 +1749,24 @@ export class AgentSessionWrapper {
     this.unsubscribeFrames?.();
     try {
       this.expectedExitProc = old;
-      try {
-        await old.dispose();
-      } finally {
-        if (this.expectedExitProc === old) this.expectedExitProc = null;
+      let exited = false;
+      const disposing = old.dispose().then(() => {
+        exited = true;
+      });
+      // Behind a dropped link the old child's exit arrives only when the link
+      // returns: the reload must not hold `restarting` through the outage.
+      await untilHostDown(this.host, disposing);
+      if (!exited) {
+        // It may still run there, so nothing starts beside it: commands answer
+        // host_offline until its exit (via the link, or `lost` on the next hello)
+        // ends this wrapper, and the next request then spawns afresh.
+        this.oldChildExiting = true;
+        void disposing.then(() => {
+          if (this.proc === old) this.destroy("reload-old-child-exited");
+        });
+        throw this.hostOfflineError("unknown");
       }
+      if (this.expectedExitProc === old) this.expectedExitProc = null;
       if (!this._alive) return;
 
       this.extensionStatuses.clear();
@@ -1824,7 +1839,7 @@ export class AgentSessionWrapper {
     if (this.restarting) throw new WebRpcError(RESTARTING_MESSAGE, "session_restarting");
     if (this.mcpListInFlight) throw new WebRpcError("MCP management is in progress. Try again when it finishes.", "session_busy");
     if (!this.isAlive()) throw new Error("Session is no longer running");
-    if (this.hostDown()) throw this.hostOfflineError("refused");
+    if (this.hostDown() || this.oldChildExiting) throw this.hostOfflineError("refused");
     if (typeof command.type === "string" && command.type.startsWith("abort")) {
       console.info("[omp-web] cancellation-command", JSON.stringify({ sessionId: this._sessionId, type: command.type, at: new Date().toISOString() }));
     }
