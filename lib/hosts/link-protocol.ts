@@ -1,5 +1,6 @@
 // Wire format between the main omp-web server and the `omp-web host` daemon.
 // Pure: no I/O and no Next or `@/` imports, so both sides share it.
+import type { SessionOps } from "./session-ops";
 
 export const LINK_PROTOCOL_VERSION = 1;
 
@@ -40,6 +41,46 @@ export const HOST_OP_NAMES = [
 ] as const;
 
 export type HostOpName = (typeof HOST_OP_NAMES)[number];
+
+/** `GET /api/hosts/link` carries the `hello` message here as base64url JSON (a GET has no body). */
+export const LINK_HELLO_HEADER = "x-omp-web-hello";
+/** Every uplink POST carries the highest downlink `seq` the daemon applied. */
+export const LINK_ACK_HEADER = "x-omp-web-ack";
+
+/** Named `req.args` keys for each session op, in parameter order. Named, not
+ * positional, so an omitted optional argument never turns into `null`. */
+export const SESSION_OP_PARAMS: { readonly [K in keyof SessionOps]: readonly string[] } = {
+  listSessions: [],
+  readSession: ["id", "options"],
+  readContext: ["id", "leafId", "options"],
+  readThinking: ["id", "entryId", "block"],
+  readSessionState: ["id"],
+  readSubagentHistory: ["id"],
+  readSubagentTranscript: ["id", "subagentId", "mode", "cursor"],
+  renameSessionFile: ["id", "title", "source"],
+  deleteSession: ["id", "liveSessionIds"],
+  archiveSession: ["id"],
+  exportSession: ["id"],
+  readMedia: ["hash"],
+  listProjects: [],
+  addProject: ["path", "launchConfig"],
+  updateProject: ["updates"],
+  hideProject: ["path"],
+  validateCwd: ["path"],
+};
+
+/** A failed host op, as carried by `res {ok: false, error}`. */
+export class HostOpError extends Error {
+  readonly name = "HostOpError";
+  readonly status: number;
+  readonly code: string;
+
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
 
 export type DownMessage =
   | { type: "welcome"; v: number; hostId: string }
@@ -278,5 +319,9 @@ export class Outbox<M extends { seq: number }> {
 
   pending(): M[] {
     return [...this.items].sort((a, b) => a.seq - b.seq);
+  }
+
+  drop(predicate: (m: M) => boolean): void {
+    this.items = this.items.filter((m) => !predicate(m));
   }
 }

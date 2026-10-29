@@ -1629,13 +1629,21 @@ export class AgentSessionWrapper {
     // Stays true for the whole restart so send() rejects commands that would
     // otherwise hit the disposed or half-built child.
     this.restarting = true;
+    let resumable: boolean;
+    try {
+      // Asked before touching the live child: a remote host can be offline,
+      // and the child must then keep running with its frames still read.
+      resumable = !!sessionFile && await this.host.sessionFileExists(sessionFile);
+    } catch (error) {
+      this.restarting = false;
+      throw error;
+    }
     this.resetStream();
     this.streaming = false;
     this.promptRunning = false;
     this.compacting = false;
     this.unsubscribeFrames?.();
     try {
-      const resumable = !!sessionFile && await this.host.sessionFileExists(sessionFile);
       this.expectedExitProc = old;
       try {
         await old.dispose();
