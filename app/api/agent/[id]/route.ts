@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { readSessionHeader } from "@/lib/session-reader";
 import { apiErrorResponse, resolveSessionPathOr404 } from "@/lib/api-utils";
-import { startRpcSession, getRpcSession, resolveSpawnCwdResult, WebRpcError } from "@/lib/rpc-manager";
+import { startRpcSession, getRpcSession, WebRpcError } from "@/lib/rpc-manager";
+import { resolveSpawnCwdResult } from "@/lib/hosts/local-host";
 import { RpcCommandError } from "@/lib/omp/rpc-process";
 import { parseJsonWithinLimit, RequestBodyTooLargeError } from "@/lib/bounded-form-data";
 import { MAX_AGENT_COMMAND_REQUEST_BYTES } from "@/lib/image-attachments";
@@ -109,7 +110,7 @@ export async function POST(
         ? `${body.provider}/${body.modelId}`
         : undefined;
 
-    const { session } = await startRpcSession(id, filePath, cwd, undefined, advisor, header?.cwd, undefined, spawnModel);
+    const { session } = await startRpcSession(id, filePath, cwd, undefined, advisor, header?.cwd, spawnModel);
     if (spawnModel) {
       // Try the normal RPC first: when it succeeds it also records the new
       // model in the session, so later spawns restore it without an override.

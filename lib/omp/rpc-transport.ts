@@ -6,6 +6,8 @@ import { wrapWindowsScript } from "./omp-cli";
  * Byte pipe under `RpcProcess`. A transport owns the child (or any other
  * stream endpoint), delivers stdout lines and stderr chunks, reports exit once,
  * and terminates the whole tree. The protocol layer never touches a child.
+ * Output and exit that happen before anyone subscribes are replayed to the
+ * first subscriber, since a Host hands the transport over asynchronously.
  */
 export interface RpcTransport {
   write(line: string, callback: (error?: Error | null) => void): void;
@@ -48,22 +50,29 @@ export function spawnLocalRpcTransport(options: {
   const lineListeners: Array<(line: string) => void> = [];
   const stderrListeners: Array<(chunk: string) => void> = [];
   const exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
-  let exited = false;
+  // Host.spawnRpc hands the transport over asynchronously, so output can
+  // arrive before RpcProcess subscribes: hold it for the first listener.
+  const pendingLines: string[] = [];
+  const pendingStderr: string[] = [];
+  let exitInfo: [number | null, NodeJS.Signals | null] | null = null;
   const emitExit = (code: number | null, signal: NodeJS.Signals | null) => {
-    if (exited) return;
-    exited = true;
+    if (exitInfo) return;
+    exitInfo = [code, signal];
     for (const listener of exitListeners) listener(code, signal);
+  };
+  const emitStderr = (chunk: string) => {
+    if (stderrListeners.length === 0) pendingStderr.push(chunk);
+    for (const listener of stderrListeners) listener(chunk);
   };
 
   createInterface({ input: child.stdout }).on("line", (line) => {
+    if (lineListeners.length === 0) pendingLines.push(line);
     for (const listener of lineListeners) listener(line);
   });
-  child.stderr.on("data", (chunk: Buffer) => {
-    for (const listener of stderrListeners) listener(chunk.toString("utf8"));
-  });
+  child.stderr.on("data", (chunk: Buffer) => emitStderr(chunk.toString("utf8")));
   child.on("exit", emitExit);
   child.on("error", (error) => {
-    for (const listener of stderrListeners) listener(`\nspawn error: ${error.message}`);
+    emitStderr(`\nspawn error: ${error.message}`);
     emitExit(null, null);
   });
 
@@ -97,9 +106,20 @@ export function spawnLocalRpcTransport(options: {
       }
       child.stdin.write(line, (error) => callback(error ?? null));
     },
-    onLine(listener) { lineListeners.push(listener); },
-    onStderr(listener) { stderrListeners.push(listener); },
-    onExit(listener) { exitListeners.push(listener); },
+    onLine(listener) {
+      lineListeners.push(listener);
+      for (const line of pendingLines.splice(0)) listener(line);
+    },
+    onStderr(listener) {
+      stderrListeners.push(listener);
+      for (const chunk of pendingStderr.splice(0)) listener(chunk);
+    },
+    onExit(listener) {
+      exitListeners.push(listener);
+      // Deferred so a late subscriber finishes wiring up (and drains buffered output) first.
+      const info = exitInfo;
+      if (info) queueMicrotask(() => listener(info[0], info[1]));
+    },
     endInput() {
       try { child.stdin.end(); } catch {}
     },

@@ -80,7 +80,7 @@ export interface RpcProcessOptions {
 const STDERR_TAIL_LIMIT = 8 * 1024;
 
 /** Spawns the installed omp in RPC mode with the sanitized child environment. */
-function spawnOmpTransport(options: RpcProcessOptions): RpcTransport {
+export function spawnOmpTransport(options: RpcProcessOptions): RpcTransport {
   const resolveBin = options.dependencies?.resolveOmpBin ?? resolveOmpBin;
   const bin = resolveBin();
   if (!bin) {
