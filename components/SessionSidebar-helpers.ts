@@ -201,6 +201,25 @@ function buildSessionTree(sessions: SessionInfo[], scores?: Map<string, number>)
   sort(roots);
   return roots;
 }
+/** Where a live session runs: its cwd and, on a remote host, that host's id. */
+interface LivePlace {
+  cwd: string;
+  hostId?: string;
+}
+
+/** Where a live session the session list lacks gets its placeholder row: the
+ *  freshest source that knows it, host included, so a remote run is never
+ *  grouped under This machine; else the selected workspace. */
+function livePlace(
+  id: string,
+  optimistic: (LivePlace & { id: string }) | null | undefined,
+  running: Readonly<Record<string, LivePlace>>,
+  exited: ReadonlyMap<string, LivePlace>,
+  known: ReadonlyMap<string, LivePlace>,
+  selected: LivePlace,
+): LivePlace {
+  return (optimistic?.id === id ? optimistic : undefined) ?? running[id] ?? exited.get(id) ?? known.get(id) ?? selected;
+}
 const MAX_PROJECT_SESSIONS = 5;
 export {
   EMPTY_PROJECT_SET,
@@ -212,6 +231,7 @@ export {
   buildSessionTree,
   displayCwd,
   formatRelativeTime,
+  livePlace,
   loadExpandedProjects,
   loadProjectSortMode,
   loadUnreadSessionIds,
@@ -220,6 +240,7 @@ export {
   saveExpandedProjects,
   saveProjectSortMode,
   saveUnreadSessionIds,
+  type LivePlace,
   type SessionTreeNode,
   type WorktreeContext,
   type WorktreeEntry,

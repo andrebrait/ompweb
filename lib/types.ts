@@ -524,6 +524,8 @@ export interface CrossSessionHostToolCall {
 export interface ExitedRpcSession {
   id: string;
   cwd: string;
+  /** Absent on this machine, as on `SessionInfo`. */
+  hostId?: string;
   at: number;
   code: number | null;
   signal: string | null;
