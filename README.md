@@ -339,10 +339,12 @@ npx @kahme247/ompweb@latest host --allow-http
 ```
 
 If the connection drops, the daemon reconnects by itself (1 s backoff doubling to
-60 s). Runs keep going on the remote machine while the link is down; the chat shows
-an offline banner and catches up when the link returns. Closing a laptop lid
-behaves the same way. Revoking a host in Settings closes its link and the daemon
-stops its omp processes.
+60 s). After a network drop, runs keep going on the remote machine; the chat shows
+an offline banner and the runs reattach when the link returns. A laptop that goes
+to sleep (closing the lid, usually) pauses the daemon and its omp runs along with
+everything else on it: they resume when it wakes, and the link returns then. A
+docked or no-sleep setup keeps running with the lid closed. Revoking a host in
+Settings closes its link and the daemon stops its omp processes.
 
 Notes:
 
