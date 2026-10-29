@@ -46,6 +46,9 @@ export type HostOpName = (typeof HOST_OP_NAMES)[number];
 export const LINK_HELLO_HEADER = "x-omp-web-hello";
 /** Every uplink POST carries the highest downlink `seq` the daemon applied. */
 export const LINK_ACK_HEADER = "x-omp-web-ack";
+/** Uplink POSTs and blob uploads name the link (`welcome.nonce`) they belong to;
+ * main refuses one from a link that was replaced since. */
+export const LINK_NONCE_HEADER = "x-omp-web-link";
 
 /** Named `req.args` keys for each session op, in parameter order. Named, not
  * positional, so an omitted optional argument never turns into `null`. */
@@ -83,7 +86,7 @@ export class HostOpError extends Error {
 }
 
 export type DownMessage =
-  | { type: "welcome"; v: number; hostId: string }
+  | { type: "welcome"; v: number; hostId: string; nonce: string }
   | { type: "stdin"; seq: number; ch: string; line: string }
   | { type: "kill"; seq: number; ch: string; force: boolean }
   | { type: "req"; seq: number; id: string; op: HostOpName; args: unknown }
@@ -188,7 +191,7 @@ export function decodeDown(line: string): DownMessage {
   const o = parseLine(line);
   switch (o.type) {
     case "welcome":
-      return { type: "welcome", v: int(o, "v"), hostId: str(o, "hostId") };
+      return { type: "welcome", v: int(o, "v"), hostId: str(o, "hostId"), nonce: str(o, "nonce") };
     case "stdin":
       return { type: "stdin", seq: int(o, "seq"), ch: str(o, "ch"), line: str(o, "line") };
     case "kill":

@@ -14,6 +14,7 @@ import {
   LINK_ACK_HEADER,
   LINK_HELLO_HEADER,
   LINK_LIMITS,
+  LINK_NONCE_HEADER,
   LINK_PROTOCOL_VERSION,
   LinkLimitError,
   Outbox,
@@ -24,7 +25,7 @@ import {
   type UpMessage,
 } from "./link-protocol";
 import { localHost } from "./local-host";
-import { hostForToken, loadHosts, touchHost, type HostRecord } from "./registry";
+import { HostRegistryUnreadableError, hostForToken, loadHosts, touchHost, type HostRecord } from "./registry";
 import type { SessionOps } from "./session-ops";
 
 /** Liveness and op timeouts from LINK_LIMITS; tests shorten them. */
@@ -53,8 +54,11 @@ interface Link {
   readonly id: string;
   readonly host: RemoteHost;
   status: HostStatus;
-  /** A daemon said hello since this server started (or since closeHostLink). */
-  linked: boolean;
+  /** Names the current downlink (`welcome.nonce`); null until a daemon says hello.
+   * Uplink POSTs and blob uploads from any other link are refused. */
+  nonce: string | null;
+  /** Link protocol version the daemon last presented (Settings shows it on a 426). */
+  hostVersion: number | null;
   ompVersion: string | null;
   platform: string | null;
   lastSeenAt: string | null;
@@ -95,7 +99,8 @@ function linkFor(id: string): Link {
       id,
       host: new RemoteHost(id),
       status: "offline",
-      linked: false,
+      nonce: null,
+      hostVersion: null,
       ompVersion: null,
       platform: null,
       lastSeenAt: null,
@@ -199,17 +204,33 @@ function sawDaemon(link: Link): void {
   link.offlineTimer.unref?.();
 }
 
-function authenticate(req: Request): HostRecord | null {
+/** The host the bearer token names, or the refusal to answer with. */
+function authenticate(req: Request): HostRecord | Response {
   const header = req.headers.get("authorization");
-  if (typeof header !== "string" || !header.startsWith("Bearer ")) return null;
-  const token = header.slice("Bearer ".length).trim();
-  return token ? hostForToken(token) : null;
+  const token = typeof header === "string" && header.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : "";
+  try {
+    const record = token ? hostForToken(token) : null;
+    return record ?? json({ error: "Invalid host token" }, 401);
+  } catch (error) {
+    if (!(error instanceof HostRegistryUnreadableError)) throw error;
+    // Never 401 here: a daemon told its token is unknown stops every omp child.
+    console.error(`[omp-web] host link refused: ${error.message}`);
+    return json({ error: "The host registry cannot be read" }, 503);
+  }
 }
+
+/** The authenticated host's link when the request names its current nonce. */
+function currentLink(req: Request, record: HostRecord): Link | null {
+  const link = hub().links.get(record.id);
+  return link?.nonce && req.headers.get(LINK_NONCE_HEADER) === link.nonce ? link : null;
+}
+
+const staleLink = () => json({ error: "This link was replaced; wait for the next welcome" }, 409);
 
 /** GET /api/hosts/link: the daemon's downlink, an NDJSON stream. */
 export async function handleLinkGet(req: Request): Promise<Response> {
   const record = authenticate(req);
-  if (!record) return json({ error: "Invalid host token" }, 401);
+  if (record instanceof Response) return record;
   const header = req.headers.get(LINK_HELLO_HEADER);
   const text = header ? Buffer.from(header, "base64url").toString("utf8") : "";
   let raw: unknown;
@@ -222,10 +243,12 @@ export async function handleLinkGet(req: Request): Promise<Response> {
   // Compared before decoding: another protocol version may shape its hello differently.
   const version = isRecord(raw) ? raw.v : undefined;
   if (version !== LINK_PROTOCOL_VERSION) {
+    // Kept for Settings: "needs upgrade (host vN, server vM)".
+    link.hostVersion = typeof version === "number" && Number.isInteger(version) ? version : null;
     setStatus(link, "needs-upgrade");
     return json({
       error: "Link protocol version mismatch",
-      hostVersion: Number.isInteger(version) ? version : null,
+      hostVersion: link.hostVersion,
       serverVersion: LINK_PROTOCOL_VERSION,
     }, 426);
   }
@@ -272,8 +295,9 @@ function openDownlink(link: Link, hello: Hello, signal: AbortSignal): Response {
     if (link.stream === controller) endStream(link);
   }, { once: true });
   link.stream = controller;
-  link.linked = true;
-  enqueue(link, encodeLine({ type: "welcome", v: LINK_PROTOCOL_VERSION, hostId: link.id }));
+  link.nonce = randomUUID();
+  link.hostVersion = LINK_PROTOCOL_VERSION;
+  enqueue(link, encodeLine({ type: "welcome", v: LINK_PROTOCOL_VERSION, hostId: link.id, nonce: link.nonce }));
   // Resend what the daemon has not applied, in order, before anything new.
   for (const { line } of link.outbox.pending()) enqueue(link, line);
 
@@ -299,9 +323,11 @@ function openDownlink(link: Link, hello: Hello, signal: AbortSignal): Response {
 /** POST /api/hosts/link: a batch of uplink NDJSON messages. */
 export async function handleLinkPost(req: Request): Promise<Response> {
   const record = authenticate(req);
-  if (!record) return json({ error: "Invalid host token" }, 401);
-  const link = hub().links.get(record.id);
-  if (!link?.linked) return json({ error: "Open the downlink first" }, 409);
+  if (record instanceof Response) return record;
+  // A replaced link's late POST must not reach the current daemon's uplink window.
+  const link = currentLink(req, record);
+  if (!link) return staleLink();
+  const nonce = link.nonce;
   const ack = req.headers.get(LINK_ACK_HEADER);
   if (ack === null || !/^\d+$/.test(ack)) return json({ error: "Missing ack" }, 400);
   let messages: UpMessage[];
@@ -313,6 +339,8 @@ export async function handleLinkPost(req: Request): Promise<Response> {
     if (error instanceof RequestBodyTooLargeError) return json({ error: "Uplink batch too large" }, 413);
     return json({ error: "Malformed uplink batch" }, 400);
   }
+  // Replaced while the body was arriving.
+  if (link.nonce !== nonce) return staleLink();
   sawDaemon(link);
   link.outbox.ack(Number(ack));
   for (const message of messages) applyUp(link, message);
@@ -369,23 +397,30 @@ function settle(link: Link, message: Res): void {
 /** POST /api/hosts/link/blob/<reqId>: the bytes of one large op result, sent before its `res`. */
 export async function handleLinkBlob(req: Request, reqId: string): Promise<Response> {
   const record = authenticate(req);
-  if (!record) return json({ error: "Invalid host token" }, 401);
-  const pending = hub().links.get(record.id)?.pending.get(reqId);
+  if (record instanceof Response) return record;
+  const link = currentLink(req, record);
+  if (!link) return staleLink();
+  const nonce = link.nonce;
+  const pending = link.pending.get(reqId);
   if (!pending) return json({ error: "Unknown request" }, 404);
-  if (pending.blob) return json({ error: "Result already uploaded" }, 409);
+  // Not 409: the daemon reads a 409 as "link replaced" and retries on the next link.
+  if (pending.blob) return json({ error: "Result already uploaded" }, 400);
+  let blob: Uint8Array<ArrayBuffer>;
   try {
-    pending.blob = await readBodyWithinLimit(req, LINK_LIMITS.blobBytes);
+    blob = await readBodyWithinLimit(req, LINK_LIMITS.blobBytes);
   } catch (error) {
     if (error instanceof RequestBodyTooLargeError) return json({ error: "Result too large" }, 413);
     return json({ error: "Malformed result upload" }, 400);
   }
+  if (link.nonce !== nonce) return staleLink();
+  pending.blob = blob;
   return json({ ok: true });
 }
 
 function request(hostId: string, op: HostOpName, args: Record<string, unknown>): Promise<unknown> {
   const link = linkFor(hostId);
   const label = labelOf(hostId);
-  if (!link.linked || link.status === "offline" || link.status === "needs-upgrade") {
+  if (!link.nonce || link.status === "offline" || link.status === "needs-upgrade") {
     return Promise.reject(new HostOpError(503, "host_offline", `${label} is offline`));
   }
   const { promise, resolve, reject } = Promise.withResolvers<unknown>();
@@ -588,7 +623,17 @@ export function getHost(id: string): Host | null {
   return loadHosts().some((h) => h.id === id) ? linkFor(id).host : null;
 }
 
-export function listHosts(): { id: string; label: string; status: HostStatus; ompVersion: string | null; platform: string | null; lastSeenAt: string | null }[] {
+export function listHosts(): {
+  id: string;
+  label: string;
+  status: HostStatus;
+  ompVersion: string | null;
+  platform: string | null;
+  lastSeenAt: string | null;
+  /** Link protocol version the daemon last presented; null before it ever dialed. */
+  hostVersion: number | null;
+  serverVersion: number;
+}[] {
   return loadHosts().map((record) => {
     const link = hub().links.get(record.id);
     return {
@@ -598,6 +643,8 @@ export function listHosts(): { id: string; label: string; status: HostStatus; om
       ompVersion: link?.ompVersion ?? null,
       platform: link?.platform ?? null,
       lastSeenAt: link?.lastSeenAt ?? record.lastSeenAt,
+      hostVersion: link?.hostVersion ?? null,
+      serverVersion: LINK_PROTOCOL_VERSION,
     };
   });
 }

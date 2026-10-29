@@ -18,6 +18,7 @@ import {
   LINK_ACK_HEADER,
   LINK_HELLO_HEADER,
   LINK_LIMITS,
+  LINK_NONCE_HEADER,
   LINK_PROTOCOL_VERSION,
   LinkLimitError,
   LinkProtocolError,
@@ -57,8 +58,8 @@ interface Queued {
 const loginFile = () => join(getAgentDir(), "omp-web", "host.json");
 const reason = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const log = (message: string) => console.error(`[omp-web host] ${message}`);
-// 1 s doubling to 60 s; jitter keeps many hosts from redialing in step.
-const withJitter = (ms: number) => ms / 2 + Math.random() * (ms / 2);
+// 1 s doubling to 60 s; each wait varies ±20% so many hosts do not redial in step.
+const withJitter = (ms: number) => ms * (0.8 + Math.random() * 0.4);
 
 /** Save the server URL and host token, owner-only. The token never goes through argv. */
 export function loginHost(options: { url: string; token: string }): void {
@@ -159,7 +160,11 @@ export function runHostDaemon(options: { url: string; token: string; allowHttp: 
   let upSeq = 0;
   let unsentBytes = 0;
   let pongOwed = false;
-  let welcomed = false;
+  // The current link's `welcome.nonce`, sent with every POST. Null before the
+  // first welcome and after main refused it as replaced; `welcome` settles
+  // once the next one arrives.
+  let nonce: string | null = null;
+  let welcome = Promise.withResolvers<void>();
   let posting = false;
   let backingOff = false;
   let postDelay = FIRST_RETRY_MS;
@@ -216,7 +221,7 @@ export function runHostDaemon(options: { url: string; token: string; allowHttp: 
   }
 
   function scheduleFlush(): void {
-    if (!welcomed || posting || backingOff || stopped) return;
+    if (!nonce || posting || backingOff || stopped) return;
     if (unsentBytes >= LINK_LIMITS.flushBytes) void flush();
     else flushTimer ??= setTimeout(() => void flush(), LINK_LIMITS.flushMs);
   }
@@ -224,7 +229,8 @@ export function runHostDaemon(options: { url: string; token: string; allowHttp: 
   async function flush(): Promise<void> {
     clearTimeout(flushTimer);
     flushTimer = undefined;
-    if (posting || stopped) return;
+    if (posting || stopped || !nonce) return;
+    const used = nonce;
     const batch: string[] = [];
     let size = pongOwed ? PONG_LINE.length : 0;
     for (const item of outbox.pending()) {
@@ -240,11 +246,19 @@ export function runHostDaemon(options: { url: string; token: string; allowHttp: 
     try {
       const response = await fetchLink(linkUrl, {
         method: "POST",
-        headers: { authorization, "content-type": "application/x-ndjson", [LINK_ACK_HEADER]: String(down.acked) },
+        headers: { authorization, "content-type": "application/x-ndjson", [LINK_ACK_HEADER]: String(down.acked), [LINK_NONCE_HEADER]: used },
         body,
         signal: AbortSignal.any([stopSignal.signal, AbortSignal.timeout(LINK_LIMITS.offlineMs)]),
       });
       if (fatal(response.status)) return;
+      if (response.status === 409) {
+        // Sent on a link main has replaced: resend on the current one, now if
+        // its welcome already arrived, else when it does.
+        posting = false;
+        if (nonce === used) forgetLink();
+        else void flush();
+        return;
+      }
       if (!response.ok) throw new Error(`the server answered ${response.status}`);
       const { ack } = (await response.json()) as { ack?: unknown };
       if (typeof ack !== "number" || !Number.isInteger(ack)) throw new Error("the server sent no ack");
@@ -278,6 +292,11 @@ export function runHostDaemon(options: { url: string; token: string; allowHttp: 
     return stopped;
   }
 
+  function forgetLink(): void {
+    nonce = null;
+    welcome = Promise.withResolvers<void>();
+  }
+
   function handleDown(line: string): void {
     let message: DownMessage;
     try {
@@ -290,7 +309,8 @@ export function runHostDaemon(options: { url: string; token: string; allowHttp: 
     switch (message.type) {
       case "welcome":
         log(`linked to ${options.url}`);
-        welcomed = true;
+        nonce = message.nonce;
+        welcome.resolve();
         // A fresh link: resend what main has not acked now, not after the old backoff.
         backingOff = false;
         postDelay = FIRST_RETRY_MS;
@@ -364,14 +384,30 @@ export function runHostDaemon(options: { url: string; token: string; allowHttp: 
   /** Large results and media go as raw bytes, before their `res` line. */
   async function uploadBlob(id: string, bytes: Uint8Array): Promise<void> {
     if (bytes.byteLength > LINK_LIMITS.blobBytes) throw new HostOpError(413, "result_too_large", "The result is too large for the host link");
-    const response = await fetchLink(`${linkUrl}/blob/${encodeURIComponent(id)}`, {
-      method: "POST",
-      headers: { authorization, "content-type": "application/octet-stream" },
-      body: bytes as Uint8Array<ArrayBuffer>,
-      signal: AbortSignal.any([stopSignal.signal, AbortSignal.timeout(LINK_LIMITS.opTimeoutMs)]),
-    });
-    if (fatal(response.status)) throw new HostOpError(503, "host_stopping", "omp-web host is stopping");
-    if (!response.ok) throw new HostOpError(502, "blob_upload_failed", `Uploading the result failed (${response.status})`);
+    const signal = AbortSignal.any([stopSignal.signal, AbortSignal.timeout(LINK_LIMITS.opTimeoutMs)]);
+    const { promise: aborted, resolve: onAbort } = Promise.withResolvers<void>();
+    signal.addEventListener("abort", () => onAbort(), { once: true });
+    for (;;) {
+      // Main refused the last link as replaced: upload on the next one.
+      while (!nonce) {
+        signal.throwIfAborted();
+        await Promise.race([welcome.promise, aborted]);
+      }
+      const used = nonce;
+      const response = await fetchLink(`${linkUrl}/blob/${encodeURIComponent(id)}`, {
+        method: "POST",
+        headers: { authorization, "content-type": "application/octet-stream", [LINK_NONCE_HEADER]: used },
+        body: bytes as Uint8Array<ArrayBuffer>,
+        signal,
+      });
+      if (fatal(response.status)) throw new HostOpError(503, "host_stopping", "omp-web host is stopping");
+      if (response.status === 409) {
+        if (nonce === used) forgetLink();
+        continue;
+      }
+      if (!response.ok) throw new HostOpError(502, "blob_upload_failed", `Uploading the result failed (${response.status})`);
+      return;
+    }
   }
 
   async function runOp(op: HostOpName, args: unknown): Promise<unknown> {
@@ -407,8 +443,8 @@ export function runHostDaemon(options: { url: string; token: string; allowHttp: 
     }
     const file = sessionFile ? sessionsPath(sessionFile) : "";
     // Only this machine knows which directories exist here.
-    const { cwd: spawnCwd } = resolveSpawnCwdResult(recordedCwd ?? cwd);
-    const spawned = await localHost.spawnRpc({ cwd: spawnCwd, recordedCwd: recordedCwd ?? null, sessionFile: file, toolNames, advisor, spawnModel });
+    const resolved = resolveSpawnCwdResult(recordedCwd ?? cwd);
+    const spawned = await localHost.spawnRpc({ cwd: resolved.cwd, recordedCwd: recordedCwd ?? null, sessionFile: file, toolNames, advisor, spawnModel });
     const { transport } = spawned;
     if (stopped) {
       transport.killTree(true);
@@ -421,7 +457,8 @@ export function runHostDaemon(options: { url: string; token: string; allowHttp: 
       channels.delete(ch);
       queue({ type: "exit", ch, code, signal });
     });
-    return { cwd: spawned.cwd, fellBack: spawned.fellBack, launchAdvisor: spawned.launchAdvisor, autoApproveExtension: localHost.autoApproveExtension() };
+    // spawnRpc only compares a recorded cwd; a new session's missing cwd falls back too.
+    return { cwd: spawned.cwd, fellBack: resolved.fellBack || spawned.fellBack, launchAdvisor: spawned.launchAdvisor, autoApproveExtension: localHost.autoApproveExtension() };
   }
 
   async function downlink(): Promise<void> {
