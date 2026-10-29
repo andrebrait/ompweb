@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 "use strict";
 
-// `omp-web host`: link this machine to a main omp-web so sessions can run here
+// `ompweb host`: link this machine to a main omp-web so sessions can run here
 // (lib/hosts/daemon.ts).
-//   omp-web host login --url <url>   reads the host token from stdin
-//   omp-web host [--allow-http]      dials the saved server and keeps the link up
+//   ompweb host login --url <url>   reads the host token from stdin
+//   ompweb host [--allow-http]      dials the saved server and keeps the link up
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 require("./node-version").exitIfUnsupportedNode();
 
-const USAGE = "Usage: omp-web host login --url <server url>   (the host token is read from stdin)\n       omp-web host [--allow-http]";
+const USAGE = "Usage: ompweb host login --url <server url>   (the host token is read from stdin)\n       ompweb host [--allow-http]";
 
 /** The first line on stdin: the token never appears in argv, where `ps` would show it. */
 function readTokenLine() {
@@ -42,7 +42,7 @@ async function main(argv) {
       return 2;
     }
     loginHost({ url, token: (await readTokenLine()).trim() });
-    console.log(`Saved. Run \`omp-web host\` to link this machine to ${url}.`);
+    console.log(`Saved. Run \`ompweb host\` to link this machine to ${url}.`);
     return 0;
   }
 
@@ -52,7 +52,7 @@ async function main(argv) {
   }
   const login = readHostLogin();
   if (!login) {
-    console.error("This machine is not linked yet. Run `omp-web host login --url <server url>` first.");
+    console.error("This machine is not linked yet. Run `ompweb host login --url <server url>` first.");
     return 1;
   }
   const daemon = runHostDaemon({ ...login, allowHttp: argv.includes("--allow-http") });
@@ -63,7 +63,7 @@ async function main(argv) {
 main(process.argv.slice(2)).then(
   (code) => process.exit(code),
   (error) => {
-    console.error(`omp-web host: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`ompweb host: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
   },
 );

@@ -75,7 +75,7 @@ app/api/
   agent/[id]/route.ts             GET state | POST any RPC command
   events/route.ts                 GET multiplexed SSE | POST subscribe/unsubscribe channels
   hosts/route.ts                  GET hosts (this machine first) | POST { label } → token once + login command | PATCH { id, label?, allowAgentStart? } | DELETE ?id= revoke (registry first, then close the link); 503 if hosts.json is unreadable
-  hosts/link/route.ts             GET downlink (NDJSON stream) | POST uplink (NDJSON batch) — the `omp-web host` daemon; bearer-token auth, skipped by `proxy.ts`
+  hosts/link/route.ts             GET downlink (NDJSON stream) | POST uplink (NDJSON batch) — the `ompweb host` daemon; bearer-token auth, skipped by `proxy.ts`
   hosts/link/blob/[reqId]/route.ts  POST raw bytes for a large op result (daemon → main)
   notifications/devices/route.ts  GET VAPID key + subscribed | PUT { deviceId, prefs, subscription? }
   notifications/presence/route.ts POST { clientId, deviceId, visible, sessionId, seq }
@@ -202,7 +202,7 @@ hooks/
   useBtw.ts                /btw records/active panel/history dialog fed by btw_* SSE frames
 
 bin/
-  omp-web-host.js     `omp-web host [login]`: daemon CLI; token read from stdin, never argv
+  omp-web-host.js     `ompweb host [login]`: daemon CLI; token read from stdin, never argv
 ```
 
 ---

@@ -1267,7 +1267,7 @@
   "settingsTabs.hosts.label": "主机",
   "settingsTabs.hosts.description": "关联其他机器并在其上运行会话",
   "hostsConfig.title": "已关联主机",
-  "hostsConfig.subtitle": "在其他机器上运行会话。每台机器运行 omp-web host 并连接回此服务器。",
+  "hostsConfig.subtitle": "在其他机器上运行会话。每台机器运行 ompweb host 并连接回此服务器。",
   "hostsConfig.thisMachine": "本机",
   "hostsConfig.add": "添加主机",
   "hostsConfig.empty": "尚未关联任何主机。",

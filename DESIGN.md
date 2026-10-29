@@ -88,7 +88,7 @@ implementations exist:
 
 ```
 Browser ─▶ ompweb ──┬─ LocalHost ── spawn omp --mode rpc-ui (stdio)
-                    └─ RemoteHost ◀── link (HTTP) ── omp-web host
+                    └─ RemoteHost ◀── link (HTTP) ── ompweb host
                                                       └─ spawn omp --mode rpc-ui
 ```
 
@@ -100,7 +100,7 @@ knowing where omp runs. Session routes address a session by id; the owning
 host resolves the file path, so a remote path never reaches the serving
 machine's filesystem.
 
-The link is two HTTP requests that the `omp-web host` daemon opens to the
+The link is two HTTP requests that the `ompweb host` daemon opens to the
 server: a long-lived response for server → daemon and batched POSTs for
 daemon → server. Next route handlers cannot accept WebSocket upgrades and
 ompweb runs without a custom server, so there is no WebSocket. The daemon

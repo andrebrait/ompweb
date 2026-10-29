@@ -1308,7 +1308,7 @@
   "settingsTabs.hosts.label": "Hosts",
   "settingsTabs.hosts.description": "Link other machines to run sessions there",
   "hostsConfig.title": "Linked hosts",
-  "hostsConfig.subtitle": "Run sessions on other machines. Each one runs omp-web host and connects back to this server.",
+  "hostsConfig.subtitle": "Run sessions on other machines. Each one runs ompweb host and connects back to this server.",
   "hostsConfig.thisMachine": "This machine",
   "hostsConfig.add": "Add host",
   "hostsConfig.empty": "No linked hosts yet.",
