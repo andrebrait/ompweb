@@ -34,6 +34,7 @@ import {
   INITIAL_RESTORE_RETRY_MS,
   MAX_PROJECT_SESSIONS,
   buildSessionTree,
+  livePlace,
   loadExpandedProjects,
   loadProjectSortMode,
   loadUnreadSessionIds,
@@ -42,6 +43,7 @@ import {
   saveExpandedProjects,
   saveProjectSortMode,
   saveUnreadSessionIds,
+  type LivePlace,
   type WorktreeContext,
   type WorktreeEntry,
   type WorktreeState,
@@ -184,9 +186,9 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
   const [worktreeStateByProject, setWorktreeStateByProject] = useState<Record<string, WorktreeState>>({});
   const [sessionRefreshDone, setSessionRefreshDone] = useState(false);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
-  const [runningSessionCwds, setRunningSessionCwds] = useState<Record<string, string>>({});
+  const [runningSessionPlaces, setRunningSessionPlaces] = useState<Record<string, LivePlace>>({});
   const [exitedSessions, setExitedSessions] = useState<Map<string, ExitedRpcSession>>(() => new Map());
-  const knownRunningCwdsRef = useRef<Map<string, string>>(new Map());
+  const knownRunningPlacesRef = useRef<Map<string, LivePlace>>(new Map());
   const { limit: recentRunsLimit } = useRecentRunsLimit();
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
   const [recentCompletedRuns, setRecentCompletedRuns] = useState<RecentRunEntry[]>(() => loadRecentRuns());
@@ -266,11 +268,11 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const etag = res.headers.get("ETag");
       if (etag) sessionsEtagRef.current = etag;
-      const data = await res.json() as { sessions: SessionInfo[]; runningSessionIds?: string[]; runningSessions?: Array<{ id: string; cwd: string }> };
+      const data = await res.json() as { sessions: SessionInfo[]; runningSessionIds?: string[]; runningSessions?: Array<LivePlace & { id: string }> };
       setAllSessions(data.sessions);
       if (data.runningSessions) {
         for (const rs of data.runningSessions) {
-          if (rs.id && rs.cwd) knownRunningCwdsRef.current.set(rs.id, rs.cwd);
+          if (rs.id && rs.cwd) knownRunningPlacesRef.current.set(rs.id, rs);
         }
       }
       // Treat the fetched running set as an initial fallback only. Once SSE is
@@ -278,11 +280,11 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
       if (!sseAuthoritativeRef.current) {
         setRunningSessionIds(new Set(data.runningSessionIds ?? []));
         if (data.runningSessions) {
-          const nextCwds: Record<string, string> = {};
+          const nextPlaces: Record<string, LivePlace> = {};
           for (const rs of data.runningSessions) {
-            if (rs.id && rs.cwd) nextCwds[rs.id] = rs.cwd;
+            if (rs.id && rs.cwd) nextPlaces[rs.id] = rs;
           }
-          setRunningSessionCwds(nextCwds);
+          setRunningSessionPlaces(nextPlaces);
         }
       }
       // Drop unread markers for sessions that no longer exist (e.g. deleted).
@@ -398,7 +400,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
         const data = JSON.parse(e.data) as {
           type?: string;
           runningSessionIds?: string[];
-          runningSessions?: Array<{ id: string; cwd: string }>;
+          runningSessions?: Array<LivePlace & { id: string }>;
           exitedSessions?: ExitedRpcSession[];
           refreshSessionList?: boolean;
           sessionIds?: string[];
@@ -408,14 +410,14 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
           setRunningSessionIds(new Set(data.runningSessionIds ?? []));
           setExitedSessions(new Map((data.exitedSessions ?? []).map((session) => [session.id, session])));
           if (data.runningSessions) {
-            const nextCwds: Record<string, string> = {};
+            const nextPlaces: Record<string, LivePlace> = {};
             for (const rs of data.runningSessions) {
               if (rs.id && rs.cwd) {
-                knownRunningCwdsRef.current.set(rs.id, rs.cwd);
-                nextCwds[rs.id] = rs.cwd;
+                knownRunningPlacesRef.current.set(rs.id, rs);
+                nextPlaces[rs.id] = rs;
               }
             }
-            setRunningSessionCwds(nextCwds);
+            setRunningSessionPlaces(nextPlaces);
           }
           if (data.refreshSessionList) scheduleRefresh();
         } else if (data.type === "sessions-changed") {
@@ -681,8 +683,9 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
   const placeholderTsRef = useRef<Map<string, string>>(new Map());
   useEffect(() => {
     if (optimisticSession?.id && optimisticSession.cwd) {
-      knownRunningCwdsRef.current.set(optimisticSession.id, optimisticSession.cwd);
-      setRunningSessionCwds((prev) => (prev[optimisticSession.id] === optimisticSession.cwd ? prev : { ...prev, [optimisticSession.id]: optimisticSession.cwd }));
+      const { id, cwd, hostId } = optimisticSession;
+      knownRunningPlacesRef.current.set(id, { cwd, hostId });
+      setRunningSessionPlaces((prev) => (prev[id]?.cwd === cwd && prev[id]?.hostId === hostId ? prev : { ...prev, [id]: { cwd, hostId } }));
     }
   }, [optimisticSession]);
   const visibleSessions = useMemo(() => {
@@ -707,21 +710,17 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
         placeholderTsRef.current.set(id, ts);
       }
       const isOptimistic = optimisticSession?.id === id;
-      const sessionCwd = (isOptimistic ? optimisticSession.cwd : null)
-        ?? runningSessionCwds[id]
-        ?? exitedSessions.get(id)?.cwd
-        ?? knownRunningCwdsRef.current.get(id)
-        ?? selectedCwd
-        ?? "";
+      const place = livePlace(id, optimisticSession, runningSessionPlaces, exitedSessions, knownRunningPlacesRef.current, { cwd: selectedCwd ?? "", hostId: selectedHostId });
+      const hostId = remoteHostId(place.hostId);
       const resolvedRoot = isOptimistic
         ? (optimisticProjectRoot ?? optimisticSession.projectRoot ?? optimisticSession.cwd)
-        : (projectRootFor(sessionCwd) ?? sessionCwd);
+        : (projectRootFor(place.cwd, hostOf(place)) ?? place.cwd);
       const phRoot = resolvedRoot ?? "";
       const phKey = phRoot ? comparableProjectPath(phRoot) : undefined;
       placeholders.push({
         id,
         path: "",
-        cwd: sessionCwd,
+        cwd: place.cwd,
         name: undefined,
         created: ts,
         modified: ts,
@@ -729,6 +728,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
         firstMessage: "",
         projectRoot: phRoot,
         ...(phKey ? { projectKey: phKey } : {}),
+        ...(hostId ? { hostId } : {}),
       });
     }
     // Prune timestamps and known cwds for ids that are now materialized or no longer live.
@@ -737,14 +737,14 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
         if (!visibleLiveIds.has(key) || known.has(key)) placeholderTsRef.current.delete(key);
       }
     }
-    if (knownRunningCwdsRef.current.size > visibleLiveIds.size + (optimisticSession ? 1 : 0)) {
+    if (knownRunningPlacesRef.current.size > visibleLiveIds.size + (optimisticSession ? 1 : 0)) {
       if (optimisticSession) visibleLiveIds.add(optimisticSession.id);
-      for (const key of [...knownRunningCwdsRef.current.keys()]) {
-        if (!visibleLiveIds.has(key) && known.has(key)) knownRunningCwdsRef.current.delete(key);
+      for (const key of [...knownRunningPlacesRef.current.keys()]) {
+        if (!visibleLiveIds.has(key) && known.has(key)) knownRunningPlacesRef.current.delete(key);
       }
     }
     return placeholders.length ? [...base, ...placeholders] : base;
-  }, [allSessions, optimisticSession, optimisticProjectRoot, runningSessionIds, runningSessionCwds, exitedSessions, projectRootFor, selectedCwd]);
+  }, [allSessions, optimisticSession, optimisticProjectRoot, runningSessionIds, runningSessionPlaces, exitedSessions, projectRootFor, selectedCwd, selectedHostId]);
   const visibleProjects = useMemo(() => {
     let base = projects;
     const hasOpt = optimisticProjectRoot ? base.some((p) => foldedHostProjectKey(p.hostId, p.path) === foldedHostProjectKey(optimisticSession?.hostId, optimisticProjectRoot)) : false;
@@ -760,24 +760,20 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     for (const id of visibleLiveIds) {
       if (allSessions.some((s) => s.id === id)) continue;
       const isOptimistic = optimisticSession?.id === id;
-      const sessionCwd = (isOptimistic ? optimisticSession.cwd : null)
-        ?? runningSessionCwds[id]
-        ?? exitedSessions.get(id)?.cwd
-        ?? knownRunningCwdsRef.current.get(id)
-        ?? selectedCwd
-        ?? "";
+      const place = livePlace(id, optimisticSession, runningSessionPlaces, exitedSessions, knownRunningPlacesRef.current, { cwd: selectedCwd ?? "", hostId: selectedHostId });
+      const hostId = remoteHostId(place.hostId);
       const resolvedRoot = isOptimistic
         ? (optimisticProjectRoot ?? optimisticSession.projectRoot ?? optimisticSession.cwd)
-        : (projectRootFor(sessionCwd) ?? sessionCwd);
+        : (projectRootFor(place.cwd, hostOf(place)) ?? place.cwd);
       const phPath = resolvedRoot ?? "";
-      // A running session not in any list yet is on this machine: only its own cwd is known.
-      if (phPath && !knownFolded.has(foldedHostProjectKey(undefined, phPath))) {
-        base = [...base, { path: phPath }];
-        knownFolded.add(foldedHostProjectKey(undefined, phPath));
+      // Only the running session's own cwd is known; it stays under its own host.
+      if (phPath && !knownFolded.has(foldedHostProjectKey(hostId, phPath))) {
+        base = [...base, { path: phPath, ...(hostId ? { hostId } : {}) }];
+        knownFolded.add(foldedHostProjectKey(hostId, phPath));
       }
     }
     return base;
-  }, [optimisticProjectRoot, projects, runningSessionIds, runningSessionCwds, exitedSessions, allSessions, optimisticSession, projectRootFor, selectedCwd]);
+  }, [optimisticProjectRoot, projects, runningSessionIds, runningSessionPlaces, exitedSessions, allSessions, optimisticSession, projectRootFor, selectedCwd, selectedHostId]);
 
   // ---- Derived project list ---------------------------------------------------
   const selectedProject = useMemo(() => projectRootFor(selectedCwd, selectedHostId), [projectRootFor, selectedCwd, selectedHostId]);

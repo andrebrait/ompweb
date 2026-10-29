@@ -747,7 +747,7 @@ export class AgentSessionWrapper {
       : null;
     // Recorded before destroy(): its running-change broadcast must carry the
     // record so sidebars that missed the notice below still see the exit.
-    if (this._sessionId) getExitedMap().set(this._sessionId, { id: this._sessionId, cwd: this.cwd, at: Date.now(), code, signal, detail });
+    if (this._sessionId) getExitedMap().set(this._sessionId, { id: this._sessionId, cwd: this.cwd, ...(this.host.id === localHost.id ? {} : { hostId: this.host.id }), at: Date.now(), code, signal, detail });
     this.emit({
       type: "notice",
       level: "error",
@@ -2311,6 +2311,8 @@ function untilHostDown(host: Host, promise: Promise<void>): Promise<void> {
 export interface RunningRpcSession {
   id: string;
   cwd: string;
+  /** Absent on this machine, as on `SessionInfo`: the sidebar groups a placeholder under it. */
+  hostId?: string;
 }
 
 export interface RunningSessionUpdate {
@@ -2374,14 +2376,14 @@ export function getRpcSession(sessionId: string): AgentSessionWrapper | undefine
 }
 
 export function getRunningRpcSessions(): RunningRpcSession[] {
-  const map = new Map<string, string>();
+  const map = new Map<string, RunningRpcSession>();
   for (const [sessionId, session] of getRegistry()) {
     if (session.isRunning()) {
-      const realId = session.sessionId || sessionId;
-      map.set(realId, session.cwd);
+      const id = session.sessionId || sessionId;
+      map.set(id, { id, cwd: session.cwd, ...(session.host.id === localHost.id ? {} : { hostId: session.host.id }) });
     }
   }
-  return [...map.entries()].map(([id, cwd]) => ({ id, cwd }));
+  return [...map.values()];
 }
 
 export function getRunningRpcSessionIds(): string[] {
