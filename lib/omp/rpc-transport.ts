@@ -18,6 +18,10 @@ export interface RpcTransport {
   endInput(): void;
   /** force=false → SIGTERM the tree, true → SIGKILL (taskkill /t[/f] on Windows). */
   killTree(force: boolean): void;
+  /** A linked host dropped buffered output for this child; the session must reconcile. Remote transports only. */
+  onResync?(listener: () => void): void;
+  /** The child died while its host link was down. Remote transports only. */
+  readonly lost?: boolean;
 }
 
 export function spawnLocalRpcTransport(options: {
