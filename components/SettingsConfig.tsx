@@ -41,6 +41,7 @@ const SkillsConfig = dynamic(() => import("./SkillsConfig").then((module) => mod
 const PluginsConfig = dynamic(() => import("./PluginsConfig").then((module) => module.PluginsConfig), { loading: SettingsTabLoading, ssr: false });
 const McpConfig = dynamic(() => import("./McpConfig").then((module) => module.McpConfig), { loading: SettingsTabLoading, ssr: false });
 const AgentsConfig = dynamic(() => import("./AgentsConfig").then((module) => module.AgentsConfig), { loading: SettingsTabLoading, ssr: false });
+const HostsConfig = dynamic(() => import("./HostsConfig").then((module) => module.HostsConfig), { loading: SettingsTabLoading, ssr: false });
 const UsageConfig = dynamic(() => import("./UsageConfig").then((module) => module.UsageConfig), { loading: SettingsTabLoading, ssr: false });
 
 type UpdateState = AppUpdateInfo;
@@ -1740,6 +1741,16 @@ export function SettingsConfig({ activeTab, toolCallsDefaultCollapsed, onToolCal
                   </p>
                 </div>
                 <AgentsConfig cwd={cwd} />
+              </div>
+            )}
+
+            {/* HOSTS TAB */}
+            {currentTab === "hosts" && (
+              <div role="tabpanel" id="settings-panel-hosts" aria-labelledby="settings-tab-hosts" className="settings-panel-inner" style={{ padding: isMobile ? "16px 14px 32px" : "32px 24px 64px", gap: 16 }}>
+                <div style={{ marginBottom: 4 }}>
+                  <h2 className="display-serif" style={{ fontSize: 22, fontWeight: 600, margin: 0, color: "var(--text)", letterSpacing: "-0.01em" }}>{t("hostsConfig.title")}</h2>
+                </div>
+                <HostsConfig />
               </div>
             )}
 

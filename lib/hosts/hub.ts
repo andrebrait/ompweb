@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { readBodyWithinLimit, RequestBodyTooLargeError } from "../bounded-form-data";
 import type { RpcTransport } from "../omp/rpc-transport";
+import { getOmpVersion } from "../omp/omp-cli";
 import type { ProjectRegistryEntry } from "../project-registry";
 import { isValidSessionId } from "../session-file-references-core";
 import { isRecord } from "../type-guards";
@@ -710,17 +711,20 @@ export function getHost(id: string): Host | null {
   return loadHosts().some((h) => h.id === id) ? linkFor(id).host : null;
 }
 
-export function listHosts(): {
+export interface LinkedHostRow {
   id: string;
   label: string;
   status: HostStatus;
   ompVersion: string | null;
   platform: string | null;
   lastSeenAt: string | null;
+  allowAgentStart: boolean;
   /** Link protocol version the daemon last presented; null before it ever dialed. */
   hostVersion: number | null;
   serverVersion: number;
-}[] {
+}
+
+export function listHosts(): LinkedHostRow[] {
   return loadHosts().map((record) => {
     const link = hub().links.get(record.id);
     return {
@@ -730,10 +734,40 @@ export function listHosts(): {
       ompVersion: link?.ompVersion ?? null,
       platform: link?.platform ?? null,
       lastSeenAt: link?.lastSeenAt ?? record.lastSeenAt,
+      allowAgentStart: record.allowAgentStart,
       hostVersion: link?.hostVersion ?? null,
       serverVersion: LINK_PROTOCOL_VERSION,
     };
   });
+}
+
+export interface LocalHostRow {
+  id: "local";
+  label: string;
+  status: "online";
+  ompVersion: string | null;
+  platform: string;
+  lastSeenAt: null;
+}
+
+export type HostRow = LocalHostRow | LinkedHostRow;
+
+/** Settings → Hosts payload (`GET /api/hosts` and the `hosts` channel): this machine first, then linked hosts. */
+export async function hostsSnapshot(): Promise<{ hosts: HostRow[] }> {
+  const local: LocalHostRow = {
+    id: "local",
+    label: "This machine",
+    status: "online",
+    ompVersion: await getOmpVersion(),
+    platform: process.platform,
+    lastSeenAt: null,
+  };
+  return { hosts: [local, ...listHosts()] };
+}
+
+/** Tell `hosts` subscribers the registry changed (rename, toggle, revoke); link changes notify on their own. */
+export function notifyHostsChange(): void {
+  notify(hub().changeListeners);
 }
 
 /** The link carries traffic: sends, ops and children work. An omp-missing host

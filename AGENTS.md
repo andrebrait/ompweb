@@ -71,6 +71,7 @@ app/api/
   agent/new/route.ts              POST { cwd, message, toolNames?, provider?, modelId? }
   agent/[id]/route.ts             GET state | POST any RPC command
   events/route.ts                 GET multiplexed SSE | POST subscribe/unsubscribe channels
+  hosts/route.ts                  GET hosts (this machine first) | POST { label } → token once + login command | PATCH { id, label?, allowAgentStart? } | DELETE ?id= revoke (registry first, then close the link); 503 if hosts.json is unreadable
   notifications/devices/route.ts  GET VAPID key + subscribed | PUT { deviceId, prefs, subscription? }
   notifications/presence/route.ts POST { clientId, deviceId, visible, sessionId, seq }
   notifications/test/route.ts     POST { deviceId } send a test push (502 on push-service refusal)
@@ -162,6 +163,7 @@ components/
   MarkdownBody.tsx    markdown renderer
   ModelsConfig.tsx    modal for models/auth configuration
   McpConfig.tsx       project MCP server editor (Settings → MCP tab)
+  HostsConfig.tsx     linked hosts: add (token shown once), rename, revoke, allowAgentStart (Settings → Hosts tab)
   PluginsConfig.tsx   modal for installed plugins
   SkillsConfig.tsx    modal for loaded/search/installable skills
   FileExplorer.tsx    file tree inside sidebar
@@ -387,7 +389,8 @@ during the wait.
   MessagePort has no close event.
 - Channels (`lib/event-stream-hub.ts`): `running` (sidebar badges +
   session-list hints), `notifications` (one tab's toasts and in-page system
-  notifications, keyed by its `clientId`), `host-tools` (cross-session
+  notifications, keyed by its `clientId`), `hosts` (the `GET /api/hosts` body on
+  subscribe and on every link or registry change), `host-tools` (cross-session
   `open_url`/`notify`/`open_file` calls), `session` (observer-only, never
   spawns omp; keeps the latest-wins `message_update` coalescing under
   backpressure), `file` (viewer watch, same allow-list as `/api/files`). A
