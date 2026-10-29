@@ -134,9 +134,10 @@ two HTTP legs, both opened by the daemon (which also works behind NAT):
   daemon.
 - **Uplink** `POST /api/hosts/link`: batched NDJSON, daemon → main, flushed
   every 16 ms or at 256 KB.
-- Both legs carry `Authorization: Bearer <host token>`. `proxy.ts` exempts
-  `/api/hosts/link` from the password gate only when that header is present;
-  the route itself verifies the token.
+- Both legs carry `Authorization: Bearer <host token>`, and the route verifies
+  it before reading any body. `proxy.ts` does not run for `/api/hosts/link`
+  (its matcher excludes the path): Next buffers a proxied request body and
+  silently truncates it past 10 MB, below the link's upload limits.
 
 ### Messages
 
@@ -147,6 +148,15 @@ POST response carries `ack` (the highest uplink `seq` main applied). Each side
 keeps unacknowledged messages, resends them after a reconnect, and drops any
 `seq` it already applied, so no line is lost or applied twice when a leg
 breaks mid-write. stdin lines omp has not received would otherwise vanish.
+
+`hello` rides the downlink GET as the `x-omp-web-hello` header (base64url
+JSON; a GET has no body). An uplink POST carries its `ack` in the
+`x-omp-web-ack` header. Main decodes a whole POST before applying any of it.
+A `hello` with `ack: 0` comes from a daemon that has applied no downlink
+message, so it has sent no sequenced uplink message either (each one answers
+a downlink message): main restarts its uplink window for that host. Main
+numbers downlink messages above the daemon's `ack`, so a restarted main and
+a running daemon never reuse a `seq`.
 
 | Message | Direction | Purpose |
 |---|---|---|
@@ -176,8 +186,9 @@ breaks mid-write. stdin lines omp has not received would otherwise vanish.
   `omp --resume` children against one agent directory.
 - **Buffering.** While the uplink is down, the daemon buffers each child's
   output up to 8 MB per channel. On overflow it drops that channel's buffer
-  and sends `resync {ch}` after reconnecting; main then runs the existing
-  `get_state` reconcile for that session.
+  and queues `resync {ch}`, which reaches main with the first uplink POST that
+  gets through, ahead of the channel's later output; main then runs the
+  existing `get_state` reconcile for that session.
 - **Reattach.** On `hello`, main reattaches every listed `ch` to its
   `AgentSessionWrapper` and kills (`kill`) listed channels it has no wrapper
   for (orphans of a main restart). A wrapper whose channel is missing from
@@ -189,12 +200,12 @@ breaks mid-write. stdin lines omp has not received would otherwise vanish.
   restarted on that host (after the orphan's `exit`) and sent `RESUME_PROMPT`,
   as local sessions are after a restart.
 - **Large results.** An op result whose JSON exceeds 1 MB, and every
-  `readMedia` result, is sent as raw bytes to
+  successful `readMedia` result, is sent as raw bytes to
   `POST /api/hosts/link/blob/<reqId>` instead of inside NDJSON; the `res` line
   then carries `blob: {bytes}` and no `result`.
 - **Limits.** Uplink batches are capped at 16 MB and blob uploads at 64 MB;
-  over-limit requests get 413. A single `stdout` line over 8 MB closes that
-  channel with `resync`.
+  over-limit requests get 413. A single `stdout` line over 8 MB is dropped and
+  replaced by `resync {ch}`.
 
 ## Host ops (this sub-project)
 
