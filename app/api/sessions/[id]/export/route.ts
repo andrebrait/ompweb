@@ -1,5 +1,6 @@
 import { apiErrorResponse, opErrorResponse, resolveSessionHostOr404 } from "@/lib/api-utils";
 import { getContentDisposition } from "@/lib/content-disposition";
+import { localHost } from "@/lib/hosts/local-host";
 
 export const runtime = "nodejs";
 
@@ -16,10 +17,12 @@ export async function GET(
     if ("response" in resolved) return resolved.response;
     const result = await resolved.host.sessionOps.exportSession(id);
     if (!result.ok) return opErrorResponse(result);
+    // A daemon's HTML is untrusted: opened inline it would run on this origin.
+    const asInline = inline && resolved.host.id === localHost.id;
     return new Response(result.value.html, {
       headers: {
         "Content-Type": "text/html; charset=utf-8",
-        "Content-Disposition": getContentDisposition(result.value.fileName, inline, "session.html"),
+        "Content-Disposition": getContentDisposition(result.value.fileName, asInline, "session.html"),
         "Cache-Control": "no-cache",
       },
     });
