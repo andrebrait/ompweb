@@ -131,6 +131,7 @@ export function DirectoryPicker({ onCancel, onSelect, busy = false, error, host 
   const cloneName = cloneUrl.trim() ? cloneDirectoryName(cloneUrl) : null;
   const cloneTarget = cloneName && currentPath ? `${currentPath.replace(/[\\/]+$/, "")}${currentPath.includes("\\") ? "\\" : "/"}${cloneName}` : null;
   const canSelect = Boolean(remote ? pathInput.trim() : currentPath) && !hasUncommittedPath && !locked && (!cloneUrl.trim() || cloneName !== null);
+  const goDisabled = loading || remote || !pathInput.trim();
   const canNavigateUp = !remote && (Boolean(parentDirectory) || isWindowsDriveRoot(currentPath));
   const submitSelection = async () => {
     const args = extraArgs.split("\n").map((arg) => arg.trim()).filter(Boolean);
@@ -268,10 +269,10 @@ export function DirectoryPicker({ onCancel, onSelect, busy = false, error, host 
           <button
             className="directory-picker-action"
             type="submit"
-            disabled={loading || remote || !pathInput.trim()}
+            disabled={goDisabled}
             title={remote ? t("hosts.notAvailableRemote") : t("directoryPicker.goToDirectory")}
-            style={{ minWidth: 58, height: 36, padding: "0 12px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg-hover)", color: "var(--text-muted)", cursor: loading || !pathInput.trim() ? "default" : "pointer", opacity: loading || !pathInput.trim() ? 0.6 : 1, transition: "background-color var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm), opacity var(--dur-fast) var(--ease-out-warm)" }}
-            onMouseEnter={(e) => { if (!loading && pathInput.trim()) { e.currentTarget.style.background = "var(--bg-selected)"; e.currentTarget.style.color = "var(--text)"; } }}
+            style={{ minWidth: 58, height: 36, padding: "0 12px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg-hover)", color: "var(--text-muted)", cursor: goDisabled ? "default" : "pointer", opacity: goDisabled ? 0.6 : 1, transition: "background-color var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm), opacity var(--dur-fast) var(--ease-out-warm)" }}
+            onMouseEnter={(e) => { if (!goDisabled) { e.currentTarget.style.background = "var(--bg-selected)"; e.currentTarget.style.color = "var(--text)"; } }}
             onMouseLeave={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text-muted)"; }}
           >
             {t("directoryPicker.go")}

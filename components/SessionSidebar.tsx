@@ -1281,14 +1281,14 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
   }, [onSelectSession, expandProject, hostUnavailableReason]);
 
   const handleNewSession = useCallback(() => {
-    if (!selectedCwd) return;
+    if (!selectedCwd || hostUnavailableReason(selectedHostId)) return;
     // Generate a temporary UUID client-side — no backend call needed.
     // Pi will be spawned lazily when the user sends the first message.
     const tempId = typeof crypto.randomUUID === "function"
       ? crypto.randomUUID()
       : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
     onNewSession?.(tempId, selectedCwd, selectedHostId);
-  }, [selectedCwd, selectedHostId, onNewSession]);
+  }, [selectedCwd, selectedHostId, onNewSession, hostUnavailableReason]);
   const newSessionBlockedReason = hostUnavailableReason(selectedHostId);
   const newSessionEnabled = Boolean(selectedCwd) && newSessionBlockedReason === null;
 
@@ -1499,7 +1499,9 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
         />
         <button
           onClick={handleNewSession}
-          disabled={!selectedCwd || newSessionBlockedReason !== null}
+          disabled={!selectedCwd}
+          aria-disabled={newSessionEnabled ? undefined : true}
+          aria-describedby={newSessionBlockedReason ? "sidebar-new-session-reason" : undefined}
           className="sidebar-new-session"
           title={newSessionBlockedReason ?? (selectedCwd ? t("sessionSidebar.newSessionIn", { cwd: selectedCwd }) : t("sessionSidebar.selectProjectFirst"))}
           style={{
@@ -1533,6 +1535,7 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
         >
           <Plus size={15} strokeWidth={2.2} style={{ color: "var(--accent)", flexShrink: 0 }} aria-hidden="true" />
           <span>{t("sessionSidebar.new")}</span>
+          {newSessionBlockedReason && <span id="sidebar-new-session-reason" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0, 0, 0, 0)", whiteSpace: "nowrap" }}>{newSessionBlockedReason}</span>}
         </button>
       </div>
 

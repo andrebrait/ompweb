@@ -4961,3 +4961,60 @@ test("a fresh local chat sends no host id", async () => {
   await act(async () => { await w.latest.handleSend("first"); await sleep(30); });
   assert.equal("hostId" in callsTo("POST", "/api/agent/new")[0].body, false);
 });
+
+for (const [name, method, command] of [["steer", "handleSteer", "steer"], ["follow-up", "handleFollowUp", "follow_up"], ["streaming-behavior prompt", "handlePromptWithStreamingBehavior", "prompt"]]) {
+  test(`a ${name} to an offline host toasts and reports the refusal so the composer keeps its draft`, async () => {
+    resetWorld();
+    toastCalls.length = 0;
+    primeSession(`remote-queue-${command}`, [userMsg("u0", "q")]);
+    const w = await mountSession(`remote-queue-${command}`);
+    world.holds.push({
+      match: (httpMethod, url, body) => httpMethod === "POST" && url.includes(`/api/agent/remote-queue-${command}`) && body?.type === command,
+      produce: async () => ({ status: 503, value: { error: "Build box is offline", code: "host_offline", hostOffline: true } }),
+    });
+    let accepted;
+    await act(async () => {
+      accepted = method === "handlePromptWithStreamingBehavior"
+        ? await w.latest[method]("queued text", "steer")
+        : await w.latest[method]("queued text");
+      await sleep(30);
+    });
+    assert.equal(accepted, false);
+    assert.deepEqual(toastCalls, [["error", translate("agentSession.hostOfflineSend", { detail: "Build box is offline" })]]);
+    assert.equal(w.latest.notices.length, 0);
+  });
+}
+
+test("the hosts channel decides the offline banner; a frame only speaks before its first snapshot", async () => {
+  resetWorld();
+  primeSession("remote-banner", [userMsg("u0", "q")]);
+  world.agents.set("remote-banner", { running: true, state: {} }); // a running chat attaches its stream on load
+  const bannerText = translate("hosts.offlineBanner", { host: "Build box" });
+  const mount = async (hostStatus) => {
+    const view = ownRoot(render(React.createElement(ChatWindow, {
+      session: { ...sessionInfo("remote-banner"), hostId: "h1" }, newSessionCwd: null, hostLabel: "Build box", ...(hostStatus ? { hostStatus } : {}),
+    }), { wrapper: TestRoot }));
+    await settle();
+    await act(async () => { lastEs()?.open(); });
+    await settle();
+    return view;
+  };
+  const withChannel = await mount("online");
+  await act(async () => { lastEs().emit({ type: "host_status", hostId: "h1", status: "offline" }); });
+  assert.equal(withChannel.queryByText(bannerText), null, "a frame cannot override the channel's online status");
+  withChannel.unmount();
+
+  resetWorld();
+  primeSession("remote-banner", [userMsg("u0", "q")]);
+  world.agents.set("remote-banner", { running: true, state: {} }); // a running chat attaches its stream on load
+  const beforeSnapshot = await mount(undefined);
+  await act(async () => { lastEs().emit({ type: "host_status", hostId: "h1", status: "offline" }); });
+  assert.ok(beforeSnapshot.queryByText(bannerText), "without a channel snapshot the frame shows the banner");
+  beforeSnapshot.unmount();
+
+  resetWorld();
+  primeSession("remote-banner", [userMsg("u0", "q")]);
+  world.agents.set("remote-banner", { running: true, state: {} }); // a running chat attaches its stream on load
+  const offlineChannel = await mount("offline");
+  assert.ok(offlineChannel.queryByText(bannerText), "a chat opened during an outage shows the banner from the channel");
+});
