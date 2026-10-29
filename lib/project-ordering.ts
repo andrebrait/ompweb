@@ -30,6 +30,12 @@ export function hostProjectKey(hostId: string | undefined, path: string): string
   return hostId === undefined || hostId === LOCAL_HOST_ID ? path : `${hostId}:${path}`;
 }
 
+/** Composer draft key of a fresh chat: `new:<cwd>` on this machine (drafts
+ *  saved before hosts existed keep their key), `new:<hostId>:<cwd>` elsewhere. */
+export function newChatDraftKey(cwd: string, hostId: string | undefined): string {
+  return `new:${hostProjectKey(hostId, cwd)}`;
+}
+
 /** `hostProjectKey` over the case-folded comparable path (how sessions find their project). */
 export function foldedHostProjectKey(hostId: string | undefined, path: string): string {
   return hostProjectKey(hostId, comparableProjectPath(path));

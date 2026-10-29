@@ -4945,7 +4945,8 @@ test("a fresh chat on a remote host creates its session there and toasts when th
   const w = await mountSession(null, undefined, { newSessionCwd: "/remote/work", newSessionHostId: "h1" });
   let receipt;
   await act(async () => { receipt = await w.latest.handleSend("first"); await sleep(30); });
-  assert.equal(receipt.status, "rejected");
+  // Drafts for one path on two hosts must not share a composer key.
+  assert.deepEqual(receipt, { status: "rejected", recoveryKey: "new:h1:/remote/work" });
   assert.deepEqual(callsTo("POST", "/api/agent/new").map((call) => [call.body.cwd, call.body.hostId]), [["/remote/work", "h1"]]);
   assert.equal(toastCalls[0]?.[0], "error");
   assert.equal(w.latest.notices.length, 0);
@@ -4972,15 +4973,17 @@ test("a fresh chat whose host drops after the spawn adopts the kept session, so 
   assert.equal(callsTo("POST", "/api/agent/kept-remote").some((call) => call.body?.type === "prompt"), true);
 });
 
-test("a fresh local chat sends no host id", async () => {
+test("a fresh local chat sends no host id and keeps the pre-hosts draft key", async () => {
   resetWorld();
   world.holds.push({
     match: (method, url) => method === "POST" && url === "/api/agent/new",
     produce: async () => ({ status: 500, value: { error: "stop here" } }),
   });
   const w = await mountSession(null, undefined, { newSessionCwd: "/workspace" });
-  await act(async () => { await w.latest.handleSend("first"); await sleep(30); });
+  let receipt;
+  await act(async () => { receipt = await w.latest.handleSend("first"); await sleep(30); });
   assert.equal("hostId" in callsTo("POST", "/api/agent/new")[0].body, false);
+  assert.deepEqual(receipt, { status: "rejected", recoveryKey: "new:/workspace" });
 });
 
 for (const [name, method, command] of [["steer", "handleSteer", "steer"], ["follow-up", "handleFollowUp", "follow_up"], ["streaming-behavior prompt", "handlePromptWithStreamingBehavior", "prompt"]]) {

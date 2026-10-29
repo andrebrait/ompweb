@@ -815,7 +815,8 @@ during the wait.
   recording in memory and starts a job; the hook polls `GET /api/stt/[jobId]`
   (proxies with ~30s timeouts would otherwise return HTML 504s). Job failures
   are 200 payloads for the same reason.
-- Jobs carry the composer scope (`draftKey`: session id or `new:<cwd>`). The
+- Jobs carry the composer scope (`draftKey`: session id, or `newChatDraftKey`:
+  `new:<cwd>` here, `new:<hostId>:<cwd>` for a fresh chat on a remote host). The
   hook adopts the newest job for its scope on mount, focus, visibility and
   every 4s while visible and idle, so another browser can play (`/audio`),
   retry (`POST`) or discard it. Leaving the scope stops following without
