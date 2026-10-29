@@ -78,7 +78,11 @@ export async function POST(req: Request) {
       // process and a registry entry nobody will ever use.
       // The link dropped: the first command may be running there, so the
       // wrapper stays for the reconnect (and disposing it would wait for the link).
-      if (!(error instanceof WebRpcError && error.code === "host_offline")) await session.destroyAndWait();
+      // Its id lets the client open it instead of starting a second session.
+      if (error instanceof WebRpcError && error.code === "host_offline") {
+        return NextResponse.json({ error: error.message, code: error.code, hostOffline: true, sessionId: realSessionId }, { status: 503 });
+      }
+      await session.destroyAndWait();
       throw error;
     }
   } catch (error) {
