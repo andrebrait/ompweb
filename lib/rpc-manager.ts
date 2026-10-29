@@ -39,7 +39,7 @@ import type {
 } from "./pi-types";
 import type { AgentMessage, CrossSessionHostToolCall, ExitedRpcSession, ExtensionWidgetItem } from "./types";
 import type { Host, HostStatus } from "./hosts/host";
-import { getHost, isLinkUp, linkQuietFor, orphanExit, RemoteRpcTransport } from "./hosts/hub";
+import { getHost, isLinkUp, lastUplinkAt, orphanExit, RemoteRpcTransport } from "./hosts/hub";
 import { localHost, resolveSpawnCwdResult } from "./hosts/local-host";
 import { invalidateHostSessionList, sessionSpawnTarget } from "./hosts/session-index";
 import type { SessionLiveSnapshot, SessionLiveToolEvent, SessionStreamCursor } from "./session-sync";
@@ -488,7 +488,10 @@ export class AgentSessionWrapper {
    * wedged: the child runs on there, so it is not recycled (the kill would wait
    * for the link anyway), and the reconcile on reconnect settles the run. */
   private linkLostDuring(timeout: RpcCommandTimeoutError): boolean {
-    return this.hostDown() || linkQuietFor(this.host.id, timeout.timeoutMs);
+    const lastUplink = lastUplinkAt(this.host.id);
+    // A linked host that sent anything after the command went down has a live
+    // link: omp itself is wedged, and the caller recycles the child as before.
+    return lastUplink !== null && (this.hostDown() || lastUplink <= timeout.dispatchedAt);
   }
 
   /** A remote link that dropped this child's buffered output asks for a reconcile. */
@@ -503,7 +506,7 @@ export class AgentSessionWrapper {
   private handleHostStatus(status: HostStatus): void {
     if (!this._alive) return;
     this.emit({ type: "host_status", hostId: this.host.id, status });
-    if (status !== "online") return;
+    if (!isLinkUp(status)) return;
     // The idle and disconnect timers held off while the link was down; give them a full window again.
     this.resetIdleTimer(true);
     void this.reconcileAfterGap();

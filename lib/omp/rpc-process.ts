@@ -41,12 +41,15 @@ export class RpcCommandError extends Error {
 export class RpcCommandTimeoutError extends Error {
   readonly command: string;
   readonly timeoutMs: number;
+  /** When the command went to the transport (or its wait started); a timer fires timeoutMs later. */
+  readonly dispatchedAt: number;
 
-  constructor(command: string, timeoutMs: number, message?: string) {
+  constructor(command: string, timeoutMs: number, message?: string, dispatchedAt = Date.now() - timeoutMs) {
     super(message ?? `RPC command ${command} timed out after ${timeoutMs}ms`);
     this.name = "RpcCommandTimeoutError";
     this.command = command;
     this.timeoutMs = timeoutMs;
+    this.dispatchedAt = dispatchedAt;
   }
 }
 
@@ -238,6 +241,7 @@ export class RpcProcess {
     if (this.exited) {
       return Promise.reject(new Error("omp RPC process has exited"));
     }
+    const dispatchedAt = Date.now();
     const id = `w${this.nextId++}`;
     return new Promise<T>((resolve, reject) => {
       const entry: PendingCommand = {
@@ -252,7 +256,7 @@ export class RpcProcess {
           // not spuriously reject a different command.
           if (this.pending.get(id) === entry) {
             this.pending.delete(id);
-            reject(new RpcCommandTimeoutError(command.type, timeoutMs));
+            reject(new RpcCommandTimeoutError(command.type, timeoutMs, undefined, dispatchedAt));
           }
         }, timeoutMs);
         // A pending command timer must never keep the event loop alive on its own
