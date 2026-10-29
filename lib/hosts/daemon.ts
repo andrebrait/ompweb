@@ -494,9 +494,16 @@ export function runHostDaemon(options: { url: string; token: string; allowHttp: 
           signal,
         });
         if (fatal(offered.status)) return;
-        if (!offered.ok) throw new Error(`the server answered the hello with ${offered.status}`);
-        const { helloId } = (await offered.json()) as { helloId?: unknown };
-        if (typeof helloId !== "string" || !helloId) throw new Error("the server sent no hello id");
+        const { helloId } = (offered.ok ? await offered.json().catch(() => ({})) : {}) as { helloId?: unknown };
+        if (typeof helloId !== "string" || !helloId) {
+          // A v1 main answers a nonce-less POST 409 and has no hello leg: redialing would loop forever.
+          if (offered.ok || [400, 404, 405, 409].includes(offered.status)) {
+            log("the server runs an older ompweb: upgrade it");
+            void shutdown(1);
+            return;
+          }
+          throw new Error(`the server answered the hello with ${offered.status}`);
+        }
         const response = await fetchLink(linkUrl, { headers: { authorization, [LINK_HELLO_HEADER]: helloId }, signal });
         if (fatal(response.status)) return;
         if (!response.ok || !response.body) throw new Error(`the server answered ${response.status}`);
