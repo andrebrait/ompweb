@@ -11,18 +11,25 @@ require("./node-version").exitIfUnsupportedNode();
 
 const USAGE = "Usage: ompweb host login --url <server url>   (the host token is read from stdin)\n       ompweb host [--allow-http]";
 
+/** A host token is 43 characters; anything this long is not one. */
+const MAX_TOKEN_LINE_BYTES = 4096;
+
 /** The first line on stdin: the token never appears in argv, where `ps` would show it. */
 function readTokenLine() {
   if (process.stdin.isTTY) process.stderr.write("Paste the host token, then press Enter: ");
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let data = "";
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (chunk) => {
       data += chunk;
       const newline = data.indexOf("\n");
-      if (newline !== -1) {
+      const line = newline === -1 ? data : data.slice(0, newline);
+      if (Buffer.byteLength(line) > MAX_TOKEN_LINE_BYTES) {
         process.stdin.pause();
-        resolve(data.slice(0, newline));
+        reject(new Error(`the host token line is longer than ${MAX_TOKEN_LINE_BYTES} bytes`));
+      } else if (newline !== -1) {
+        process.stdin.pause();
+        resolve(line);
       }
     });
     process.stdin.on("end", () => resolve(data));

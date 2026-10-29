@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -41,4 +41,37 @@ test("SIGTERM to `ompweb host` stops the daemon itself, leaving no orphan", { sk
   const stopped = await Promise.race([closed, sleep(10_000, null, { ref: false })]);
   assert.ok(stopped, `the daemon outlived SIGTERM:\n${log}`);
   assert.deepEqual(stopped, { code: 0, signal: null }, "the daemon's own stop handled the signal");
+});
+
+/** Run `ompweb host login` with `input` on stdin (left open unless `end`). */
+async function login(t, input, { end = true } = {}) {
+  const scratch = mkdtempSync(join(tmpdir(), "omp-web-host-login-"));
+  const agentDir = join(scratch, "agent");
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  const child = spawn(process.execPath, [bin, "host", "login", "--url", "http://127.0.0.1:9"], {
+    env: { ...process.env, HOME: scratch, USERPROFILE: scratch, PI_CODING_AGENT_DIR: agentDir },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  t.after(() => child.kill("SIGKILL"));
+  let stderr = "";
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  const closed = new Promise((resolve) => child.once("close", (code) => resolve(code)));
+  child.stdin.write(input);
+  if (end) child.stdin.end();
+  const code = await Promise.race([closed, sleep(10_000, "timeout", { ref: false })]);
+  const file = join(agentDir, "omp-web", "host.json");
+  return { code, stderr, saved: existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null };
+}
+
+test("`ompweb host login` saves the first stdin line as the token", async (t) => {
+  const { code, saved } = await login(t, " tok-123 \nignored\n");
+  assert.equal(code, 0);
+  assert.equal(saved?.token, "tok-123");
+});
+
+test("`ompweb host login` refuses a token line over 4096 bytes without waiting for more input", async (t) => {
+  const { code, stderr, saved } = await login(t, "a".repeat(5000), { end: false });
+  assert.equal(code, 1);
+  assert.match(stderr, /4096 bytes/);
+  assert.equal(saved, null);
 });
