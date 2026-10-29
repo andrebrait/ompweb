@@ -64,7 +64,7 @@ export async function POST(req: Request) {
       {
         host: listHosts().find((h) => h.id === host.id),
         token,
-        command: `omp-web host login --url ${requestOrigin(req)}`,
+        command: `ompweb host login --url ${requestOrigin(req)}`,
       },
       { headers: noStore },
     );

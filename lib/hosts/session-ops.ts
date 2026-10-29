@@ -1,6 +1,6 @@
 // The file-reading half of the session and project API routes. Every op takes
 // a session id (never a path) and returns JSON-serializable values, so the
-// `omp-web host` daemon can run the same code for a remote host. Live-wrapper
+// `ompweb host` daemon can run the same code for a remote host. Live-wrapper
 // work (RPC sends, stopping a child) stays in the routes on main.
 // No `next/*` or `@/` imports: the daemon loads this through plain jiti.
 import { randomUUID } from "crypto";

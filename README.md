@@ -350,9 +350,10 @@ Notes:
   only (their service runs `ompweb` with no arguments), so they cannot run
   `ompweb host`. To keep the link up across logouts or reboots, run
   `ompweb host` under a supervisor of your choice that restarts it after failure.
-  The daemon exits with code `1` when the server revokes its token or needs a
-  newer ompweb, and `0` when a newer link for the same host replaces it; a link
-  is one-per-host, so never run two daemons with the same token.
+  The daemon exits with code `1` when the server revokes its token or when the
+  link protocol versions differ (either side may be the newer one; upgrade ompweb
+  on the older side), and `0` when a newer link for the same host replaces it.
+  A link is one-per-host, so never run two daemons with the same token.
 - **Trust:** a linked host runs omp with full tool access on that machine for
   whoever controls the ompweb server or the token. Keep the token private and
   revoke it when a machine is retired.
@@ -381,7 +382,7 @@ Notes:
 - **macOS launchd Service**: LaunchAgent that starts at login, restarts on crash, and logs under `~/Library/Logs/ompweb`.
 - **Linux systemd Service & Tray**: User service that starts at login and restarts on crash, plus a StatusNotifierItem tray icon with service controls (KDE Plasma and compatible desktops).
 - **Notifications**: Desktop and mobile (PWA) notifications for finished tasks, questions waiting for an answer, failed runs, and automatic model switches, with Web Push when served over HTTPS. See [Notifications](#notifications).
-- **Web-based Settings** (10 tabs): Interface & Behavior, Safety & Approvals, AI Model Defaults, API Keys & Providers, Usage, Agent & Intelligence (advisor, memory, compaction), Agents, Extensions & Tools (MCP, skills, plugins), Notifications, System & Updates.
+- **Web-based Settings** (11 tabs): Interface & Behavior, Safety & Approvals, AI Model Defaults, API Keys & Providers, Usage, Agent & Intelligence (advisor, memory, compaction), Agents, Extensions & Tools (MCP, skills, plugins), Hosts, Notifications, System & Updates.
 - **Slash Commands & Shortcuts**: Quick prompts (`/plan`, `/review`, `/fix`, `/test`, etc.), `⌘K` / `Ctrl+K` palette, and model/reasoning cycling.
 - **UI Themes & Localization**: Warm paper light/dark themes plus an omp.sh-inspired midnight (`omp`) theme, chat font size & interface scale, with full English, Chinese (简体中文), and Japanese (日本語) translations.
 

@@ -1267,7 +1267,7 @@
   "settingsTabs.hosts.label": "ホスト",
   "settingsTabs.hosts.description": "他のマシンをリンクしてセッションを実行します",
   "hostsConfig.title": "リンク済みホスト",
-  "hostsConfig.subtitle": "他のマシンでセッションを実行します。各マシンで omp-web host を実行し、このサーバーに接続します。",
+  "hostsConfig.subtitle": "他のマシンでセッションを実行します。各マシンで ompweb host を実行し、このサーバーに接続します。",
   "hostsConfig.thisMachine": "このマシン",
   "hostsConfig.add": "ホストを追加",
   "hostsConfig.empty": "リンク済みのホストはまだありません。",

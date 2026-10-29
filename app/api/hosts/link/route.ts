@@ -2,7 +2,7 @@ import { handleLinkGet, handleLinkPost } from "@/lib/hosts/hub";
 
 export const dynamic = "force-dynamic";
 
-// The `omp-web host` daemon's link (lib/hosts/hub.ts). proxy.ts does not run
+// The `ompweb host` daemon's link (lib/hosts/hub.ts). proxy.ts does not run
 // for this path: the hub checks the host's bearer token before reading a body.
 
 // GET /api/hosts/link — downlink: a long-lived NDJSON stream, server → daemon.

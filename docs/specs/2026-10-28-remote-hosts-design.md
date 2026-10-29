@@ -43,19 +43,19 @@ flag.
 ```
 Browser ─▶ main omp-web ──┬─ LocalHost ── spawn omp --mode rpc-ui (stdio)
                           │
-                          └─ RemoteHost ◀── link (HTTP) ── omp-web host (daemon)
+                          └─ RemoteHost ◀── link (HTTP) ── ompweb host (daemon)
                                                             └─ spawn omp --mode rpc-ui
 ```
 
-### Daemon: `omp-web host`
+### Daemon: `ompweb host`
 
 A subcommand of the existing `@kahme247/ompweb` package (`bin/omp-web.js`), so
 it runs omp-web's own `lib/` server code on the remote machine.
 
-- `omp-web host login --url <url>` reads the host token from stdin and saves
+- `ompweb host login --url <url>` reads the host token from stdin and saves
   `<agent dir>/omp-web/host.json` (mode 0600). The token is never an argv
   value, which `ps` would expose.
-- `omp-web host` dials the saved URL and keeps the link up, reconnecting with
+- `ompweb host` dials the saved URL and keeps the link up, reconnecting with
   exponential backoff (1 s doubling to 60 s, with jitter).
 - `https://` is required. `http://` is accepted only for loopback addresses or
   with `--allow-http` (for example on a tailnet).
@@ -110,7 +110,7 @@ rename, like `lib/project-registry.ts`). Each record: `id`, `label`,
 stored.
 
 Settings → Hosts lists hosts with status, omp version and last seen; adds a
-host (shows the token once, with the `omp-web host login` command to run);
+host (shows the token once, with the `ompweb host login` command to run);
 renames; revokes; toggles `allowAgentStart`.
 
 ### Routing
@@ -360,7 +360,7 @@ the agent. Local creation keeps today's behavior.
   - buffer overflow → `resync` → reconcile
   - remote path scoping and blob-hash validation
   - `new_session` remote confirm gate, with `allowAgentStart` on and off
-- **Integration:** a real `omp-web host` process with its own `HOME` (a second
+- **Integration:** a real `ompweb host` process with its own `HOME` (a second
   "machine") linked to the dev server on loopback. Start a session, stream a
   reply, cut the link, reconnect, check reattach and that no frame is lost or
   duplicated.
@@ -373,6 +373,6 @@ the agent. Local creation keeps today's behavior.
 - `AGENTS.md`: a "Remote hosts" section (Host interface, link protocol rules,
   one-link-per-host, transport-down vs exited), and new files in the file map.
 - `DESIGN.md`: the `Host` seam in the porting contract.
-- `README.md`: how to link a machine (`omp-web host login`, `omp-web host`,
+- `README.md`: how to link a machine (`ompweb host login`, `ompweb host`,
   running it as a service).
 - `CHANGELOG.md` entry.

@@ -1,4 +1,4 @@
-// `omp-web host` (spec "Daemon"): links this machine to a main omp-web, runs
+// `ompweb host` (spec "Daemon"): links this machine to a main omp-web, runs
 // the omp children it asks for and answers host ops with this machine's files.
 // bin/omp-web-host.js loads it through jiti: no `next/*` or `@/` imports.
 import { lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -58,7 +58,7 @@ interface Queued {
 
 const loginFile = () => join(getAgentDir(), "omp-web", "host.json");
 const reason = (error: unknown) => (error instanceof Error ? error.message : String(error));
-const log = (message: string) => console.error(`[omp-web host] ${message}`);
+const log = (message: string) => console.error(`[ompweb host] ${message}`);
 // 1 s doubling to 60 s; each wait varies ±20% so many hosts do not redial in step.
 const withJitter = (ms: number) => ms * (0.8 + Math.random() * 0.4);
 
@@ -148,7 +148,7 @@ async function* readLines(body: ReadableStream<Uint8Array>): AsyncGenerator<stri
 export function runHostDaemon(options: { url: string; token: string; allowHttp: boolean; fetch?: typeof fetch }): { stop(): Promise<void>; done: Promise<number> } {
   const { protocol, hostname } = new URL(options.url);
   if (protocol !== "https:" && !(protocol === "http:" && (options.allowHttp || isLoopbackHost(hostname)))) {
-    throw new Error("omp-web host needs an https:// server URL (http:// only for loopback, or with --allow-http)");
+    throw new Error("ompweb host needs an https:// server URL (http:// only for loopback, or with --allow-http)");
   }
   const fetchLink = options.fetch ?? fetch;
   const linkUrl = `${options.url.replace(/\/+$/, "")}/api/hosts/link`;
@@ -338,7 +338,7 @@ export function runHostDaemon(options: { url: string; token: string; allowHttp: 
         void answer(message.id, message.op, message.args);
         return;
       case "replaced":
-        log("another omp-web host linked with this token; exiting");
+        log("another ompweb host linked with this token; exiting");
         void shutdown(0);
         return;
     }
@@ -404,7 +404,7 @@ export function runHostDaemon(options: { url: string; token: string; allowHttp: 
         body: bytes as Uint8Array<ArrayBuffer>,
         signal,
       });
-      if (fatal(response.status)) throw new HostOpError(503, "host_stopping", "omp-web host is stopping");
+      if (fatal(response.status)) throw new HostOpError(503, "host_stopping", "ompweb host is stopping");
       if (response.status === 409) {
         if (nonce === used) forgetLink();
         continue;
@@ -452,7 +452,7 @@ export function runHostDaemon(options: { url: string; token: string; allowHttp: 
     const { transport } = spawned;
     if (stopped) {
       transport.killTree(true);
-      throw new HostOpError(503, "host_stopping", "omp-web host is stopping");
+      throw new HostOpError(503, "host_stopping", "ompweb host is stopping");
     }
     channels.set(ch, { transport, sessionId: file ? readSessionHeaderSync(file)?.id ?? null : null, buffered: 0 });
     transport.onLine((line) => output(ch, { type: "stdout", ch, line }));

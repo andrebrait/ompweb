@@ -1,4 +1,4 @@
-// Wire format between the main omp-web server and the `omp-web host` daemon.
+// Wire format between the main omp-web server and the `ompweb host` daemon.
 // Pure: no I/O and no Next or `@/` imports, so both sides share it.
 import type { SessionOps } from "./session-ops";
 
