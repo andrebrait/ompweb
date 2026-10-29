@@ -1322,6 +1322,11 @@ export class AgentSessionWrapper {
     this.onDestroyCallback = cb;
   }
 
+  /** Record an id this conversation was reached by before omp moved it; tabs still on it are still viewing it. */
+  keepMovedFromId(id: string): void {
+    if (!this.movedFromIds.includes(id)) this.movedFromIds.push(id);
+  }
+
   /**
    * Wait for the next `terminalEndsNeeded` terminal turn ends after this
    * call (terminal agent_end, prompt_result, or prompt_error). The caller
@@ -2661,7 +2666,10 @@ export async function startRpcSession(
     });
     registry.set(realSessionId, created);
     // omp can move a resumed session during startup, before identity is known; keep the requested id routable.
-    if (sessionFile && realSessionId !== sessionId) registry.set(sessionId, created);
+    if (sessionFile && realSessionId !== sessionId) {
+      registry.set(sessionId, created);
+      created.keepMovedFromId(sessionId);
+    }
     // A successful respawn supersedes the crash record.
     clearExitedRpcSession(sessionId);
     if (realSessionId !== sessionId) clearExitedRpcSession(realSessionId);
