@@ -39,7 +39,7 @@ import {
 } from "@/lib/chat-lazy-load";
 import { getDraftSummary, type ChatDraft } from "@/lib/draft-store";
 import { isLinkUp, type HostStatus } from "@/lib/hosts/host";
-import { remoteHostId } from "@/lib/project-ordering";
+import { newChatDraftKey, remoteHostId } from "@/lib/project-ordering";
 
 interface Props {
   session: SessionInfo | null;
@@ -677,7 +677,8 @@ export function ChatWindow({ session, newSessionCwd, newSessionHostId, hostStatu
   // top, load another page while keeping the scroll position stable.
   const [visibleCount, setVisibleCount] = useState(VISIBLE_PAGE_SIZE);
   const prevSessionKeyForPagingRef = useRef<string | null>(null);
-  const sessionKeyForPaging = session?.id ?? (newSessionCwd ? `new:${newSessionCwd}` : "empty");
+  const draftKey = session?.id ?? (newSessionCwd ? newChatDraftKey(newSessionCwd, newSessionHostId) : undefined);
+  const sessionKeyForPaging = draftKey ?? "empty";
   useEffect(() => {
     if (prevSessionKeyForPagingRef.current !== sessionKeyForPaging) {
       prevSessionKeyForPagingRef.current = sessionKeyForPaging;
@@ -1130,7 +1131,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionHostId, hostStatu
       onLoadSlashCommands={loadSlashCommands}
       onBuiltinCommand={handleBuiltinSlashCommand}
       onAudioUnlock={unlockAudio}
-      draftKey={session?.id ?? (newSessionCwd ? `new:${newSessionCwd}` : undefined)}
+      draftKey={draftKey}
       // @-mentions and skill lookups read this machine's disk: not for a remote workspace yet.
       cwd={remoteWorkspace ? null : session?.cwd ?? newSessionCwd}
       /* The pill bar and chevron only render in the non-empty layout; don't
@@ -1434,7 +1435,7 @@ export function ChatWindow({ session, newSessionCwd, newSessionHostId, hostStatu
       {/* Minimized pill bar - shown when composer is collapsed */}
       {composerMinimized && (
         <MinimizedComposerBar
-          draftKey={session?.id ?? (newSessionCwd ? `new:${newSessionCwd}` : undefined)}
+          draftKey={draftKey}
           isStreaming={sessionBusy}
           isCompacting={isCompacting}
           statusText={composerStatusText}
