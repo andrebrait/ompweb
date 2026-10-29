@@ -1,12 +1,6 @@
 import { NextResponse } from "next/server";
 import { apiErrorResponse, opErrorResponse, resolveHostOrError } from "@/lib/api-utils";
-import { existsSync } from "fs";
-import { randomUUID } from "crypto";
-import { allowFileRoot } from "@/lib/file-access";
-import { localHost } from "@/lib/hosts/local-host";
-import { invalidateHostSessionList } from "@/lib/hosts/session-index";
-import { invalidateSessionListCache } from "@/lib/session-reader";
-import { WebRpcError, startRpcSession } from "@/lib/rpc-manager";
+import { WebRpcError, startNewRpcSession } from "@/lib/rpc-manager";
 import { RpcCommandError } from "@/lib/omp/rpc-process";
 import { parseJsonWithinLimit, RequestBodyTooLargeError } from "@/lib/bounded-form-data";
 import { MAX_AGENT_COMMAND_REQUEST_BYTES } from "@/lib/image-attachments";
@@ -46,19 +40,7 @@ export async function POST(req: Request) {
     if (!requestedCwd || typeof requestedCwd !== "string") {
       return NextResponse.json({ error: "cwd is required", code: "cwd_required" }, { status: 400 });
     }
-    let cwd = requestedCwd;
-    if (host === localHost) {
-      if (!existsSync(cwd)) {
-        return NextResponse.json({ error: `Directory does not exist: ${cwd}`, code: "directory_not_found" }, { status: 400 });
-      }
-    } else {
-      // Only the host knows its directories; it answers with the path it will use.
-      const validated = await host.sessionOps.validateCwd(cwd);
-      if (!validated.ok) return opErrorResponse(validated);
-      cwd = validated.value.cwd;
-    }
 
-    // Use a one-time key so startRpcSession's lock doesn't conflict with real session ids
     const { provider, modelId, toolNames, thinkingLevel, advisor, ...promptCommand } = command as { provider?: string; modelId?: string; toolNames?: string[]; thinkingLevel?: string; advisor?: boolean; [key: string]: unknown };
     // A session id has no meaning for a fresh spawn and must never reach the
     // child RPC: a stale or forged id would address the wrong session.
@@ -67,22 +49,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "command type is required", code: "command_type_required" }, { status: 400 });
     }
 
-    // Must be unique per request: startRpcSession coalesces concurrent callers
-    // that share a key onto one session. Date.now() (ms resolution) collides for
-    // requests in the same millisecond, merging two new sessions into one.
-    const tempKey = `__new__${randomUUID()}`;
-    const { session, realSessionId } = await startRpcSession(tempKey, "", cwd, toolNames, advisor === true, undefined, undefined, host);
-
-    if (host === localHost) {
-      // Keep the files-route allowed-roots cache (see app/api/files/[...path]/route.ts)
-      // in sync so the new cwd is immediately readable via /api/files. Without this,
-      // a file request under a brand-new cwd would 403 for up to the cache TTL.
-      // Never for another host: its paths do not exist on this machine.
-      allowFileRoot(cwd);
-      invalidateSessionListCache();
-    } else {
-      invalidateHostSessionList(host.id);
-    }
+    // The cwd is checked on its host; the host answers with the path it will use.
+    const started = await startNewRpcSession(host, requestedCwd, toolNames, advisor === true);
+    if (!started.ok) return opErrorResponse(started);
+    const { session, realSessionId } = started.value;
 
     try {
       // Apply pre-selected model before sending the prompt
