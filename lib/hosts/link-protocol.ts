@@ -17,31 +17,6 @@ export const LINK_LIMITS = {
   maxLineBytes: 8 * 1024 * 1024,
 };
 
-export const HOST_OP_NAMES = [
-  "listSessions",
-  "readSession",
-  "readContext",
-  "readThinking",
-  "readSessionState",
-  "readSubagentHistory",
-  "readSubagentTranscript",
-  "renameSessionFile",
-  "deleteSession",
-  "archiveSession",
-  "exportSession",
-  "readMedia",
-  "listProjects",
-  "addProject",
-  "updateProject",
-  "hideProject",
-  "validateCwd",
-  "spawn",
-  "sessionFileExists",
-  "invalidateSessionLists",
-] as const;
-
-export type HostOpName = (typeof HOST_OP_NAMES)[number];
-
 /** `GET /api/hosts/link` carries the `hello` message here as base64url JSON (a GET has no body). */
 export const LINK_HELLO_HEADER = "x-omp-web-hello";
 /** Every uplink POST carries the highest downlink `seq` the daemon applied. */
@@ -71,6 +46,11 @@ export const SESSION_OP_PARAMS: { readonly [K in keyof SessionOps]: readonly str
   hideProject: ["path"],
   validateCwd: ["path"],
 };
+
+/** Every op a daemon answers: the session ops plus three on the host itself. */
+export const HOST_OP_NAMES = [...(Object.keys(SESSION_OP_PARAMS) as (keyof SessionOps)[]), "spawn", "sessionFileExists", "invalidateSessionLists"] as const;
+
+export type HostOpName = (typeof HOST_OP_NAMES)[number];
 
 /** A failed host op, as carried by `res {ok: false, error}`. */
 export class HostOpError extends Error {
