@@ -200,7 +200,10 @@ On 409 the daemon keeps the messages and sends them after the next
   hello moved from the GET header into a POST body). On a mismatch the link
   request gets 426 with both versions, and so does a v1 daemon's GET carrying
   its hello in the header; the daemon exits with "upgrade omp-web on this
-  host"; Settings → Hosts shows "needs upgrade (host vN, server vM)".
+  host"; Settings → Hosts shows "needs upgrade (host vN, server vM)". A hello
+  POST answered 400, 404, 405 or 409 without a `helloId` comes from an older
+  main (v1 answers a POST without a link nonce 409): the daemon logs "the
+  server runs an older ompweb: upgrade it" and exits 1 instead of redialing.
 - **Identity.** The host is the record whose `tokenHash` matches. Nothing the
   daemon sends selects or changes its identity.
 - **One link per host.** A new link with the same token replaces the old one,
