@@ -40,9 +40,12 @@ Browser                Next.js Server                    omp child process
 
 **Session browsing** (read-only): pure-Node parsing of omp session `.jsonl`
 files via `lib/session-reader.ts` — no child process involved.  
-**Sending a message**: `startRpcSession()` in `lib/rpc-manager.ts` spawns
-`omp --mode rpc-ui` (one process per active session) through
-`lib/omp/rpc-process.ts`.
+**Sending a message**: `startRpcSession()` in `lib/rpc-manager.ts` asks the
+session's `Host` (`lib/hosts/host.ts`; `localHost` in `lib/hosts/local-host.ts`)
+to spawn `omp --mode rpc-ui` (one process per active session) and runs
+`lib/omp/rpc-process.ts` over the returned transport. Every machine-local
+action of a session wrapper (spawn, session-file checks, list invalidation)
+goes through that host.
 
 Shared foundations in `lib/omp/`:
 
@@ -123,7 +126,7 @@ lib/
   notification-store.ts  server: SQLite store for VAPID keys, devices and the notification history
   notification-history.ts  browser: mirror of the server's notification history (Notifications tab)
   notification-client.ts  browser: device id, prefs store, service worker + push subscription
-  rpc-manager.ts       session registry + startRpcSession over RpcProcess
+  rpc-manager.ts       session registry + startRpcSession over RpcProcess (spawn via a Host)
   session-reader.ts    session .jsonl parsing + path cache + buildSessionContext
   session-search.ts    shared fuzzy/phrase query scorer for sidebar search (title weights ≫ transcript)
   session-content-search.ts  server: per-file transcript text cache (size+mtime) + searchSessions()

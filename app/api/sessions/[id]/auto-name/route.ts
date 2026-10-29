@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { scanSessionInfo, setSessionTitle } from "@/lib/omp/session-files";
 import { deriveSessionTitleFromFirstMessage, sanitizeSessionTitle } from "@/lib/session-title";
-import { getRpcSession, resolveSpawnCwdResult, startRpcSession, WebRpcError } from "@/lib/rpc-manager";
+import { getRpcSession, startRpcSession, WebRpcError } from "@/lib/rpc-manager";
+import { resolveSpawnCwdResult } from "@/lib/hosts/local-host";
 import { invalidateSessionCaches, readSessionHeader } from "@/lib/session-reader";
 import { resolveSessionPathOr404 } from "@/lib/api-utils";
 
