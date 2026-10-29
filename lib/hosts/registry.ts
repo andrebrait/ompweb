@@ -40,12 +40,35 @@ function parseHostRecord(raw: unknown): HostRecord | null {
   };
 }
 
-export function loadHosts(): HostRecord[] {
+/** hosts.json exists but cannot be read or parsed: no token can be checked. */
+export class HostRegistryUnreadableError extends Error {
+  readonly name = "HostRegistryUnreadableError";
+}
+
+/** Every usable record; a missing file is an empty registry, an unreadable one throws. */
+function readHosts(): HostRecord[] {
   const file = join(getAgentDir(), "omp-web", "hosts.json");
-  if (!existsSync(file)) return [];
+  let text: string;
   try {
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as { hosts?: unknown };
-    return Array.isArray(parsed.hosts) ? parsed.hosts.map(parseHostRecord).filter((h): h is HostRecord => h !== null) : [];
+    text = readFileSync(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new HostRegistryUnreadableError(`Cannot read ${file}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new HostRegistryUnreadableError(`${file} is not valid JSON`);
+  }
+  const hosts = parsed && typeof parsed === "object" && "hosts" in parsed ? parsed.hosts : undefined;
+  if (!Array.isArray(hosts)) throw new HostRegistryUnreadableError(`${file} has no hosts list`);
+  return hosts.map(parseHostRecord).filter((h): h is HostRecord => h !== null);
+}
+
+export function loadHosts(): HostRecord[] {
+  try {
+    return readHosts();
   } catch {
     return [];
   }
@@ -98,11 +121,13 @@ export function revokeHost(id: string): boolean {
   return true;
 }
 
-/** Constant-time comparison of the presented token's sha256 against every record. */
+/** Constant-time comparison of the presented token's sha256 against every record.
+ * Throws HostRegistryUnreadableError rather than answer "no match" when the
+ * registry cannot be read: a daemon told its token is unknown stops its sessions. */
 export function hostForToken(token: string): HostRecord | null {
   if (typeof token !== "string") return null;
   const digest = Buffer.from(sha256Hex(token));
-  for (const host of loadHosts()) {
+  for (const host of readHosts()) {
     const stored = Buffer.from(host.tokenHash);
     if (stored.length === digest.length && timingSafeEqual(stored, digest)) return host;
   }
