@@ -2255,6 +2255,11 @@ export function getRunningRpcSessionIds(): string[] {
   return getRunningRpcSessions().map((s) => s.id);
 }
 
+/** Ids of sessions with a live omp process (turn running or idle). */
+export function getLiveRpcSessionIds(): string[] {
+  return [...getRegistry()].filter(([, session]) => session.isAlive?.()).map(([sessionId]) => sessionId);
+}
+
 /** Stop all live omp children after an explicit runtime update. The browser will
  * reconnect sessions on demand and start them with the updated executable. */
 export async function restartAllRpcSessions(): Promise<number> {

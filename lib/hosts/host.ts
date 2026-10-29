@@ -1,4 +1,5 @@
 import type { RpcTransport } from "../omp/rpc-transport";
+import type { SessionOps } from "./session-ops";
 
 export type HostStatus = "online" | "offline" | "needs-upgrade" | "omp-missing";
 
@@ -30,4 +31,6 @@ export interface Host {
   sessionFileExists(path: string): Promise<boolean>;
   invalidateSessionLists(sessionFile?: string): void;
   autoApproveExtension(): boolean;
+  /** Session and project file operations, run on this host. */
+  readonly sessionOps: SessionOps;
 }

@@ -10,6 +10,7 @@ import { invalidateSessionEntriesCache, invalidateSessionListCache, invalidateSe
 import { PRESET_FULL } from "../tool-presets";
 import type { ProjectLaunchConfig } from "../types";
 import type { Host } from "./host";
+import { sessionOps } from "./session-ops";
 
 // omp aliases "find"->"glob" and has no "ls" tool; the web UI presets still use
 // the pi names (lib/tool-presets.ts), so translate before building --tools.
@@ -113,6 +114,7 @@ export function launchConfigForCwd(cwd: string): ProjectLaunchConfig | undefined
 export const localHost: Host = {
   id: "local",
   label: "This machine",
+  sessionOps,
   status: () => "online",
   onStatus: () => () => {},
   async spawnRpc(request) {

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createHash } from "crypto";
-import { listAllSessions } from "@/lib/session-reader";
+import { localHost } from "@/lib/hosts/local-host";
 import { getRunningRpcSessions } from "@/lib/rpc-manager";
 
 // The session list mixes on-disk sessions with the live runningSessionIds set,
@@ -15,7 +15,7 @@ const SESSION_LIST_HEADERS = {
 
 export async function GET(req: Request) {
   try {
-    const sessions = await listAllSessions();
+    const sessions = await localHost.sessionOps.listSessions();
     const runningSessions = getRunningRpcSessions();
     const runningSessionIds = runningSessions.map((s) => s.id);
     const body = { sessions, runningSessionIds, runningSessions };
