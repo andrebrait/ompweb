@@ -63,6 +63,8 @@ interface Link {
   /** Names the current downlink (`welcome.nonce`); null until a daemon says hello.
    * Uplink POSTs and blob uploads from any other link are refused. */
   nonce: string | null;
+  /** The last `hello` POSTed (spec Rules → Hello): its id opens one downlink GET, once, within offlineMs. */
+  helloOffer: { id: string; hello: Hello; at: number } | null;
   /** Link protocol version the daemon last presented (Settings shows it on a 426). */
   hostVersion: number | null;
   ompVersion: string | null;
@@ -106,6 +108,7 @@ function linkFor(id: string): Link {
       host: new RemoteHost(id),
       status: "offline",
       nonce: null,
+      helloOffer: null,
       hostVersion: null,
       ompVersion: null,
       platform: null,
@@ -250,12 +253,55 @@ function currentLink(req: Request, record: HostRecord): Link | null {
 
 const staleLink = () => json({ error: "This link was replaced; wait for the next welcome" }, 409);
 
-/** GET /api/hosts/link: the daemon's downlink, an NDJSON stream. */
+/** GET /api/hosts/link: the daemon's downlink, an NDJSON stream, opened with the id of the hello it POSTed. */
 export async function handleLinkGet(req: Request): Promise<Response> {
   const record = authenticate(req);
   if (record instanceof Response) return record;
-  const header = req.headers.get(LINK_HELLO_HEADER);
-  const text = header ? Buffer.from(header, "base64url").toString("utf8") : "";
+  const link = linkFor(record.id);
+  const helloId = req.headers.get(LINK_HELLO_HEADER);
+  const offer = link.helloOffer;
+  if (!offer || !helloId || offer.id !== helloId || Date.now() - offer.at > linkTimings.offlineMs) {
+    return legacyHelloVersion(link, helloId) ?? json({ error: "Unknown or expired hello; POST a new one" }, 400);
+  }
+  // Taken here so the hello is applied once, however often its GET is replayed.
+  link.helloOffer = null;
+  return openDownlink(link, offer.hello, req.signal);
+}
+
+/** A v1 daemon sent its hello itself in the GET header (base64url JSON): it gets the 426 that tells it to upgrade. */
+function legacyHelloVersion(link: Link, header: string | null): Response | null {
+  try {
+    const raw: unknown = JSON.parse(Buffer.from(header ?? "", "base64url").toString("utf8"));
+    return isRecord(raw) ? versionMismatch(link, raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 426 for a daemon on another protocol version. Compared before decoding: another version may shape its hello differently. */
+function versionMismatch(link: Link, raw: unknown): Response | null {
+  const version = isRecord(raw) ? raw.v : undefined;
+  if (version === LINK_PROTOCOL_VERSION) return null;
+  const hostVersion = typeof version === "number" && Number.isInteger(version) ? version : null;
+  // A stray old daemon with this token must not take down the healthy link.
+  if (!link.stream) {
+    // Kept for Settings: "needs upgrade (host vN, server vM)".
+    link.hostVersion = hostVersion;
+    setStatus(link, "needs-upgrade");
+  }
+  return json({ error: "Link protocol version mismatch", hostVersion, serverVersion: LINK_PROTOCOL_VERSION }, 426);
+}
+
+/** POST /api/hosts/link carrying LINK_HELLO_HEADER: the daemon's hello, in the body
+ * (a header would cap how many channels it can list). Answers the id its downlink GET names. */
+async function handleHelloPost(req: Request, record: HostRecord): Promise<Response> {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(await readBodyWithinLimit(req, LINK_LIMITS.uplinkBytes)).trim();
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) return json({ error: "Hello too large" }, 413);
+    return json({ error: "Missing or malformed hello" }, 400);
+  }
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -263,18 +309,8 @@ export async function handleLinkGet(req: Request): Promise<Response> {
     return json({ error: "Missing or malformed hello" }, 400);
   }
   const link = linkFor(record.id);
-  // Compared before decoding: another protocol version may shape its hello differently.
-  const version = isRecord(raw) ? raw.v : undefined;
-  if (version !== LINK_PROTOCOL_VERSION) {
-    const hostVersion = typeof version === "number" && Number.isInteger(version) ? version : null;
-    // A stray old daemon with this token must not take down the healthy link.
-    if (!link.stream) {
-      // Kept for Settings: "needs upgrade (host vN, server vM)".
-      link.hostVersion = hostVersion;
-      setStatus(link, "needs-upgrade");
-    }
-    return json({ error: "Link protocol version mismatch", hostVersion, serverVersion: LINK_PROTOCOL_VERSION }, 426);
-  }
+  const mismatch = versionMismatch(link, raw);
+  if (mismatch) return mismatch;
   let hello: UpMessage;
   try {
     hello = decodeUp(text);
@@ -282,7 +318,9 @@ export async function handleLinkGet(req: Request): Promise<Response> {
     return json({ error: "Missing or malformed hello" }, 400);
   }
   if (hello.type !== "hello") return json({ error: "Missing or malformed hello" }, 400);
-  return openDownlink(link, hello, req.signal);
+  // One offer per host: a newer hello replaces one whose GET never came.
+  link.helloOffer = { id: randomUUID(), hello, at: Date.now() };
+  return json({ helloId: link.helloOffer.id });
 }
 
 function openDownlink(link: Link, hello: Hello, signal: AbortSignal): Response {
@@ -376,10 +414,11 @@ function reattach(link: Link, listed: HelloChannel[]): void {
   }
 }
 
-/** POST /api/hosts/link: a batch of uplink NDJSON messages. */
+/** POST /api/hosts/link: a batch of uplink NDJSON messages, or a hello (see handleHelloPost). */
 export async function handleLinkPost(req: Request): Promise<Response> {
   const record = authenticate(req);
   if (record instanceof Response) return record;
+  if (req.headers.has(LINK_HELLO_HEADER)) return handleHelloPost(req, record);
   // A replaced link's late POST must not reach the current daemon's uplink window.
   const link = currentLink(req, record);
   if (!link) return staleLink();

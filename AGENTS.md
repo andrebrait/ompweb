@@ -261,11 +261,16 @@ bin/
   (batched NDJSON, daemon → main). No WebSocket: `next start` route handlers
   cannot accept upgrades and there is no custom server (and no `ws`). Every
   line except `hello`/`welcome`/`ping`/`pong` has a per-direction `seq`;
-  `ack` rides the hello and every POST (`x-omp-web-hello`, `x-omp-web-ack`
-  headers; a GET has no body). Each side keeps unacked lines, resends after a
-  reconnect and drops any `seq` it already applied. Main decodes a whole POST
-  before applying any of it. `hello.ack === 0` means a fresh daemon: main
-  restarts that host's uplink window. Wire shapes and size limits live in
+  `ack` rides the hello and every POST (the `x-omp-web-ack` header on an
+  uplink POST). The hello is a POST body, never a header (proxy header
+  buffers would cap the channels it lists): a POST with `x-omp-web-hello: 1`
+  carries it and answers `{helloId}`, and the downlink GET names that id in
+  `x-omp-web-hello`; main takes the hello at that GET, so it opens one
+  downlink once. A v1 daemon's header hello gets 426. Each side keeps unacked
+  lines, resends after a reconnect and drops any `seq` it already applied.
+  Main decodes a whole POST before applying any of it. `hello.ack === 0`
+  means a fresh daemon: main restarts that host's uplink window. Wire shapes
+  and size limits live in
   `lib/hosts/link-protocol.ts` (one op allow-list, `HOST_OP_NAMES`, shared by
   both sides); the spec is `docs/specs/2026-10-28-remote-hosts-design.md`.
 - **One link per host, and the 409 nonce rule.** A new link with the same token

@@ -128,13 +128,15 @@ by label.
 
 omp-web runs under `next start` with no custom server (`bin/omp-web.js`), and
 Next route handlers cannot accept WebSocket upgrades. The link therefore uses
-two HTTP legs, both opened by the daemon (which also works behind NAT):
+two HTTP legs and a hello, all opened by the daemon (which also works behind NAT):
 
-- **Downlink** `GET /api/hosts/link`: a long-lived NDJSON response, main →
-  daemon.
+- **Hello** `POST /api/hosts/link` with the `x-omp-web-hello: 1` header: the
+  daemon's `hello` in the body; main answers `{helloId}`.
+- **Downlink** `GET /api/hosts/link` naming that `helloId` in the
+  `x-omp-web-hello` header: a long-lived NDJSON response, main → daemon.
 - **Uplink** `POST /api/hosts/link`: batched NDJSON, daemon → main, flushed
   every 16 ms or at 256 KB.
-- Both legs carry `Authorization: Bearer <host token>`, and the route verifies
+- All three carry `Authorization: Bearer <host token>`, and the route verifies
   it before reading any body: 401 when no host record matches, 503 when the
   host registry cannot be read (a daemon that sees 401 stops its omp
   children; it retries any 5xx). `proxy.ts` does not run for
@@ -152,9 +154,16 @@ keeps unacknowledged messages, resends them after a reconnect, and drops any
 `seq` it already applied, so no line is lost or applied twice when a leg
 breaks mid-write. stdin lines omp has not received would otherwise vanish.
 
-`hello` rides the downlink GET as the `x-omp-web-hello` header (base64url
-JSON; a GET has no body). An uplink POST carries its `ack` in the
-`x-omp-web-ack` header. Main decodes a whole POST before applying any of it.
+`hello` goes in the body of its own POST, never in a header: it lists every
+live channel, and a reverse proxy's header buffers (nginx: 8 KB by default)
+would cut it to a few dozen channels, then 431 every redial while the children
+run on. Main keeps one hello per host and answers its random `helloId`; the
+downlink GET names it, and main takes the hello at that GET, so it opens one
+downlink once (a replayed or late GET, or one after `offlineMs`, gets 400 and
+the daemon posts a new hello). The version is checked on the hello POST; the
+replacement of an older link and the new `nonce` happen when the GET opens the
+downlink. An uplink POST carries its `ack` in the `x-omp-web-ack` header. Main
+decodes a whole POST before applying any of it.
 A `hello` with `ack: 0` comes from a daemon that has applied no downlink
 message, so it has sent no sequenced uplink message either (each one answers
 a downlink message): main restarts its uplink window for that host. Main
@@ -187,10 +196,11 @@ On 409 the daemon keeps the messages and sends them after the next
 
 ### Rules
 
-- **Version.** `v` is an integer bumped on any incompatible change. On a
-  mismatch the link request gets 426 with both versions; the daemon exits with
-  "upgrade omp-web on this host"; Settings → Hosts shows
-  "needs upgrade (host vN, server vM)".
+- **Version.** `v` is an integer bumped on any incompatible change (2: the
+  hello moved from the GET header into a POST body). On a mismatch the link
+  request gets 426 with both versions, and so does a v1 daemon's GET carrying
+  its hello in the header; the daemon exits with "upgrade omp-web on this
+  host"; Settings → Hosts shows "needs upgrade (host vN, server vM)".
 - **Identity.** The host is the record whose `tokenHash` matches. Nothing the
   daemon sends selects or changes its identity.
 - **One link per host.** A new link with the same token replaces the old one,

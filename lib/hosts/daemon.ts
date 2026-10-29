@@ -485,11 +485,19 @@ export function runHostDaemon(options: { url: string; token: string; allowHttp: 
           channels: [...channels].map(([ch, channel]) => ({ ch, sessionId: channel.sessionId })),
         });
         alive();
-        const response = await fetchLink(linkUrl, {
-          // shortcut: hello rides a header, so Node's 16 KB header limit caps it at ~150 live channels; move it into the body of a POST if hosts ever run more.
-          headers: { authorization, [LINK_HELLO_HEADER]: Buffer.from(hello.trimEnd()).toString("base64url") },
-          signal: AbortSignal.any([stopSignal.signal, abort.signal]),
+        const signal = AbortSignal.any([stopSignal.signal, abort.signal]);
+        // The hello goes in a POST body: as a GET header, proxy header buffers (nginx: 8 KB) capped the channels it lists.
+        const offered = await fetchLink(linkUrl, {
+          method: "POST",
+          headers: { authorization, "content-type": "application/x-ndjson", [LINK_HELLO_HEADER]: "1" },
+          body: hello,
+          signal,
         });
+        if (fatal(offered.status)) return;
+        if (!offered.ok) throw new Error(`the server answered the hello with ${offered.status}`);
+        const { helloId } = (await offered.json()) as { helloId?: unknown };
+        if (typeof helloId !== "string" || !helloId) throw new Error("the server sent no hello id");
+        const response = await fetchLink(linkUrl, { headers: { authorization, [LINK_HELLO_HEADER]: helloId }, signal });
         if (fatal(response.status)) return;
         if (!response.ok || !response.body) throw new Error(`the server answered ${response.status}`);
         for await (const line of readLines(response.body)) {

@@ -2,7 +2,8 @@
 // Pure: no I/O and no Next or `@/` imports, so both sides share it.
 import type { SessionOps } from "./session-ops";
 
-export const LINK_PROTOCOL_VERSION = 1;
+/** 2: the hello moved from a GET header into a POST body (a v1 daemon gets 426). */
+export const LINK_PROTOCOL_VERSION = 2;
 
 export const LINK_LIMITS = {
   pingMs: 15_000,
@@ -17,7 +18,8 @@ export const LINK_LIMITS = {
   maxLineBytes: 8 * 1024 * 1024,
 };
 
-/** `GET /api/hosts/link` carries the `hello` message here as base64url JSON (a GET has no body). */
+/** A POST carrying this header (value `1`) is the daemon's `hello`, in its body;
+ * main answers `{helloId}`, and the downlink GET names that id in this header. */
 export const LINK_HELLO_HEADER = "x-omp-web-hello";
 /** Every uplink POST carries the highest downlink `seq` the daemon applied. */
 export const LINK_ACK_HEADER = "x-omp-web-ack";
