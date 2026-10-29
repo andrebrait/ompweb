@@ -290,7 +290,10 @@ bin/
   drops its `req` from the outbox (`failOp` in `hub.ts`), so a delete the user
   saw fail is never applied after a redial. `destroyAndWait` returns once the
   session's host is offline (`untilHostDown`); the kill stays queued for the
-  link. `restartAllRpcSessions` (omp update) restarts local sessions only.
+  link. A wrapper therefore stays in the registry until its child really exits
+  (a resume whose handshake failed is registered in the catch for this), so a
+  retry awaits its `destroyPromise` instead of spawning a second `--resume`
+  child. `restartAllRpcSessions` (omp update) restarts local sessions only.
   Remote-only transport members (`onResync`, `lost`) are optional on
   `RpcTransport` and duck-typed: route bundles and instrumentation load
   separate `hub.ts` module instances, so never `instanceof RemoteRpcTransport`.

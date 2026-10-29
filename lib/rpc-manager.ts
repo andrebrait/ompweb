@@ -2760,7 +2760,19 @@ export async function startRpcSession(
       // lock: a fire-and-forget destroy() would let a retry spawn a second
       // OMP child while the failed one is still flushing/exiting, and
       // concurrent resume/delete/archive paths could race that old child.
-      await created.destroyAndWait();
+      const disposing = created.destroyAndWait();
+      // That wait ends early once the host is offline, with the child still
+      // exiting there. A resume stays registered until it really exits, so a
+      // retry awaits its destroyPromise instead of starting a second
+      // `--resume` child beside it. Chained on destroyPromise (set by the call
+      // above), not onDestroy: a child that already exited ran no callback.
+      if (sessionFile) {
+        registry.set(sessionId, created);
+        void created.destroyPromise?.then(() => {
+          if (registry.get(sessionId) === created) registry.delete(sessionId);
+        });
+      }
+      await disposing;
       throw error;
     }
 
