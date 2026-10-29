@@ -599,7 +599,8 @@ function remoteSessionOps(hostId: string): SessionOps {
 }
 
 /** An omp child on a linked host. Output that arrives before `RpcProcess`
- * subscribes is held for the first listener, as the local transport does. */
+ * subscribes is held for the first listener, as the local transport does, up
+ * to channelBufferBytes: past that the child is killed instead of held on. */
 export class RemoteRpcTransport implements RpcTransport {
   readonly hostId: string;
   readonly ch: string;
@@ -617,6 +618,9 @@ export class RemoteRpcTransport implements RpcTransport {
   private readonly resyncListeners: Array<() => void> = [];
   private readonly pendingLines: string[] = [];
   private readonly pendingStderr: string[] = [];
+  private heldLineBytes = 0;
+  private heldStderrBytes = 0;
+  private overflowed = false;
   private exitInfo: [number | null, NodeJS.Signals | null] | null = null;
 
   constructor(hostId: string, ch: string, sessionId: string | null = null) {
@@ -639,11 +643,13 @@ export class RemoteRpcTransport implements RpcTransport {
   onLine(listener: (line: string) => void): void {
     this.lineListeners.push(listener);
     for (const line of this.pendingLines.splice(0)) listener(line);
+    this.heldLineBytes = 0;
   }
 
   onStderr(listener: (chunk: string) => void): void {
     this.stderrListeners.push(listener);
     for (const chunk of this.pendingStderr.splice(0)) listener(chunk);
+    this.heldStderrBytes = 0;
   }
 
   onExit(listener: (code: number | null, signal: NodeJS.Signals | null) => void): void {
@@ -667,16 +673,33 @@ export class RemoteRpcTransport implements RpcTransport {
     sendDown(linkFor(this.hostId), { type: "kill", ch: this.ch, force });
   }
 
+  /** The byte size of `text` when it may be held for a listener; null past the cap, where the child is killed once. */
+  private holdable(text: string): number | null {
+    const bytes = Buffer.byteLength(text);
+    if (!this.overflowed && this.heldLineBytes + this.heldStderrBytes + bytes <= LINK_LIMITS.channelBufferBytes) return bytes;
+    if (!this.overflowed) {
+      this.overflowed = true;
+      this.killTree(true);
+    }
+    return null;
+  }
+
   deliverLine(line: string): void {
     if (this.orphaned) return;
-    if (this.lineListeners.length === 0) this.pendingLines.push(line);
-    notify(this.lineListeners, line);
+    if (this.lineListeners.length > 0) return notify(this.lineListeners, line);
+    const bytes = this.holdable(line);
+    if (bytes === null) return;
+    this.pendingLines.push(line);
+    this.heldLineBytes += bytes;
   }
 
   deliverStderr(chunk: string): void {
     if (this.orphaned) return;
-    if (this.stderrListeners.length === 0) this.pendingStderr.push(chunk);
-    notify(this.stderrListeners, chunk);
+    if (this.stderrListeners.length > 0) return notify(this.stderrListeners, chunk);
+    const bytes = this.holdable(chunk);
+    if (bytes === null) return;
+    this.pendingStderr.push(chunk);
+    this.heldStderrBytes += bytes;
   }
 
   deliverResync(): void {
