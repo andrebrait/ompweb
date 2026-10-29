@@ -135,9 +135,12 @@ two HTTP legs, both opened by the daemon (which also works behind NAT):
 - **Uplink** `POST /api/hosts/link`: batched NDJSON, daemon → main, flushed
   every 16 ms or at 256 KB.
 - Both legs carry `Authorization: Bearer <host token>`, and the route verifies
-  it before reading any body. `proxy.ts` does not run for `/api/hosts/link`
-  (its matcher excludes the path): Next buffers a proxied request body and
-  silently truncates it past 10 MB, below the link's upload limits.
+  it before reading any body: 401 when no host record matches, 503 when the
+  host registry cannot be read (a daemon that sees 401 stops its omp
+  children; it retries any 5xx). `proxy.ts` does not run for
+  `/api/hosts/link` and its subpaths (its matcher excludes exactly those):
+  Next buffers a proxied request body and silently truncates it past 10 MB,
+  below the link's upload limits.
 
 ### Messages
 
@@ -158,10 +161,19 @@ a downlink message): main restarts its uplink window for that host. Main
 numbers downlink messages above the daemon's `ack`, so a restarted main and
 a running daemon never reuse a `seq`.
 
+Each `welcome` carries a fresh random `nonce` naming that link. Every uplink
+POST and blob upload sends it in the `x-omp-web-link` header, and main answers
+409, before reading the body (and again if the link changed while the body
+arrived), when it is not the current link's. Without it a replaced daemon's
+late POST would land in the uplink window a newer daemon's `hello` just
+restarted, and main would drop that daemon's first messages as duplicates.
+On 409 the daemon keeps the messages and sends them after the next
+`welcome`.
+
 | Message | Direction | Purpose |
 |---|---|---|
 | `hello {v, ompVersion, platform, home, ack, channels[{ch, sessionId}]}` | up | Handshake; `channels` lists live omp children from before a reconnect. `ompVersion` is `null` when `omp` is not found. |
-| `welcome {v, hostId}` | down | Accepted. |
+| `welcome {v, hostId, nonce}` | down | Accepted; `nonce` names this link. |
 | `stdin {ch, line}` | down | One raw omp NDJSON line. |
 | `stdout {ch, line}` | up | One raw omp NDJSON line. |
 | `stderr {ch, chunk}` | up | Child stderr, for the existing logging. |
