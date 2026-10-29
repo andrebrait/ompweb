@@ -561,6 +561,11 @@ function validResult(op: keyof SessionOps, result: unknown, args: unknown[]): bo
       if (options.sync) return isRecord(value.history) && nullableString(value.leafId) && nullableString(value.tipId);
       return isRecord(value.context);
     }
+    case "archiveSession":
+      return isRecord(value) && typeof value.archivedPath === "string";
+    // The route reads `projects` and iterates `newRoots`.
+    case "updateProject":
+      return isRecord(value) && Array.isArray(value.projects) && Array.isArray(value.newRoots);
     default:
       return true;
   }
@@ -600,6 +605,9 @@ function projectEntry(value: unknown): ProjectRegistryEntry | null {
 
 const MEDIA_HASH_RE = /^[0-9a-f]{64}$/;
 
+/** Ops that rewrite or move a session's file: an exiting orphan of that session may still flush it. */
+const ORPHAN_SENSITIVE_OPS: Partial<Record<keyof SessionOps, true>> = { archiveSession: true, deleteSession: true, renameSessionFile: true };
+
 function remoteSessionOps(hostId: string): SessionOps {
   const ops: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
   for (const [op, params] of Object.entries(SESSION_OP_PARAMS) as [keyof SessionOps, readonly string[]][]) {
@@ -607,6 +615,7 @@ function remoteSessionOps(hostId: string): SessionOps {
       if (op === "readMedia" && !MEDIA_HASH_RE.test(String(args[0]))) {
         return { ok: false, status: 400, code: "invalid_hash", error: "Invalid media hash" };
       }
+      if (ORPHAN_SENSITIVE_OPS[op]) await orphanExit(hostId, String(args[0]));
       const result = await request(hostId, op, Object.fromEntries(params.map((name, i) => [name, args[i]])));
       const list: ((value: unknown) => object | null) | null = op === "listSessions" ? sessionEntry : op === "listProjects" ? projectEntry : null;
       // Untrusted list entries: malformed ones are dropped, the rest keep only their known fields.
