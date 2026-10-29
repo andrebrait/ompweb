@@ -6,8 +6,8 @@ import { mergeProjects, type ProjectRegistryEntry } from "../project-registry";
 import { isValidSessionId } from "../session-file-references-core";
 import { readSessionHeader, resolveSessionPath } from "../session-reader";
 import type { ManagedProject, SessionInfo } from "../types";
-import type { Host } from "./host";
-import { getHost, isLinkUp, listHosts, onHostHello } from "./hub";
+import { isLinkUp, type Host } from "./host";
+import { getHost, listHosts, onHostHello } from "./hub";
 import { localHost, resolveSpawnCwdResult } from "./local-host";
 
 /** Same TTL as the local session-list cache. */

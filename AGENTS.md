@@ -146,7 +146,7 @@ lib/
 
 components/
   AppShell.tsx        layout + URL state + tab management
-  SessionSidebar.tsx  session tree + FileExplorer
+  SessionSidebar.tsx  session tree + FileExplorer; with a linked host the workspaces group per host (`HostGroup`), keyed by `hostProjectKey` (`lib/project-ordering.ts`: bare path on this machine, `<hostId>:<path>` elsewhere)
   ChatWindow.tsx      chat composition + completion sound wrapper
   ChatInput.tsx       input bar + model/thinking/tools/compact controls
   ComposerPanels.tsx  composer-attached /btw + todo + subagent panels (collapsible, live states)
@@ -164,6 +164,7 @@ components/
   ModelsConfig.tsx    modal for models/auth configuration
   McpConfig.tsx       project MCP server editor (Settings → MCP tab)
   HostsConfig.tsx     linked hosts: add (token shown once), rename, revoke, allowAgentStart (Settings → Hosts tab)
+  host-status.ts      host name, status text and dot colour shared by Settings → Hosts and the sidebar
   PluginsConfig.tsx   modal for installed plugins
   SkillsConfig.tsx    modal for loaded/search/installable skills
   FileExplorer.tsx    file tree inside sidebar
@@ -175,6 +176,7 @@ components/
 
 hooks/
   useAgentSession.ts       messages + streaming + SSE + fork/navigate/reconciliation logic
+  useHostRows.ts           the `hosts` channel as React state (status of every host; sidebar, new-session picker, Settings → Hosts)
   useAudio.ts              completion sound + browser AudioContext unlock
   useNotifications.ts      presence reports, toast/system delivery, notification clicks
   useDragDrop.ts           shared drag/drop state

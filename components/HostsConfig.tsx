@@ -1,23 +1,22 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { Copy, Pencil, Plus, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/field";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/primitives";
 import { ToggleSwitch } from "@/components/ui/ToggleSwitch";
 import { toast } from "@/components/ui/toast";
 import { copyText } from "@/lib/clipboard";
-import { openEventStream } from "@/lib/event-stream";
 import type { HostRow } from "@/lib/hosts/hub";
 import { useI18n } from "@/lib/i18n";
+import { useHostRows } from "@/hooks/useHostRows";
+import { HOST_STATUS_COLOR, hostName, hostStatusText } from "./host-status";
 
-type Translate = (key: string, vars?: Record<string, string | number>) => string;
 type Dialogs = { kind: "add" } | { kind: "rename"; host: HostRow } | null;
 
 const inputStyle = { width: "100%", padding: "7px 9px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", background: "var(--bg)", color: "var(--text)", font: "13px var(--font-mono)" } as const;
 const buttonStyle = { padding: "6px 14px", background: "none", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", color: "var(--text-muted)", cursor: "pointer", fontSize: 13 } as const;
 const primaryStyle = { ...buttonStyle, background: "var(--accent-strong)", border: "none", color: "var(--on-accent)", fontWeight: 600 } as const;
-const STATUS_COLOR = { online: "var(--status-success)", offline: "var(--text-dim)", "omp-missing": "var(--status-warning)", "needs-upgrade": "var(--status-warning)" } as const;
 
 async function call(method: string, url: string, body?: unknown): Promise<Record<string, unknown>> {
   const response = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -27,19 +26,6 @@ async function call(method: string, url: string, body?: unknown): Promise<Record
 }
 
 const failure = (error: unknown) => toast.error(error instanceof Error ? error.message : String(error));
-
-function statusText(t: Translate, host: HostRow): string {
-  switch (host.status) {
-    case "online":
-      return t("hostsConfig.statusOnline");
-    case "omp-missing":
-      return t("hostsConfig.statusOmpMissing");
-    case "needs-upgrade":
-      return t("hostsConfig.statusNeedsUpgrade", { host: "hostVersion" in host ? host.hostVersion ?? "?" : "?", server: "serverVersion" in host ? host.serverVersion : "?" });
-    default:
-      return t("hostsConfig.statusOffline");
-  }
-}
 
 function CopyField({ label, value }: { label: string; value: string }) {
   const { t } = useI18n();
@@ -122,7 +108,7 @@ function HostDialog({ dialog, onClose }: { dialog: NonNullable<Dialogs>; onClose
 
 function HostCard({ host, onRename, onRevoke }: { host: HostRow; onRename: () => void; onRevoke: () => void }) {
   const { t } = useI18n();
-  const name = host.id === "local" ? t("hostsConfig.thisMachine") : host.label;
+  const name = hostName(t, host);
   const linked = "allowAgentStart" in host ? host : null;
   const details = [
     host.ompVersion,
@@ -134,9 +120,9 @@ function HostCard({ host, onRename, onRevoke }: { host: HostRow; onRename: () =>
     <li className="settings-card" style={{ flexWrap: "wrap", listStyle: "none" }}>
       <div className="settings-card-text">
         <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-          <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: STATUS_COLOR[host.status] }} />
+          <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: HOST_STATUS_COLOR[host.status] }} />
           <strong style={{ fontSize: 14, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</strong>
-          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{statusText(t, host)}</span>
+          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{hostStatusText(t, host)}</span>
         </div>
         {details && <div style={{ marginTop: 4, fontSize: 11, color: "var(--text-dim)", overflowWrap: "anywhere" }}>{details}</div>}
       </div>
@@ -162,28 +148,10 @@ function HostCard({ host, onRename, onRevoke }: { host: HostRow; onRename: () =>
 
 export function HostsConfig() {
   const { t } = useI18n();
-  const [hosts, setHosts] = useState<HostRow[] | null>(null);
-  const [loadFailed, setLoadFailed] = useState(false);
+  const { hosts, failed: loadFailed } = useHostRows();
   const [dialog, setDialog] = useState<Dialogs>(null);
   const [revoking, setRevoking] = useState<HostRow | null>(null);
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    const stream = openEventStream({ kind: "hosts" });
-    stream.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data) as { hosts?: HostRow[] };
-        if (Array.isArray(data.hosts)) {
-          setHosts(data.hosts);
-          setLoadFailed(false);
-        }
-      } catch {
-        // A malformed frame is skipped; the next change sends a full list.
-      }
-    };
-    stream.onerror = () => setLoadFailed(true);
-    return () => stream.close();
-  }, []);
 
   const revoke = async () => {
     if (!revoking) return;

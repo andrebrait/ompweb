@@ -38,8 +38,8 @@ import type {
   WebSessionState,
 } from "./pi-types";
 import type { AgentMessage, CrossSessionHostToolCall, ExitedRpcSession, ExtensionWidgetItem } from "./types";
-import type { Host, HostStatus } from "./hosts/host";
-import { getHost, isLinkUp, lastUplinkAt, orphanExit, RemoteRpcTransport } from "./hosts/hub";
+import { isLinkUp, type Host, type HostStatus } from "./hosts/host";
+import { getHost, lastUplinkAt, orphanExit, RemoteRpcTransport } from "./hosts/hub";
 import { localHost, resolveSpawnCwdResult } from "./hosts/local-host";
 import { invalidateHostSessionList, sessionSpawnTarget } from "./hosts/session-index";
 import type { SessionLiveSnapshot, SessionLiveToolEvent, SessionStreamCursor } from "./session-sync";
