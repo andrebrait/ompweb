@@ -285,12 +285,21 @@ bin/
   gets a synthesized `process_exit`. Use `isLinkUp` (`host.ts`, client-safe) as
   the one link predicate; do not compare `status === "online"` (an `omp-missing`
   host is linked).
+- **A failed op never runs later.** An op that times out (504) or whose
+  downlink ends or host goes offline (503, at once, not at the 30 s timeout)
+  drops its `req` from the outbox (`failOp` in `hub.ts`), so a delete the user
+  saw fail is never applied after a redial. `destroyAndWait` returns once the
+  session's host is offline (`untilHostDown`); the kill stays queued for the
+  link. `restartAllRpcSessions` (omp update) restarts local sessions only.
+  Remote-only transport members (`onResync`, `lost`) are optional on
+  `RpcTransport` and duck-typed: route bundles and instrumentation load
+  separate `hub.ts` module instances, so never `instanceof RemoteRpcTransport`.
 - **Live-link recycle rule.** A prompt, history-edit or MCP command that times
   out normally recycles the child. On a remote host it does so only if the host
   sent uplink traffic after the command was dispatched (`lastUplinkAt`,
   `linkLostDuring` in `rpc-manager.ts`); a quiet or dropped link answers
   `host_offline` (503), queues no kill and leaves the run to
-  `reconcileAfterGap`. Killing through a dead link would hang `destroyAndWait`.
+  `reconcileAfterGap`. A kill through a dead link only waits in the outbox.
 - **Orphans and resume.** On `hello`, listed channels with no wrapper are
   orphans (main restarted): they get `kill`, escalating to force after 5 s,
   and stay registered until their `exit`. A cold remote spawn for a session
@@ -312,7 +321,8 @@ bin/
   host; remote cwd validation is the host's `validateCwd` op. Daemon input is
   untrusted: blob hashes must match `^[0-9a-f]{64}$`, results are shape-checked
   in `hub.ts`, and `sessionFileExists`/`spawn` accept only paths under the
-  daemon's sessions directory.
+  daemon's sessions directory. A remote session export is always served as an
+  attachment: inline, its HTML would run on main's origin.
 - **Daemon-loaded modules must not import `next/*` or `@/`.** `bin/omp-web-host.js`
   loads `lib/hosts/daemon.ts` through plain `jiti`, which does not resolve the
   `@/` alias and has no Next runtime. That covers everything the daemon pulls in
@@ -323,10 +333,16 @@ bin/
   reader and throw `HostRegistryUnreadableError` (503) instead of rewriting a
   file they could not parse. Revoke deletes the record first, then closes the
   link (the daemon sees 401 and stops its children). The `hosts` event channel
-  carries the `GET /api/hosts` body.
-- **Agent tools.** `new_session` takes `host`; a remote host with
-  `allowAgentStart` off asks a server-owned `confirm` through the normal
-  extension-UI path (`confirmFromServer`); local creation never asks.
+  carries the `GET /api/hosts` body. A missing `hosts.json` (an agent-dir
+  mismatch, say) answers 401 to every daemon, and a daemon told its token is
+  unknown stops all its omp children: check `PI_CODING_AGENT_DIR` before
+  starting main.
+- **Agent tools.** Calls carry the caller's host (`sourceHostId`);
+  `new_session`'s `host` defaults to it. A host with `allowAgentStart` off asks
+  a server-owned `confirm` through the normal extension-UI path
+  (`confirmFromServer`). Local callers never ask for this machine. A remote
+  caller asks before any other host unless that host allows agent starts, and
+  always before this machine, for `new_session` and `send_to_session` alike.
 - **Not yet remote:** Explorer, Git, Worktrees, the Skills/Plugins/Agents/MCP
   settings tabs and directory browsing show "Not available on remote hosts
   yet". Sub-projects 2 and 3 of the spec add ops for them.

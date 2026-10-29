@@ -353,7 +353,12 @@ Notes:
   The daemon exits with code `1` when the server revokes its token or when the
   link protocol versions differ (either side may be the newer one; upgrade ompweb
   on the older side), and `0` when a newer link for the same host replaces it.
+  SIGTERM or SIGINT stops the daemon and its omp processes.
   A link is one-per-host, so never run two daemons with the same token.
+- **The server's agent directory holds the host list** (`omp-web/hosts.json`).
+  Starting the ompweb server with a different `PI_CODING_AGENT_DIR`, or losing
+  that file, makes every host token unknown: each daemon is told it was revoked,
+  stops its omp processes and exits.
 - **Trust:** a linked host runs omp with full tool access on that machine for
   whoever controls the ompweb server or the token. Keep the token private and
   revoke it when a machine is retired.
@@ -362,8 +367,10 @@ Notes:
   work on the machine ompweb runs on. Chat, session history, notifications and
   starting sessions work on every host.
 - **Agent-started sessions:** with agent tools enabled, an agent can pass a `host`
-  to `new_session`. A remote host asks for confirmation each time unless **Agents
-  can start sessions here without asking** is switched on for it in Settings → Hosts.
+  to `new_session` (it defaults to the agent's own host). A remote host asks for
+  confirmation each time unless **Agents can start sessions here without asking**
+  is switched on for it in Settings → Hosts. An agent running on a remote host
+  always asks before it starts or messages a session on this machine.
 
 ## Features
 
