@@ -22,7 +22,7 @@ import {
   type AgentToolDeliverResult,
   type AgentToolSessionOps,
 } from "./agent-tools";
-import { markShuttingDown, recordRunningSessions, RESUME_PROMPT, takeInterruptedSessions } from "./session-resume";
+import { markShuttingDown, recordRunningSessions, RESUME_PROMPT, resumeOnHostLink, takeInterruptedSessions, type InterruptibleSession } from "./session-resume";
 import { samePath } from "./paths";
 import { isRecord } from "./type-guards";
 import { BLOCKING_UI_METHODS, createNotificationDetector } from "./notification-events";
@@ -38,8 +38,10 @@ import type {
   WebSessionState,
 } from "./pi-types";
 import type { AgentMessage, CrossSessionHostToolCall, ExitedRpcSession, ExtensionWidgetItem } from "./types";
-import type { Host } from "./hosts/host";
+import type { Host, HostStatus } from "./hosts/host";
+import { getHost, RemoteRpcTransport } from "./hosts/hub";
 import { localHost, resolveSpawnCwdResult } from "./hosts/local-host";
+import { invalidateHostSessionList, sessionSpawnTarget } from "./hosts/session-index";
 import type { SessionLiveSnapshot, SessionLiveToolEvent, SessionStreamCursor } from "./session-sync";
 
 // ============================================================================
@@ -317,9 +319,12 @@ export class AgentSessionWrapper {
   /** Machine the child runs on; every machine-local action goes through it. */
   readonly host: Host;
   /** The cwd recorded in the session file header; null for brand-new sessions
-   * or when the header lacks one. Used to detect a spawn fallback so a notice
-   * can warn the user the agent is running in a different directory. */
+   * or when the header lacks one. A restart asks the host to start there again. */
   private readonly recordedCwd: string | null;
+  /** The host could not start the child in its directory and used another
+   * one (spawn fallback): a notice warns the user once it is ready. */
+  private readonly fellBack: boolean;
+  private unsubscribeHostStatus: (() => void) | null = null;
 
   // Plain field assignments (not TS parameter properties) keep this module
   // runnable under Node's strip-only TypeScript mode for probes/tests.
@@ -334,6 +339,7 @@ export class AgentSessionWrapper {
     disconnectDestroyMs: number = DISCONNECT_DESTROY_MS,
     host: Host = localHost,
     launchAdvisor = false,
+    fellBack = false,
   ) {
     this.proc = proc;
     this.cwd = cwd;
@@ -343,6 +349,7 @@ export class AgentSessionWrapper {
     this.disconnectDestroyMs = disconnectDestroyMs;
     this.host = host;
     this.launchAdvisor = launchAdvisor;
+    this.fellBack = fellBack;
   }
 
   get sessionId(): string {
@@ -417,7 +424,7 @@ export class AgentSessionWrapper {
    */
   private reapIfDisconnected(): void {
     if (!this.isAlive() || this.hasSubscribers() || this.isRunning()
-      || this.handshaking || this.pendingCommands > 0) {
+      || this.handshaking || this.pendingCommands > 0 || this.hostDown()) {
       // A paused human dialog produces no frames. Do not spin a zero-delay
       // timer once the old deadline has passed while protected work remains.
       this.reapDeadline = Math.max(this.reapDeadline, Date.now() + this.disconnectDestroyMs);
@@ -462,8 +469,50 @@ export class AgentSessionWrapper {
 
   start(): void {
     this.unsubscribeFrames = this.proc.onFrame((frame) => this.handleFrame(frame));
+    this.watchResync(this.proc);
+    this.unsubscribeHostStatus = this.host.onStatus((status) => this.handleHostStatus(status));
     this.resetIdleTimer();
     notifyRunningChange();
+  }
+
+  /** The host's link is down ("transport down", never "exited"): the child runs on, unreachable. */
+  private hostDown(): boolean {
+    return this.host.status() !== "online";
+  }
+
+  /** A remote link that dropped this child's buffered output asks for a reconcile. */
+  private watchResync(proc: RpcProcess): void {
+    const transport = proc.transport;
+    if (!(transport instanceof RemoteRpcTransport)) return;
+    transport.onResync(() => {
+      if (this.proc === proc) void this.reconcileAfterGap();
+    });
+  }
+
+  private handleHostStatus(status: HostStatus): void {
+    if (!this._alive) return;
+    this.emit({ type: "host_status", hostId: this.host.id, status });
+    if (status !== "online") return;
+    // The idle and disconnect timers held off while the link was down; give them a full window again.
+    this.resetIdleTimer(true);
+    void this.reconcileAfterGap();
+  }
+
+  /** Frames may have been lost (link down, `resync`): re-read omp's state, as the client's get_state reconcile does. */
+  private async reconcileAfterGap(): Promise<void> {
+    try {
+      const state = await this.getStateWithTimeout();
+      if (!this._alive) return;
+      const wasRunning = this.streaming || this.promptRunning;
+      this.applyIdentity(state);
+      // The run ended while its frames were lost: end it for clients, as on exit.
+      if (wasRunning && !state.isStreaming && !state.isCompacting && !this.awaitingAgentStart && this.promptDispatchPendingCount === 0) {
+        this.emit({ type: "agent_end", isTerminal: true, messages: [] });
+      }
+      notifyRunningChange({ refreshSessionList: true });
+    } catch {
+      // The client's own reconcile poll catches up.
+    }
   }
 
   /** Resolves once the child announced readiness and identity is known. */
@@ -497,7 +546,7 @@ export class AgentSessionWrapper {
       // directory so omp can spawn, but without a notice the user would see the
       // sidebar/header still advertise the (gone) recorded path while file tool
       // calls operate on a different tree.
-      if (this.recordedCwd && this.recordedCwd !== this.cwd) {
+      if (this.fellBack) {
         this.emit({
           type: "notice",
           level: "warning",
@@ -534,7 +583,8 @@ export class AgentSessionWrapper {
     this.streaming = state.isStreaming;
     this.compacting = state.isCompacting;
     this.fastModeEnabled = state.fastModeEnabled ?? state.fastMode ?? this.fastModeEnabled;
-    if (this._sessionFile) cacheSessionPath(this._sessionId, this._sessionFile);
+    // The local path cache resolves ids to files on this machine only.
+    if (this._sessionFile && this.host === localHost) cacheSessionPath(this._sessionId, this._sessionFile);
     if (moved) {
       this.sessionMovePending = false;
       if (oldId !== this._sessionId) {
@@ -676,6 +726,12 @@ export class AgentSessionWrapper {
     if (!this._alive || sourceProc === this.expectedExitProc) return;
     const detail = (stderrTail.trim().split("\n").pop() ?? "").slice(-500);
     const status = signal ? `signal ${signal}` : `code ${code ?? "null"}`;
+    // Spec Rules → Reattach: a run whose child vanished while its host link was
+    // down starts again on that host, like a local run after a restart.
+    const transport = sourceProc.transport;
+    const resume: InterruptibleSession | null = transport instanceof RemoteRpcTransport && transport.lost && this._sessionId && (this.streaming || this.promptRunning)
+      ? { id: this._sessionId, advisor: this.advisorSpawned, hostId: this.host.id }
+      : null;
     // Recorded before destroy(): its running-change broadcast must carry the
     // record so sidebars that missed the notice below still see the exit.
     if (this._sessionId) getExitedMap().set(this._sessionId, { id: this._sessionId, cwd: this.cwd, at: Date.now(), code, signal, detail });
@@ -691,6 +747,7 @@ export class AgentSessionWrapper {
       this.publishNotifications({ type: "process_exit", detail: detail || status });
     }
     this.destroy();
+    if (resume && loadWebServerSettings().autoResumeSessions) void resumeSession(resume);
   }
 
   private publishNotifications(frame: Record<string, unknown>): void {
@@ -1151,6 +1208,7 @@ export class AgentSessionWrapper {
    * still always refreshes. */
   private invalidateSessionLists(): void {
     this.host.invalidateSessionLists(this._sessionFile || undefined);
+    invalidateHostSessionList(this.host.id);
   }
 
   /** Poll briefly for the session file to appear after agent_start, then
@@ -1201,7 +1259,7 @@ export class AgentSessionWrapper {
     this.lastIdleReset = now;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => {
-      if (this.isRunning() || this.handshaking || this.pendingCommands > 0) {
+      if (this.isRunning() || this.handshaking || this.pendingCommands > 0 || this.hostDown()) {
         this.resetIdleTimer(true);
         return;
       }
@@ -1684,6 +1742,7 @@ export class AgentSessionWrapper {
       }
       this.proc = proc;
       this.unsubscribeFrames = proc.onFrame((frame) => this.handleFrame(frame));
+      this.watchResync(proc);
       try {
         const ready = await proc.waitReady(READY_TIMEOUT_MS);
         await proc.negotiateProtocol(ready);
@@ -1721,6 +1780,7 @@ export class AgentSessionWrapper {
     if (this.restarting) throw new WebRpcError(RESTARTING_MESSAGE, "session_restarting");
     if (this.mcpListInFlight) throw new WebRpcError("MCP management is in progress. Try again when it finishes.", "session_busy");
     if (!this.isAlive()) throw new Error("Session is no longer running");
+    if (this.hostDown()) throw new WebRpcError(`${this.host.label} is offline. The run continues there; it reconnects automatically.`, "host_offline");
     if (typeof command.type === "string" && command.type.startsWith("abort")) {
       console.info("[omp-web] cancellation-command", JSON.stringify({ sessionId: this._sessionId, type: command.type, at: new Date().toISOString() }));
     }
@@ -2158,6 +2218,8 @@ export class AgentSessionWrapper {
       this.sessionFileSignalTimer = null;
     }
     this.unsubscribeFrames?.();
+    this.unsubscribeHostStatus?.();
+    this.unsubscribeHostStatus = null;
     this.clearPendingUiRequests();
     this.promptDispatchPendingCount = 0;
     this.awaitingAgentStart = false;
@@ -2347,31 +2409,36 @@ export function notifyRunningChange({ refreshSessionList = false }: { refreshSes
 /** Record which sessions are mid-run, for resume after a restart. */
 export function syncInterruptibleSessions(): void {
   const registry = getRegistry();
-  const running = new Map<string, { id: string; advisor: boolean }>();
+  const running = new Map<string, InterruptibleSession>();
   for (const session of registry.values()) {
-    if (session.sessionId && session.isRunning()) running.set(session.sessionId, { id: session.sessionId, advisor: session.advisorSpawned });
+    if (session.sessionId && session.isRunning()) running.set(session.sessionId, { id: session.sessionId, advisor: session.advisorSpawned, hostId: session.host.id });
   }
   recordRunningSessions([...running.values()], (id) => registry.get(id)?.isAlive() === true);
 }
 
 /**
  * Restart the sessions that were mid-run when omp-web last stopped and ask
- * each to continue. Only runs when the auto-resume setting is on.
+ * each to continue. Only runs when the auto-resume setting is on. A remote
+ * session waits for its host's next hello and its orphan child's exit.
  */
 export async function resumeInterruptedSessions(): Promise<void> {
-  await Promise.all(takeInterruptedSessions().map(async ({ id, advisor }) => {
-    try {
-      const filePath = await resolveSessionPath(id);
-      if (!filePath) return;
-      const header = readSessionHeader(filePath);
-      const { cwd } = resolveSpawnCwdResult(header?.cwd);
-      const { session } = await startRpcSession(id, filePath, cwd, undefined, advisor, header?.cwd);
-      await session.send({ type: "prompt", message: RESUME_PROMPT });
-      console.log(`[omp-web] resumed interrupted session ${id}`);
-    } catch (error) {
-      console.warn(`[omp-web] could not resume session ${id}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }));
+  const sessions = takeInterruptedSessions();
+  resumeOnHostLink(sessions.filter((session) => session.hostId !== localHost.id), resumeSession);
+  await Promise.all(sessions.filter((session) => session.hostId === localHost.id).map(resumeSession));
+}
+
+/** Start an interrupted session again on its host and ask it to continue. Never rejects. */
+async function resumeSession({ id, advisor, hostId }: InterruptibleSession): Promise<void> {
+  try {
+    const host = getHost(hostId);
+    const target = host && await sessionSpawnTarget(id, host);
+    if (!host || !target) return;
+    const { session } = await startRpcSession(id, target.sessionFile, target.cwd, undefined, advisor, target.recordedCwd, undefined, host);
+    await session.send({ type: "prompt", message: RESUME_PROMPT });
+    console.log(`[omp-web] resumed interrupted session ${id}`);
+  } catch (error) {
+    console.warn(`[omp-web] could not resume session ${id}: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 /**
@@ -2554,6 +2621,7 @@ export async function startRpcSession(
       DISCONNECT_DESTROY_MS,
       host,
       spawned.launchAdvisor,
+      spawned.fellBack,
     );
     holder.wrapper = created;
     created.start();

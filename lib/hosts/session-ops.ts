@@ -563,13 +563,18 @@ export const sessionOps: SessionOps = {
 
   async readMedia(hash) {
     if (!/^[0-9a-f]{64}$/.test(hash)) return fail(400, "invalid_hash", "Invalid media hash");
-    const file = mediaFilePath(hash);
-    if (!file) return fail(404, "media_not_found", "Media not found");
-    try {
-      return ok(readFileSync(file));
-    } catch {
-      return fail(404, "media_not_found", "Media not found"); // removed after the size check
+    // As /api/media: the sweep can delete our copy between lookup and read once
+    // omp's blob is complete; one more lookup then finds the blob.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const file = mediaFilePath(hash);
+      if (!file) break;
+      try {
+        return ok(readFileSync(file));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return fail(500, "media_read_failed", "Media could not be read");
+      }
     }
+    return fail(404, "media_not_found", "Media not found");
   },
 
   listProjects: async () => loadProjectRegistry().projects,

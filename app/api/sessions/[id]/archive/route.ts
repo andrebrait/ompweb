@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
-import { opErrorResponse, resolveSessionHostOr404 } from "@/lib/api-utils";
+import { apiErrorResponse, opErrorResponse, resolveSessionHostOr404 } from "@/lib/api-utils";
+import { HostOpError } from "@/lib/hosts/link-protocol";
+import { invalidateHostSessionList } from "@/lib/hosts/session-index";
 import { clearExitedRpcSession, getRpcSession } from "@/lib/rpc-manager";
 
 /** POST /api/sessions/[id]/archive — stop the live child, then archive the
@@ -29,9 +31,11 @@ export async function POST(
     await getRpcSession(id)?.destroyAndWait?.();
     const result = await sessionOps.archiveSession(id);
     if (!result.ok) return opErrorResponse(result);
+    invalidateHostSessionList(resolved.host.id);
     clearExitedRpcSession(id);
     return NextResponse.json({ ok: true, archived: true, archivedPath: result.value.archivedPath });
   } catch (error) {
+    if (error instanceof HostOpError) return apiErrorResponse(error);
     const message = error instanceof Error ? error.message : String(error);
     return NextResponse.json({ error: message, code: "session_archive_failed" }, { status: 500 });
   }

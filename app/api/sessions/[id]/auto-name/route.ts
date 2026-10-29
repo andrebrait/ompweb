@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { deriveSessionTitleFromFirstMessage, sanitizeSessionTitle } from "@/lib/session-title";
 import { getRpcSession, startRpcSession, WebRpcError } from "@/lib/rpc-manager";
-import { resolveSpawnCwdResult } from "@/lib/hosts/local-host";
-import { invalidateSessionCaches, readSessionHeader } from "@/lib/session-reader";
-import { opErrorResponse, resolveSessionHostOr404, resolveSessionPathOr404 } from "@/lib/api-utils";
+import { invalidateHostSessionList, sessionSpawnTarget } from "@/lib/hosts/session-index";
+import { HostOpError } from "@/lib/hosts/link-protocol";
+import { invalidateSessionCaches } from "@/lib/session-reader";
+import { apiErrorResponse, opErrorResponse, resolveSessionHostOr404 } from "@/lib/api-utils";
 
 /**
  * POST /api/sessions/[id]/auto-name
@@ -27,12 +28,13 @@ export async function POST(
     // file until the history holds an assistant message.
     let rpc = getRpcSession(id);
     if (!rpc?.isAlive?.()) {
-      const resolved = await resolveSessionPathOr404(id);
+      const resolved = await resolveSessionHostOr404(id);
       if ("response" in resolved) return resolved.response;
       try {
-        const header = readSessionHeader(resolved.filePath);
-        const { cwd } = resolveSpawnCwdResult(header?.cwd);
-        rpc = (await startRpcSession(id, resolved.filePath, cwd, undefined, undefined, header?.cwd)).session;
+        const target = await sessionSpawnTarget(id, resolved.host);
+        if (target) {
+          rpc = (await startRpcSession(id, target.sessionFile, target.cwd, undefined, undefined, target.recordedCwd, undefined, resolved.host)).session;
+        }
       } catch {
         rpc = undefined; // Fall through to the fallback title.
       }
@@ -80,6 +82,7 @@ export async function POST(
     // Save title both to disk and through the live process so it persists immediately.
     const renamed = await sessionOps.renameSessionFile(id, derived, "auto");
     if (!renamed.ok) return opErrorResponse(renamed);
+    invalidateHostSessionList(resolved.host.id);
     if (rpc?.isAlive?.()) {
       try {
         await rpc.send({ type: "set_session_name", name: derived });
@@ -89,6 +92,7 @@ export async function POST(
     }
     return NextResponse.json({ title: derived, generated: false, usage: null });
   } catch (error) {
+    if (error instanceof HostOpError) return apiErrorResponse(error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : String(error) },
       { status: 500 },

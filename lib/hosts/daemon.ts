@@ -9,6 +9,7 @@ import { getOmpVersion } from "../omp/omp-cli";
 import { getAgentDir, getSessionsDir } from "../omp/paths";
 import type { RpcTransport } from "../omp/rpc-transport";
 import { readSessionHeaderSync } from "../omp/session-files";
+import { ProjectPathError } from "../project-registry";
 import { isRecord } from "../type-guards";
 import {
   decodeDown,
@@ -376,7 +377,10 @@ export function runHostDaemon(options: { url: string; token: string; allowHttp: 
     } catch (error) {
       const failure = error instanceof HostOpError
         ? { status: error.status, code: error.code, message: error.message }
-        : { status: 500, code: "host_op_failed", message: reason(error) };
+        // A rejected project path is a bad request, as the local projects route answers.
+        : error instanceof ProjectPathError
+          ? { status: 400, code: error.code, message: error.message }
+          : { status: 500, code: "host_op_failed", message: reason(error) };
       queue({ type: "res", id, ok: false, error: failure });
     }
   }
