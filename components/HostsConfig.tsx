@@ -75,7 +75,8 @@ function HostDialog({ dialog, onClose }: { dialog: NonNullable<Dialogs>; onClose
 
   const title = created || adding ? t("hostsConfig.addTitle") : t("hostsConfig.renameTitle");
   return (
-    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+    // The token is shown once: only Done may close it, never Escape or an outside press.
+    <Dialog open onOpenChange={(open) => { if (!open && !created) onClose(); }}>
       <DialogContent ariaLabel={title} style={{ width: 520, maxWidth: "min(92vw, 520px)", padding: 22 }}>
         <DialogTitle>{title}</DialogTitle>
         {created ? (
