@@ -7,7 +7,7 @@ import { isValidSessionId } from "../session-file-references-core";
 import { readSessionHeader, resolveSessionPath } from "../session-reader";
 import type { ManagedProject, SessionInfo } from "../types";
 import type { Host } from "./host";
-import { getHost, listHosts, onHostHello } from "./hub";
+import { getHost, isLinkUp, listHosts, onHostHello } from "./hub";
 import { localHost, resolveSpawnCwdResult } from "./local-host";
 
 /** Same TTL as the local session-list cache. */
@@ -47,14 +47,12 @@ function remoteHosts(): { id: string; label: string; status: string }[] {
   return listHosts().sort((a, b) => a.label.toLowerCase().localeCompare(b.label.toLowerCase()) || a.id.localeCompare(b.id));
 }
 
-const reachable = (host: Host) => host.status() !== "offline" && host.status() !== "needs-upgrade";
-
 /** One linked host's sessions, cached for LIST_TTL_MS. An unreachable or failing host keeps its last list. */
 async function hostSessions(hostId: string, refresh = false): Promise<SessionInfo[]> {
   const lists = hostLists(hostId);
   if (!refresh && Date.now() - lists.fetchedAt < LIST_TTL_MS) return lists.sessions;
   const host = getHost(hostId);
-  if (!host || !reachable(host)) return lists.sessions;
+  if (!host || !isLinkUp(host.status())) return lists.sessions;
   if (lists.loading?.generation !== lists.generation) {
     const generation = lists.generation;
     const promise: Promise<SessionInfo[]> = host.sessionOps.listSessions().then((sessions) => {
@@ -136,7 +134,7 @@ export async function listRemoteProjects(): Promise<ManagedProject[]> {
   const perHost = await Promise.all(remoteHosts().map(async ({ id }) => {
     const host = getHost(id);
     const lists = hostLists(id);
-    if (host && reachable(host)) {
+    if (host && isLinkUp(host.status())) {
       try {
         lists.projects = await host.sessionOps.listProjects();
       } catch {
@@ -152,7 +150,7 @@ export async function listRemoteProjects(): Promise<ManagedProject[]> {
 
 /** An image from the first online host whose bytes hash to `hash`. */
 export async function fetchMediaFromHosts(hash: string): Promise<Uint8Array | null> {
-  const online = listHosts().filter((host) => host.status === "online");
+  const online = listHosts().filter((host) => isLinkUp(host.status));
   try {
     return await Promise.any(online.map(async ({ id }) => {
       const result = await getHost(id)?.sessionOps.readMedia(hash);

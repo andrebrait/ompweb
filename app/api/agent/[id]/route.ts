@@ -34,10 +34,8 @@ function commandErrorResponse(error: unknown) {
   if (error instanceof SyntaxError) {
     return NextResponse.json({ error: "Invalid JSON request body", code: "invalid_json" }, { status: 400 });
   }
-  if (error instanceof WebRpcError && error.code === "host_offline") {
-    return NextResponse.json({ error: error.message, code: error.code, hostOffline: true }, { status: 503 });
-  }
-  if (error instanceof WebRpcError) {
+  // host_offline falls through to apiErrorResponse: 503 {hostOffline: true}.
+  if (error instanceof WebRpcError && error.code !== "host_offline") {
     return NextResponse.json({ error: error.message, code: error.code }, { status: 400 });
   }
   if (error instanceof RpcCommandError) {
@@ -76,6 +74,9 @@ export async function POST(
         const result = await existing.send(body);
         return NextResponse.json({ success: true, data: result });
       }
+      // Disposing a child behind a down link would wait for the link to return.
+      const offline = hostOfflineResponse(existing.host);
+      if (offline) return offline;
       await existing.destroyAndWait();
     }
     if (noSpawn) return NextResponse.json({ success: true, data: NO_SPAWN_REPLIES[body.type] });

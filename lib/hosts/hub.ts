@@ -347,6 +347,7 @@ function reattach(link: Link, listed: HelloChannel[]): void {
     if (link.channels.has(ch)) continue;
     const orphan = new RemoteRpcTransport(link.id, ch, sessionId);
     orphan.spawned = true;
+    orphan.orphaned = true;
     link.channels.set(ch, orphan);
     orphan.killTree(false);
     const escalate = setTimeout(() => orphan.killTree(true), ORPHAN_KILL_GRACE_MS);
@@ -455,7 +456,7 @@ export async function handleLinkBlob(req: Request, reqId: string): Promise<Respo
 function request(hostId: string, op: HostOpName, args: Record<string, unknown>): Promise<unknown> {
   const link = linkFor(hostId);
   const label = labelOf(hostId);
-  if (!link.nonce || link.status === "offline" || link.status === "needs-upgrade") {
+  if (!link.nonce || !isLinkUp(link.status)) {
     return Promise.reject(new HostOpError(503, "host_offline", `${label} is offline`));
   }
   const { promise, resolve, reject } = Promise.withResolvers<unknown>();
@@ -464,6 +465,8 @@ function request(hostId: string, op: HostOpName, args: Record<string, unknown>):
     link.pending.delete(id);
     reject(new HostOpError(504, "host_timeout", `${label} did not answer ${op} in time`));
   }, linkTimings.opTimeoutMs);
+  // A deadline, like the ping and offline timers: never what keeps the server running.
+  timer.unref?.();
   link.pending.set(id, { op, resolve, reject, timer, blob: null });
   try {
     sendDown(link, { type: "req", id, op, args });
@@ -479,8 +482,12 @@ function request(hostId: string, op: HostOpName, args: Record<string, unknown>):
 function validResult(op: keyof SessionOps, result: unknown): boolean {
   if (!isRecord(result)) return false;
   if (result.ok === false) return isStatus(result.status) && typeof result.code === "string" && typeof result.error === "string";
+  if (result.ok !== true || !("value" in result)) return false;
   // Media bytes only ever arrive through the blob leg.
-  return result.ok === true && "value" in result && (op !== "readMedia" || result.value instanceof Uint8Array);
+  if (op === "readMedia") return result.value instanceof Uint8Array;
+  // Main uses these paths (spawn cwd, project keys): they must be strings.
+  if (op === "validateCwd") return isRecord(result.value) && typeof result.value.cwd === "string" && typeof result.value.projectRoot === "string";
+  return true;
 }
 
 const optionalString = (value: unknown) => value === undefined || typeof value === "string";
@@ -545,6 +552,8 @@ export class RemoteRpcTransport implements RpcTransport {
   spawned = false;
   /** The daemon stopped listing this child: it died while the link was down. Set before the synthesized exit. */
   lost = false;
+  /** Killed on sight: a child of a previous run of this server. Its output has no reader and is dropped. */
+  orphaned = false;
   private readonly lineListeners: Array<(line: string) => void> = [];
   private readonly stderrListeners: Array<(chunk: string) => void> = [];
   private readonly exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
@@ -602,11 +611,13 @@ export class RemoteRpcTransport implements RpcTransport {
   }
 
   deliverLine(line: string): void {
+    if (this.orphaned) return;
     if (this.lineListeners.length === 0) this.pendingLines.push(line);
     notify(this.lineListeners, line);
   }
 
   deliverStderr(chunk: string): void {
+    if (this.orphaned) return;
     if (this.stderrListeners.length === 0) this.pendingStderr.push(chunk);
     notify(this.stderrListeners, chunk);
   }
@@ -723,6 +734,19 @@ export function listHosts(): {
       serverVersion: LINK_PROTOCOL_VERSION,
     };
   });
+}
+
+/** The link carries traffic: sends, ops and children work. An omp-missing host
+ * is linked too; only spawning there fails, with its own error. */
+export function isLinkUp(status: HostStatus): boolean {
+  return status === "online" || status === "omp-missing";
+}
+
+/** A linked host sent nothing for `ms` (and for two ping rounds, so a healthy
+ * link's pongs always count): its link is down even before it is marked offline. */
+export function linkQuietFor(hostId: string, ms: number): boolean {
+  const lastSeenAt = hub().links.get(hostId)?.lastSeenAt;
+  return !!lastSeenAt && Date.now() - Date.parse(lastSeenAt) >= Math.max(ms, 2 * linkTimings.pingMs);
 }
 
 export function onHostsChange(listener: () => void): () => void {

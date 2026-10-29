@@ -133,7 +133,8 @@ export async function PATCH(req: Request) {
     // Only after a successful save: a failed write must not leave an orphaned
     // in-memory browse authorization behind. Never for another host's paths.
     if (target.host === localHost) for (const root of result.value.newRoots) allowFileRoot(root);
-    return NextResponse.json({ projects: result.value.projects });
+    const { projects } = result.value;
+    return NextResponse.json({ projects: target.host === localHost ? projects : projects.map((project) => ({ ...project, hostId: target.host.id })) });
   } catch (error) {
     if (error instanceof ProjectPathError) {
       return NextResponse.json({ error: error.message, code: error.code }, { status: 400 });

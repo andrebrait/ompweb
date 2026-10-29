@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { apiErrorResponse, opErrorResponse, resolveSessionHostOr404 } from "@/lib/api-utils";
+import { apiErrorResponse, hostOfflineResponse, opErrorResponse, resolveSessionHostOr404 } from "@/lib/api-utils";
 import { HostOpError } from "@/lib/hosts/link-protocol";
 import { invalidateHostSessionList } from "@/lib/hosts/session-index";
 import { clearExitedRpcSession, getRpcSession } from "@/lib/rpc-manager";
@@ -28,6 +28,9 @@ export async function POST(
 
     // OMP owns writes while a child is live; wait for its final flush before
     // moving the file so the archive contains the complete native transcript.
+    // Disposing a child behind a down link would wait for the link to return.
+    const offline = hostOfflineResponse(resolved.host);
+    if (offline) return offline;
     await getRpcSession(id)?.destroyAndWait?.();
     const result = await sessionOps.archiveSession(id);
     if (!result.ok) return opErrorResponse(result);
