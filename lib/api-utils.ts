@@ -17,10 +17,10 @@ export async function resolveSessionHostOr404(
   return host ? { host } : { response: NextResponse.json(SESSION_NOT_FOUND, { status: 404 }) };
 }
 
-/** 503 `{hostOffline: true}` while a host's link is down; null when it takes requests. */
+/** 503 `{hostOffline: true, delivery: "refused"}` while a host's link is down; null when it takes requests. */
 export function hostOfflineResponse(host: Host): NextResponse | null {
   if (isLinkUp(host.status())) return null;
-  return apiErrorResponse(new HostOpError(503, "host_offline", `${host.label} is offline`));
+  return apiErrorResponse(new WebRpcError(`${host.label} is offline`, "host_offline", "refused"));
 }
 
 /** The host a request names (`hostId`, this machine when absent): 404 when unknown, 503 while offline. */
@@ -38,12 +38,14 @@ export function opErrorResponse(result: Extract<OpResult<unknown>, { ok: false }
 
 /** Uniform JSON error body used by most API routes. A host link failure keeps
  * its status (503 offline, 504 timeout) and code; a session whose host is
- * offline answers 503 `{hostOffline: true}`. */
+ * offline answers 503 `{hostOffline: true}`, plus its `delivery` for an agent
+ * command ("unknown": the link dropped after it was sent, so it may still run). */
 export function apiErrorResponse(error: unknown, status = 500): NextResponse {
   if (error instanceof HostOpError || (error instanceof WebRpcError && error.code === "host_offline")) {
     const offline = error.code === "host_offline";
+    const delivery = error instanceof WebRpcError ? error.delivery : undefined;
     return NextResponse.json(
-      { error: error.message, code: error.code, ...(offline ? { hostOffline: true } : {}) },
+      { error: error.message, code: error.code, ...(offline ? { hostOffline: true } : {}), ...(delivery ? { delivery } : {}) },
       { status: error instanceof HostOpError ? error.status : 503 },
     );
   }

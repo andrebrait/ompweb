@@ -1286,6 +1286,7 @@
   "hosts.pickerLabel": "ホスト",
   "hosts.remotePathHint": "{host} 上のフォルダーのパスを上に入力してから選択してください。",
   "agentSession.hostOfflineSend": "{detail}（送信されませんでした。メッセージは入力欄に残っています。）",
+  "agentSession.hostOfflineMaybeSent": "{detail}（接続が切れる前にメッセージが届いている可能性があります。その場合、ホストの再接続時に実行されます。）",
   "hostsConfig.lastSeen": "最終接続 {time}",
   "hostsConfig.neverSeen": "未接続",
   "hostsConfig.allowAgentStart": "エージェントが確認なしでここにセッションを開始できる",

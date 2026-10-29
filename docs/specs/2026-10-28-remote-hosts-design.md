@@ -351,7 +351,7 @@ asks ("Send a message from a session on <host> to session <id> on
 
 | Failure | Behavior |
 |---|---|
-| No `pong` for 30 s | Host is offline. Its sessions show a banner: "<host> is offline. The run continues there; it reconnects automatically." Sends return 503 `{hostOffline: true}`; the composer keeps the draft and shows a toast. |
+| No `pong` for 30 s | Host is offline. Its sessions show a banner: "<host> is offline. The run continues there; it reconnects automatically." Sends refused before they leave return 503 `{hostOffline: true, delivery: "refused"}`; the composer keeps the draft and shows a toast. A prompt whose ack the dropped link lost returns `delivery: "unknown"`: it may still run once the host reconnects, so the composer drops the draft and the toast says so. A fresh chat's 503 carries the `sessionId` it spawned when the link dropped after the spawn; the chat adopts it, so a retry starts no second session. |
 | Link returns, children alive | Wrappers reattach; `get_state` reconcile runs; `resync` channels reconcile too. |
 | Daemon restarted, children gone | Synthesized `process_exit` per missing channel, which raises the existing "Run failed" notification. With `autoResumeSessions` on, main restarts sessions that were mid-run and sends `RESUME_PROMPT` (Rules → Reattach). |
 | Second daemon with the same token | Newest link wins; the old daemon receives `replaced` and exits. |

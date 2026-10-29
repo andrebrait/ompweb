@@ -111,11 +111,15 @@ const BASH_EXCLUDE_MESSAGE =
  */
 export class WebRpcError extends Error {
   readonly code: string;
+  /** `host_offline` only: "refused" when nothing was sent, "unknown" when the
+   * link dropped after the command left, so it may still run on the host. */
+  readonly delivery?: "refused" | "unknown";
 
-  constructor(message: string, code: string) {
+  constructor(message: string, code: string, delivery?: "refused" | "unknown") {
     super(message);
     this.name = "WebRpcError";
     this.code = code;
+    if (delivery) this.delivery = delivery;
   }
 }
 
@@ -477,8 +481,8 @@ export class AgentSessionWrapper {
     return !isLinkUp(this.host.status());
   }
 
-  private hostOfflineError(): WebRpcError {
-    return new WebRpcError(`${this.host.label} is offline. The run continues there; it reconnects automatically.`, "host_offline");
+  private hostOfflineError(delivery: "refused" | "unknown"): WebRpcError {
+    return new WebRpcError(`${this.host.label} is offline. The run continues there; it reconnects automatically.`, "host_offline", delivery);
   }
 
   /** The command timed out because its host's link went quiet, not because omp
@@ -1505,7 +1509,7 @@ export class AgentSessionWrapper {
         );
       }
       if (expired) {
-        if (error instanceof RpcCommandTimeoutError && this.linkLostDuring(error)) throw this.hostOfflineError();
+        if (error instanceof RpcCommandTimeoutError && this.linkLostDuring(error)) throw this.hostOfflineError("unknown");
         // Nothing on this child will ever resolve the waiter; recycle it like
         // the prompt-ack timeout path so the next request gets a fresh child.
         await this.destroyAndWait();
@@ -1697,7 +1701,7 @@ export class AgentSessionWrapper {
       return result;
     } catch (error) {
       if (error instanceof RpcCommandTimeoutError) {
-        if (this.linkLostDuring(error)) throw this.hostOfflineError();
+        if (this.linkLostDuring(error)) throw this.hostOfflineError("unknown");
         // A timed-out navigation may still be running in a hook. Do not let a
         // later mutation race it once the web-side fence is released.
         await this.destroyAndWait();
@@ -1820,7 +1824,7 @@ export class AgentSessionWrapper {
     if (this.restarting) throw new WebRpcError(RESTARTING_MESSAGE, "session_restarting");
     if (this.mcpListInFlight) throw new WebRpcError("MCP management is in progress. Try again when it finishes.", "session_busy");
     if (!this.isAlive()) throw new Error("Session is no longer running");
-    if (this.hostDown()) throw this.hostOfflineError();
+    if (this.hostDown()) throw this.hostOfflineError("refused");
     if (typeof command.type === "string" && command.type.startsWith("abort")) {
       console.info("[omp-web] cancellation-command", JSON.stringify({ sessionId: this._sessionId, type: command.type, at: new Date().toISOString() }));
     }
@@ -1905,7 +1909,7 @@ export class AgentSessionWrapper {
           this.clearLiveSnapshots();
           notifyRunningChange();
           if (error instanceof RpcCommandTimeoutError) {
-            if (this.linkLostDuring(error)) throw this.hostOfflineError();
+            if (this.linkLostDuring(error)) throw this.hostOfflineError("unknown");
             // The child took the frame but never acked it, so nothing will ever
             // report this run: recycle the unacknowledged prompt. A read-only
             // get_state timeout deliberately does not take this destructive path.

@@ -281,7 +281,11 @@ bin/
   running on its machine. A wrapper on a host whose `isLinkUp(status)` is false
   is "transport down": no `process_exit`, idle and disconnect timers paused
   until the link returns; frames carry `host_status` for the offline banner;
-  sends answer 503 `{hostOffline: true}`. A child missing from `hello.channels`
+  sends answer 503 `{hostOffline: true, delivery}`: `"refused"` when nothing
+  left (the composer keeps the draft), `"unknown"` when the link dropped after
+  the command was sent (it may still run; the composer drops the draft so it
+  is never sent twice). A fresh chat adopts the `sessionId` a 503 from
+  `/api/agent/new` carries. A child missing from `hello.channels`
   gets a synthesized `process_exit`. Use `isLinkUp` (`host.ts`, client-safe) as
   the one link predicate; do not compare `status === "online"` (an `omp-missing`
   host is linked).
