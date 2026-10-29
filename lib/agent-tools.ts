@@ -296,10 +296,15 @@ function checkMessageLength(message: string, field: string): void {
   }
 }
 
-/** `host` matched case-insensitively against ids and labels. */
+/** `host` matched case-insensitively against ids, then labels; a label several hosts share is refused, not guessed. */
 function resolveHost(hosts: AgentToolHost[], host: string): AgentToolHost {
   const wanted = host.toLowerCase();
-  const match = hosts.find((h) => h.id.toLowerCase() === wanted || h.label.toLowerCase() === wanted);
+  const byId = hosts.find((h) => h.id.toLowerCase() === wanted);
+  const labelled = byId ? [] : hosts.filter((h) => h.label.toLowerCase() === wanted);
+  if (labelled.length > 1) {
+    throw new Error(`"${host}" matches more than one host (ids: ${labelled.map((h) => h.id).join(", ")}). Pass one of those ids as host.`);
+  }
+  const match = byId ?? labelled[0];
   if (!match) throw new Error(`Unknown host "${host}". Known hosts: ${hosts.map((h) => h.label).join(", ")}.`);
   if (!match.online) throw new Error(`${match.label} is offline.`);
   return match;
