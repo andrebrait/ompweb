@@ -2659,6 +2659,8 @@ export async function startRpcSession(
       registry.set(newId, created);
     });
     registry.set(realSessionId, created);
+    // omp can move a resumed session during startup, before identity is known; keep the requested id routable.
+    if (sessionFile && realSessionId !== sessionId) registry.set(sessionId, created);
     // A successful respawn supersedes the crash record.
     clearExitedRpcSession(sessionId);
     if (realSessionId !== sessionId) clearExitedRpcSession(realSessionId);
