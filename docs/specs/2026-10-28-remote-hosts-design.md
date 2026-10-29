@@ -323,19 +323,29 @@ omp-web already answers three agent tools itself (`list_sessions`,
 `new_session`, `send_to_session` in `lib/agent-tools.ts`, gated by the
 `agentToolsEnabled` web setting). They are extended, not duplicated:
 
-- `new_session` gains an optional `host` (id or label; omitted or `local`
-  means this machine).
+- `new_session` gains an optional `host` (id or label; omitted means the
+  calling session's own host, so this machine for a local caller).
 - `list_sessions` covers every host and names each session's host.
 - `send_to_session` reaches a session on any host.
 
 The calls arrive over a session omp-web already owns, so they need no new
-credential and cannot be reached from outside omp-web.
+credential and cannot be reached from outside omp-web. Each call carries the
+calling session's host (`sourceHostId`).
 
 **Guard:** creating a session on a remote host whose `allowAgentStart` is
 `false` (the default) first shows a `confirm` request through the existing
 extension-UI flow ("Start a session on <host> in <cwd>?"), which also raises
 the existing input-needed notification. Declining returns an error result to
-the agent. Local creation keeps today's behavior.
+the agent. A local caller keeps today's behavior: it starts and messages
+sessions here without asking.
+
+A caller on a remote host is untrusted by this machine: a prompt-injected
+agent on a laptop must not drive the main machine. When it targets any other
+host, through `new_session` or `send_to_session`, it gets the same confirm
+unless the target host allows agent starts; this machine as the target always
+asks ("Send a message from a session on <host> to session <id> on
+<host>?" for a send). Starting a session on its own host follows that host's
+`allowAgentStart`; messaging a session on its own host needs no confirm.
 
 ## Error handling
 
