@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { opErrorResponse, resolveSessionHostOr404 } from "@/lib/api-utils";
+import { apiErrorResponse, opErrorResponse, resolveSessionHostOr404 } from "@/lib/api-utils";
+import { HostOpError } from "@/lib/hosts/link-protocol";
 import { isValidSubagentId } from "@/lib/hosts/session-ops";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +37,7 @@ export async function GET(
     );
     return result.ok ? NextResponse.json(result.value) : opErrorResponse(result);
   } catch (error) {
+    if (error instanceof HostOpError) return apiErrorResponse(error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : String(error) },
       { status: 500 },

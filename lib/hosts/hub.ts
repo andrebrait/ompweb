@@ -5,7 +5,10 @@
 import { randomUUID } from "node:crypto";
 import { readBodyWithinLimit, RequestBodyTooLargeError } from "../bounded-form-data";
 import type { RpcTransport } from "../omp/rpc-transport";
+import type { ProjectRegistryEntry } from "../project-registry";
+import { isValidSessionId } from "../session-file-references-core";
 import { isRecord } from "../type-guards";
+import type { SessionInfo } from "../types";
 import type { Host, HostStatus, SpawnRequest, SpawnResult } from "./host";
 import {
   decodeUp,
@@ -300,6 +303,7 @@ function openDownlink(link: Link, hello: Hello, signal: AbortSignal): Response {
   enqueue(link, encodeLine({ type: "welcome", v: LINK_PROTOCOL_VERSION, hostId: link.id, nonce: link.nonce }));
   // Resend what the daemon has not applied, in order, before anything new.
   for (const { line } of link.outbox.pending()) enqueue(link, line);
+  reattach(link, hello.channels);
 
   link.ompVersion = hello.ompVersion;
   link.platform = hello.platform;
@@ -318,6 +322,37 @@ function openDownlink(link: Link, hello: Hello, signal: AbortSignal): Response {
       "x-accel-buffering": "no",
     },
   });
+}
+
+/** SIGKILL an orphan this long after its SIGTERM, as the daemon does when it stops. */
+const ORPHAN_KILL_GRACE_MS = 5_000;
+
+/**
+ * Spec Rules → Reattach. Listed channels this server has a transport for carry
+ * on unchanged. A spawned child the daemon no longer lists died while the link
+ * was down: its transport gets a synthesized exit, marked `lost`. Listed
+ * channels without a transport are orphans of a restart of this server and are
+ * killed; they stay registered until their `exit` (see orphanExit).
+ */
+function reattach(link: Link, listed: HelloChannel[]): void {
+  const live = new Set(listed.map(({ ch }) => ch));
+  for (const [ch, transport] of link.channels) {
+    // A spawn still in flight is not listed yet.
+    if (!transport.spawned || live.has(ch)) continue;
+    link.channels.delete(ch);
+    transport.lost = true;
+    transport.deliverExit(null, null);
+  }
+  for (const { ch, sessionId } of listed) {
+    if (link.channels.has(ch)) continue;
+    const orphan = new RemoteRpcTransport(link.id, ch, sessionId);
+    orphan.spawned = true;
+    link.channels.set(ch, orphan);
+    orphan.killTree(false);
+    const escalate = setTimeout(() => orphan.killTree(true), ORPHAN_KILL_GRACE_MS);
+    escalate.unref?.();
+    orphan.onExit(() => clearTimeout(escalate));
+  }
 }
 
 /** POST /api/hosts/link: a batch of uplink NDJSON messages. */
@@ -440,13 +475,43 @@ function request(hostId: string, op: HostOpName, args: Record<string, unknown>):
   return promise;
 }
 
-/** Shape check for daemon results: lists are arrays, every other op an OpResult. */
+/** Shape check for daemon results other than the lists: an OpResult. */
 function validResult(op: keyof SessionOps, result: unknown): boolean {
-  if (op === "listSessions" || op === "listProjects") return Array.isArray(result);
   if (!isRecord(result)) return false;
   if (result.ok === false) return isStatus(result.status) && typeof result.code === "string" && typeof result.error === "string";
   // Media bytes only ever arrive through the blob leg.
   return result.ok === true && "value" in result && (op !== "readMedia" || result.value instanceof Uint8Array);
+}
+
+const optionalString = (value: unknown) => value === undefined || typeof value === "string";
+const optionalNumber = (value: unknown) => value === undefined || (typeof value === "number" && Number.isFinite(value));
+
+/** A daemon's session-list entry reduced to SessionInfo's fields; null when one has the wrong type. */
+function sessionEntry(value: unknown): SessionInfo | null {
+  if (!isRecord(value)) return null;
+  const { path, id, cwd, name, created, modified, lastMessageAt, messageCount, firstMessage, parentSessionId, projectRoot, projectKey, worktreeBranch } = value;
+  if (
+    typeof path !== "string" || typeof id !== "string" || !isValidSessionId(id) || typeof cwd !== "string"
+    || typeof created !== "string" || typeof modified !== "string" || typeof firstMessage !== "string"
+    || typeof messageCount !== "number" || !Number.isFinite(messageCount)
+    || ![name, lastMessageAt, parentSessionId, projectRoot, projectKey, worktreeBranch].every(optionalString)
+  ) return null;
+  return { path, id, cwd, name, created, modified, lastMessageAt, messageCount, firstMessage, parentSessionId, projectRoot, projectKey, worktreeBranch } as SessionInfo;
+}
+
+/** A daemon's project-registry entry reduced to its known fields; null when one has the wrong type. */
+function projectEntry(value: unknown): ProjectRegistryEntry | null {
+  if (!isRecord(value)) return null;
+  const { path, addedAt, hidden, alias, sortOrder, pinOrder, launchConfig } = value;
+  if (
+    typeof path !== "string" || !path || typeof addedAt !== "string" || typeof hidden !== "boolean"
+    || !optionalString(alias) || !optionalNumber(sortOrder) || !optionalNumber(pinOrder)
+    || !(launchConfig === undefined || (isRecord(launchConfig)
+      && optionalString(launchConfig.profile)
+      && (launchConfig.advisor === undefined || typeof launchConfig.advisor === "boolean")
+      && (launchConfig.extraArgs === undefined || (Array.isArray(launchConfig.extraArgs) && launchConfig.extraArgs.every((arg) => typeof arg === "string")))))
+  ) return null;
+  return { path, addedAt, hidden, alias, sortOrder, pinOrder, launchConfig } as ProjectRegistryEntry;
 }
 
 const MEDIA_HASH_RE = /^[0-9a-f]{64}$/;
@@ -459,7 +524,10 @@ function remoteSessionOps(hostId: string): SessionOps {
         return { ok: false, status: 400, code: "invalid_hash", error: "Invalid media hash" };
       }
       const result = await request(hostId, op, Object.fromEntries(params.map((name, i) => [name, args[i]])));
-      if (validResult(op, result)) return result;
+      const list: ((value: unknown) => object | null) | null = op === "listSessions" ? sessionEntry : op === "listProjects" ? projectEntry : null;
+      // Untrusted list entries: malformed ones are dropped, the rest keep only their known fields.
+      if (list && Array.isArray(result)) return result.map(list).filter((entry) => entry !== null);
+      if (!list && validResult(op, result)) return result;
       throw new HostOpError(502, "host_bad_result", `${labelOf(hostId)} sent an invalid ${op} result`);
     };
   }
@@ -471,6 +539,12 @@ function remoteSessionOps(hostId: string): SessionOps {
 export class RemoteRpcTransport implements RpcTransport {
   readonly hostId: string;
   readonly ch: string;
+  /** Set for an orphan the daemon listed in `hello` (the session it runs); null for children this server spawned. */
+  readonly sessionId: string | null;
+  /** The daemon confirmed the spawn (or listed the channel); until then a `hello` without it is not a loss. */
+  spawned = false;
+  /** The daemon stopped listing this child: it died while the link was down. Set before the synthesized exit. */
+  lost = false;
   private readonly lineListeners: Array<(line: string) => void> = [];
   private readonly stderrListeners: Array<(chunk: string) => void> = [];
   private readonly exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
@@ -479,9 +553,10 @@ export class RemoteRpcTransport implements RpcTransport {
   private readonly pendingStderr: string[] = [];
   private exitInfo: [number | null, NodeJS.Signals | null] | null = null;
 
-  constructor(hostId: string, ch: string) {
+  constructor(hostId: string, ch: string, sessionId: string | null = null) {
     this.hostId = hostId;
     this.ch = ch;
+    this.sessionId = sessionId;
   }
 
   write(line: string, callback: (error?: Error | null) => void): void {
@@ -591,6 +666,7 @@ export class RemoteHost implements Host {
     try {
       const result = await request(this.id, "spawn", { ch, ...spawnRequest });
       if (!isSpawnResult(result)) throw new HostOpError(502, "host_bad_result", `${this.label} sent an invalid spawn result`);
+      transport.spawned = true;
       link.autoApprove = result.autoApproveExtension;
       return { transport, cwd: result.cwd, fellBack: result.fellBack, launchAdvisor: result.launchAdvisor };
     } catch (error) {
@@ -657,13 +733,24 @@ export function onHostsChange(listener: () => void): () => void {
   };
 }
 
-/** Fires on every accepted hello with the omp children the daemon still runs. */
+/** Fires on every accepted hello with the omp children the daemon still runs.
+ * Listeners run after reattach: lost channels have exited and orphans are being killed. */
 export function onHostHello(listener: (hostId: string, channels: HelloChannel[]) => void): () => void {
   const listeners = hub().helloListeners;
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
   };
+}
+
+/** Resolves once every orphan of `sessionId` the host listed in a hello has exited. */
+export async function orphanExit(hostId: string, sessionId: string): Promise<void> {
+  const orphans = [...(hub().links.get(hostId)?.channels.values() ?? [])].filter((transport) => transport.sessionId === sessionId);
+  await Promise.all(orphans.map((orphan) => {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    orphan.onExit(() => resolve());
+    return promise;
+  }));
 }
 
 /** End a host's link now (revoke). Its daemon gets 401 when it redials and stops its children. */

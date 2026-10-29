@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { apiErrorResponse, opErrorResponse } from "@/lib/api-utils";
+import { apiErrorResponse, opErrorResponse, resolveHostOrError } from "@/lib/api-utils";
 import { allowFileRoot } from "@/lib/file-access";
 import { localHost } from "@/lib/hosts/local-host";
+import { listRemoteProjects } from "@/lib/hosts/session-index";
 import type { ProjectUpdate } from "@/lib/hosts/session-ops";
 import { isReservedLaunchArg, mergeProjects, ProjectPathError } from "@/lib/project-registry";
 import type { ProjectLaunchConfig } from "@/lib/types";
@@ -29,7 +30,8 @@ function parseLaunchConfig(value: unknown): ProjectLaunchConfig | undefined {
 
 // GET /api/projects  →  { projects: ManagedProject[] }
 // Registered (non-hidden) projects plus session-discovered projects, excluding
-// hidden entries. Session-discovered paths get no addedAt; the client applies
+// hidden entries, for this machine and then each linked host; each carries its
+// hostId. Session-discovered paths get no addedAt; the client applies
 // the ordering (manual / most-recently-added by default, or the user's chosen
 // sort with pins first — see lib/project-ordering.ts).
 export async function GET() {
@@ -43,9 +45,11 @@ export async function GET() {
     const projects = mergeProjects(registry, discovered);
     // Keep the in-memory browse allowlist warm for registered projects that
     // have no sessions (the in-memory list does not survive restarts, and an
-    // empty managed project derives no root from sessions).
+    // empty managed project derives no root from sessions). Only this
+    // machine's: another host's paths do not exist here.
     for (const project of projects) allowFileRoot(project.path);
-    return NextResponse.json({ projects });
+    const local = projects.map((project) => ({ ...project, hostId: localHost.id }));
+    return NextResponse.json({ projects: [...local, ...await listRemoteProjects()] });
   } catch (error) {
     return apiErrorResponse(error);
   }
@@ -56,11 +60,15 @@ export async function GET() {
 // registers and authorizes it, and unhides it if it was previously hidden.
 export async function POST(req: Request) {
   try {
-    const body = await req.json() as { cwd?: unknown; launchConfig?: unknown };
+    const body = await req.json() as { cwd?: unknown; launchConfig?: unknown; hostId?: unknown };
     const cwd = typeof body.cwd === "string" ? body.cwd : "";
     const launchConfig = parseLaunchConfig(body.launchConfig);
-    const result = await localHost.sessionOps.addProject(cwd, launchConfig);
+    const target = resolveHostOrError(body.hostId);
+    if ("response" in target) return target.response;
+    const { host } = target;
+    const result = await host.sessionOps.addProject(cwd, launchConfig);
     if (!result.ok) return opErrorResponse(result);
+    if (host !== localHost) return NextResponse.json({ project: { ...result.value, hostId: host.id } });
     allowFileRoot(result.value.path);
     return NextResponse.json({ project: result.value });
   } catch (error) {
@@ -89,6 +97,7 @@ export async function PATCH(req: Request) {
       pinOrder?: unknown;
       launchConfig?: unknown;
       updates?: unknown;
+      hostId?: unknown;
     };
     const rawUpdates: unknown[] = Array.isArray(body.updates)
       ? body.updates
@@ -117,11 +126,13 @@ export async function PATCH(req: Request) {
       parsed.push({ cwd, alias, sortOrder, pinOrder, launchConfig });
     }
 
-    const result = await localHost.sessionOps.updateProject(parsed);
+    const target = resolveHostOrError(body.hostId);
+    if ("response" in target) return target.response;
+    const result = await target.host.sessionOps.updateProject(parsed);
     if (!result.ok) return opErrorResponse(result);
     // Only after a successful save: a failed write must not leave an orphaned
-    // in-memory browse authorization behind.
-    for (const root of result.value.newRoots) allowFileRoot(root);
+    // in-memory browse authorization behind. Never for another host's paths.
+    if (target.host === localHost) for (const root of result.value.newRoots) allowFileRoot(root);
     return NextResponse.json({ projects: result.value.projects });
   } catch (error) {
     if (error instanceof ProjectPathError) {
@@ -136,12 +147,14 @@ export async function PATCH(req: Request) {
 // sessions. Re-adding the directory (POST) restores it.
 export async function DELETE(req: Request) {
   try {
-    const body = await req.json() as { cwd?: unknown };
+    const body = await req.json() as { cwd?: unknown; hostId?: unknown };
     const cwd = typeof body.cwd === "string" ? body.cwd.trim() : "";
     if (!cwd) {
       return NextResponse.json({ error: "Path is required", code: "path_required" }, { status: 400 });
     }
-    const result = await localHost.sessionOps.hideProject(cwd);
+    const target = resolveHostOrError(body.hostId);
+    if ("response" in target) return target.response;
+    const result = await target.host.sessionOps.hideProject(cwd);
     if (!result.ok) return opErrorResponse(result);
     return NextResponse.json({ success: true });
   } catch (error) {

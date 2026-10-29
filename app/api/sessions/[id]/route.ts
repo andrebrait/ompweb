@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
-import { opErrorResponse, resolveSessionHostOr404 } from "@/lib/api-utils";
+import { apiErrorResponse, opErrorResponse, resolveSessionHostOr404 } from "@/lib/api-utils";
+import { HostOpError } from "@/lib/hosts/link-protocol";
+import { invalidateHostSessionList } from "@/lib/hosts/session-index";
 import { invalidateSessionCaches } from "@/lib/session-reader";
 import { parseJsonWithinLimit, RequestBodyTooLargeError } from "@/lib/bounded-form-data";
 import { clearExitedRpcSession, getLiveRpcSessionIds, getRpcSession, WebRpcError } from "@/lib/rpc-manager";
@@ -16,6 +18,8 @@ function sessionsErrorResponse(error: unknown): NextResponse {
   if (error instanceof SyntaxError) {
     return NextResponse.json({ error: "Invalid JSON request body", code: "invalid_json" }, { status: 400 });
   }
+  // A host link failure keeps its status: 503 offline, 504 timeout.
+  if (error instanceof HostOpError) return apiErrorResponse(error);
   console.error("[api/sessions]", error);
   return NextResponse.json({ error: "Session request failed", code: "session_request_failed" }, { status: 500 });
 }
@@ -101,6 +105,7 @@ export async function PATCH(
       }
       const result = await resolved.host.sessionOps.renameSessionFile(id, name.trim());
       if (!result.ok) return opErrorResponse(result);
+      invalidateHostSessionList(resolved.host.id);
       return NextResponse.json({ ok: true });
     }
     invalidateSessionCaches();
@@ -126,6 +131,7 @@ export async function DELETE(
     // owns the file and would clobber it on its next flush.
     const result = await resolved.host.sessionOps.deleteSession(id, getLiveRpcSessionIds());
     if (!result.ok) return opErrorResponse(result);
+    invalidateHostSessionList(resolved.host.id);
     clearExitedRpcSession(id);
     return NextResponse.json({ ok: true, ...result.value });
   } catch (error) {

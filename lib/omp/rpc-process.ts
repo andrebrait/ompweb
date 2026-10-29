@@ -98,7 +98,8 @@ export function spawnOmpTransport(options: RpcProcessOptions): RpcTransport {
 
 export class RpcProcess {
   readonly cwd: string;
-  private readonly transport: RpcTransport;
+  /** Read by the session wrapper for host-specific signals (a remote link's resync and lost child). */
+  readonly transport: RpcTransport;
   private readonly exitedPromise: Promise<void>;
   private readonly pending = new Map<string, PendingCommand>();
   private readonly frameListeners = new Set<(frame: RpcFrame) => void>();
