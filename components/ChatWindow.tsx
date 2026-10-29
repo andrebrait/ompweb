@@ -983,17 +983,18 @@ export function ChatWindow({ session, newSessionCwd, newSessionHostId, hostStatu
   }, [advisorEnabled]);
 
   // GitHub repo of the session checkout, so bare `#123` in messages links to it.
+  // A remote session's cwd is a path on its host, which this server cannot inspect.
   const [githubRepo, setGithubRepo] = useState<string | null>(null);
   useEffect(() => {
     setGithubRepo(null);
-    if (!messageCwd) return;
+    if (!messageCwd || remoteWorkspace) return;
     const controller = new AbortController();
     fetch(`/api/github-repo?cwd=${encodeURIComponent(messageCwd)}`, { signal: controller.signal })
       .then((response) => response.ok ? response.json() as Promise<{ repo?: string | null }> : null)
       .then((data) => setGithubRepo(data?.repo ?? null))
       .catch(() => {});
     return () => controller.abort();
-  }, [messageCwd]);
+  }, [messageCwd, remoteWorkspace]);
 
   const advisorModelMeta = useMemo(() => {
     if (!advisorRoleSelector) return null;
