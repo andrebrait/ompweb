@@ -303,6 +303,9 @@ machine already has. The rules below limit anything beyond it.
     magic-byte check in `/api/media/[hash]`.
   - Size limits from Link → Limits apply.
   - Remote omp output goes through the same sanitizing as local output.
+  - A remote host's session export (`/api/sessions/[id]/export`) is always
+    served as an attachment, never `inline`: its HTML would otherwise run on
+    main's origin.
 - `sessionFileExists` and `invalidateSessionLists` accept only paths inside
   the daemon's sessions directory; `spawn` accepts a `sessionFile` only from
   the same directory.
