@@ -155,7 +155,7 @@ breaks mid-write. stdin lines omp has not received would otherwise vanish.
 | `stdin {ch, line}` | down | One raw omp NDJSON line. |
 | `stdout {ch, line}` | up | One raw omp NDJSON line. |
 | `stderr {ch, chunk}` | up | Child stderr, for the existing logging. |
-| `kill {ch, signal}` | down | Stop a child. |
+| `kill {ch, force}` | down | Stop a child: `force: false` terminates its process tree, `true` kills it. |
 | `exit {ch, code, signal}` | up | Child exited. |
 | `resync {ch}` | up | Buffered output for `ch` was dropped. |
 | `req {id, op, args}` | down | Host op request. |
@@ -191,7 +191,7 @@ breaks mid-write. stdin lines omp has not received would otherwise vanish.
 - **Large results.** An op result whose JSON exceeds 1 MB, and every
   `readMedia` result, is sent as raw bytes to
   `POST /api/hosts/link/blob/<reqId>` instead of inside NDJSON; the `res` line
-  then carries `{blob: true, bytes}`.
+  then carries `blob: {bytes}` and no `result`.
 - **Limits.** Uplink batches are capped at 16 MB and blob uploads at 64 MB;
   over-limit requests get 413. A single `stdout` line over 8 MB closes that
   channel with `resync`.
