@@ -1398,6 +1398,7 @@ export class AgentSessionWrapper {
       const result = await executeAgentTool(toolName, args, createAgentToolOps(), {
         sourceSessionId: this.sessionId,
         sourceCwd: this.cwd,
+        sourceHostId: this.host.id,
         enabled: loadWebServerSettings().agentToolsEnabled,
         guard: getAgentToolGuard(),
         confirm: (title) => this.confirmFromServer(title),
@@ -2597,6 +2598,12 @@ function createAgentToolOps(): AgentToolSessionOps {
         waited: true,
         responseText: typeof last?.text === "string" ? last.text : null,
       };
+    },
+
+    async sessionHostId(sessionId) {
+      const live = getRpcSession(sessionId);
+      if (live?.isAlive()) return live.host.id;
+      return (await hostForSessionId(sessionId))?.id ?? null;
     },
   };
 }

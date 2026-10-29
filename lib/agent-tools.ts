@@ -40,7 +40,7 @@ export const AGENT_TOOL_DEFINITIONS: HostToolDefinition[] = [
         provider: { type: "string", description: "Model provider, used with modelId instead of model." },
         modelId: { type: "string", description: "Model ID, used with provider instead of model." },
         name: { type: "string", description: "Display name for the new session." },
-        host: { type: "string", description: "Host id or label from list_sessions; defaults to this machine." },
+        host: { type: "string", description: "Host id or label from list_sessions; defaults to the calling session's host." },
       },
     },
   },
@@ -140,11 +140,15 @@ export interface AgentToolSessionOps {
   listHosts(): AgentToolHost[];
   createSession(input: AgentToolCreateSessionInput): Promise<{ sessionId: string }>;
   deliver(input: AgentToolDeliverInput): Promise<AgentToolDeliverResult>;
+  /** The host a session lives on; null when no host has it. */
+  sessionHostId(sessionId: string): Promise<string | null>;
 }
 
 export interface AgentToolContext {
   sourceSessionId: string;
   sourceCwd: string;
+  /** The host the calling session runs on; "local" is this machine. */
+  sourceHostId: string;
   /** The off-by-default Settings gate (lib/web-settings agentToolsEnabled). */
   enabled: boolean;
   guard: AgentToolGuard;
@@ -292,13 +296,18 @@ function checkMessageLength(message: string, field: string): void {
   }
 }
 
-/** `host` matched case-insensitively against ids and labels; absent means this machine. */
-function resolveHost(hosts: AgentToolHost[], host: string | undefined): AgentToolHost {
-  const wanted = (host ?? "local").toLowerCase();
+/** `host` matched case-insensitively against ids and labels. */
+function resolveHost(hosts: AgentToolHost[], host: string): AgentToolHost {
+  const wanted = host.toLowerCase();
   const match = hosts.find((h) => h.id.toLowerCase() === wanted || h.label.toLowerCase() === wanted);
   if (!match) throw new Error(`Unknown host "${host}". Known hosts: ${hosts.map((h) => h.label).join(", ")}.`);
   if (!match.online) throw new Error(`${match.label} is offline.`);
   return match;
+}
+
+/** A host's allowAgentStart covers its agents' calls; a remote caller always asks before reaching this machine. */
+function startsUnasked(target: AgentToolHost, sourceHostId: string): boolean {
+  return target.allowAgentStart && !(target.id === "local" && sourceHostId !== "local");
 }
 
 /**
@@ -338,8 +347,8 @@ export async function executeAgentTool(
     const { provider, modelId } = parseModel(record);
     const name = optionalString(record, "name");
     if (name && name.length > 200) throw new Error("Agent tool argument \"name\" exceeds 200 characters.");
-    const host = resolveHost(ops.listHosts(), optionalString(record, "host"));
-    if (!host.allowAgentStart && !(await ctx.confirm(`Start a session on ${host.label} in ${cwd}?`))) {
+    const host = resolveHost(ops.listHosts(), optionalString(record, "host") ?? ctx.sourceHostId);
+    if (!startsUnasked(host, ctx.sourceHostId) && !(await ctx.confirm(`Start a session on ${host.label} in ${cwd}?`))) {
       throw new Error(`The user declined to start a session on ${host.label}.`);
     }
     const created = await ops.createSession({
@@ -365,6 +374,19 @@ export async function executeAgentTool(
   const delivery = parseDelivery(record);
   const { wait, waitTimeoutMs } = parseWait(record);
   const depth = ctx.guard.checkChainDepth(ctx.sourceSessionId);
+  // A remote agent reaching a session on another machine asks first, as new_session does.
+  if (ctx.sourceHostId !== "local") {
+    const targetHostId = await ops.sessionHostId(sessionId);
+    if (!targetHostId) throw new Error(`Session not found: ${sessionId}`);
+    const hosts = ops.listHosts();
+    const target = hosts.find((h) => h.id === targetHostId);
+    if (targetHostId !== ctx.sourceHostId && !(target && startsUnasked(target, ctx.sourceHostId))) {
+      const sourceLabel = hosts.find((h) => h.id === ctx.sourceHostId)?.label ?? ctx.sourceHostId;
+      if (!(await ctx.confirm(`Send a message from a session on ${sourceLabel} to session ${sessionId} on ${target?.label ?? targetHostId}?`))) {
+        throw new Error(`The user declined to send a message to session ${sessionId}.`);
+      }
+    }
+  }
   const result = await ops.deliver({
     sessionId,
     message: formatAttributedMessage(ctx.sourceSessionId, message),
