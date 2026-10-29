@@ -99,14 +99,21 @@ export function createHost(label: string): { host: HostRecord; token: string } {
     lastSeenAt: null,
     allowAgentStart: false,
   };
-  saveHosts([...loadHosts(), host]);
+  saveHosts([...readHosts(), host]);
   return { host, token };
 }
 
+export class UnknownHostError extends Error {
+  readonly name = "UnknownHostError";
+  constructor() {
+    super("Unknown host");
+  }
+}
+
 export function updateHost(id: string, updates: { label?: string; allowAgentStart?: boolean }): HostRecord {
-  const hosts = loadHosts();
+  const hosts = readHosts();
   const host = hosts.find((h) => h.id === id);
-  if (!host) throw new Error("Unknown host");
+  if (!host) throw new UnknownHostError();
   if (updates.label !== undefined) host.label = normalizeLabel(updates.label);
   if (updates.allowAgentStart !== undefined) host.allowAgentStart = updates.allowAgentStart;
   saveHosts(hosts);
@@ -114,7 +121,7 @@ export function updateHost(id: string, updates: { label?: string; allowAgentStar
 }
 
 export function revokeHost(id: string): boolean {
-  const hosts = loadHosts();
+  const hosts = readHosts();
   const remaining = hosts.filter((h) => h.id !== id);
   if (remaining.length === hosts.length) return false;
   saveHosts(remaining);
@@ -135,7 +142,13 @@ export function hostForToken(token: string): HostRecord | null {
 }
 
 export function touchHost(id: string, at: string): void {
-  const hosts = loadHosts();
+  // Never rewrite a registry that cannot be read: that would drop every other host's token.
+  let hosts: HostRecord[];
+  try {
+    hosts = readHosts();
+  } catch {
+    return;
+  }
   const host = hosts.find((h) => h.id === id);
   if (!host) return;
   host.lastSeenAt = at;
