@@ -22,6 +22,8 @@ export interface RpcTransport {
   onResync?(listener: () => void): void;
   /** The child died while its host link was down. Remote transports only. */
   readonly lost?: boolean;
+  /** Correlates log lines: the child's pid here, the channel id on a linked host. */
+  readonly id?: string;
 }
 
 export function spawnLocalRpcTransport(options: {
@@ -103,6 +105,7 @@ export function spawnLocalRpcTransport(options: {
   };
 
   return {
+    id: child.pid === undefined ? undefined : String(child.pid),
     write(line, callback) {
       if (child.stdin.destroyed) {
         callback(new Error("RPC process is not running"));
