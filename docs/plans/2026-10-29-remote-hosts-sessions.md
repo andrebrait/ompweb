@@ -19,6 +19,7 @@
 - Every new UI string gets a key in every file under `lib/i18n/locales/`.
 - Live data reaches the browser only through `/api/events` channels; never add an `EventSource`.
 - Values (copy them exactly): `LINK_PROTOCOL_VERSION = 1`; ping every 15 s; host offline after 30 s without `pong`; per-channel daemon buffer 8 MB; uplink flush every 16 ms or at 256 KB; uplink POST cap 16 MB; blob upload cap 64 MB; results over 1 MB go through the blob leg; op timeout 30 s; reconnect backoff 1 s doubling to 60 s with ±20 % jitter; token = 32 random bytes base64url, stored as `sha256` hex.
+- Line numbers in this plan are hints from an older checkout; locate code by symbol name.
 - Files: `<agent dir>/omp-web/hosts.json` (main) and `<agent dir>/omp-web/host.json` (daemon), both mode 0600, written temp-file + rename.
 - Copy: "This machine"; "Not available on remote hosts yet"; "<host> is offline. The run continues there; it reconnects automatically."; "upgrade omp-web on this host"; "needs upgrade (host vN, server vM)"; "omp not installed"; "Start a session on <host> in <cwd>?".
 
@@ -108,8 +109,6 @@ Pure refactor: `RpcProcess` stops owning `child_process`.
   export function revokeHost(id: string): boolean;
   export function hostForToken(token: string): HostRecord | null; // timingSafeEqual on sha256 hex
   export function touchHost(id: string, at: string): void;
-  export function localAllowAgentStart(): boolean; // stored as top-level "localAllowAgentStart" in hosts.json, default false
-  export function setLocalAllowAgentStart(value: boolean): void;
   ```
 - [ ] **Step 1: Write failing tests** (temp `PI_CODING_AGENT_DIR`): `createHost` returns a 43-char base64url token and the file holds only its sha256; `hostForToken(token)` returns the record and `hostForToken(token + "x")` returns `null`; `revokeHost` then `hostForToken(token)` is `null`; the file mode is `0o600` on POSIX; a corrupt `hosts.json` loads as `[]` without throwing.
 - [ ] **Step 2: Run** `node --experimental-strip-types --test lib/hosts/registry.test.mjs` → FAIL.
@@ -145,8 +144,8 @@ Behavior-preserving: everything still runs on `LocalHost`.
   }
   export const localHost: Host; // lib/hosts/local-host.ts
   ```
-  `startRpcSession(sessionId, sessionFile, cwd, toolNames?, advisor?, recordedCwd?, host = localHost)` (the `launchConfig` parameter is removed; the host computes it). `AgentSessionWrapper` gets `readonly host: Host` and uses it at every site listed above; sync sites that need `sessionFileExists` become `void this.host.sessionFileExists(f).then(...)`. `resolveSpawnCwdResult` and `launchConfigForCwd` move into `local-host.ts`.
-- [ ] **Step 1: Write failing test** `wrapper spawns through its host`: a fake `Host` whose `spawnRpc` returns the existing in-memory child as an `RpcTransport` and records the `SpawnRequest`; `startRpcSession("s1", "", "/w", undefined, false, null, fakeHost)` resolves, the recorded request equals `{cwd:"/w", recordedCwd:null, sessionFile:"", toolNames:undefined, advisor:false}`, and an `agent_end` frame calls `fakeHost.invalidateSessionLists`.
+  `startRpcSession(sessionId, sessionFile, cwd, toolNames?, advisor?, recordedCwd?, spawnModel?, host = localHost)` (the `launchConfig` parameter is removed — the host computes it — and every caller is updated; `spawnModel` keeps its current meaning). `SpawnRequest` also carries `spawnModel?: string`, which the host turns into `--model` exactly as `buildSessionSpawnArgs` does today. `AgentSessionWrapper` gets `readonly host: Host` and uses it at every site listed above; sync sites that need `sessionFileExists` become `void this.host.sessionFileExists(f).then(...)`. `resolveSpawnCwdResult` and `launchConfigForCwd` move into `local-host.ts`.
+- [ ] **Step 1: Write failing test** `wrapper spawns through its host`: a fake `Host` whose `spawnRpc` returns the existing in-memory child as an `RpcTransport` and records the `SpawnRequest`; `startRpcSession("s1", "", "/w", undefined, false, null, undefined, fakeHost)` resolves, the recorded request equals `{cwd:"/w", recordedCwd:null, sessionFile:"", toolNames:undefined, advisor:false, spawnModel:undefined}`, and an `agent_end` frame calls `fakeHost.invalidateSessionLists`.
 - [ ] **Step 2: Run** `node --experimental-strip-types --test lib/rpc-manager.test.mjs` → the new test FAILS.
 - [ ] **Step 3: Implement** `host.ts`, `local-host.ts` and the wrapper changes.
 - [ ] **Step 4: Run** `npm test` → PASS; `node_modules/.bin/tsc --noEmit` → no errors.
@@ -262,10 +261,10 @@ Behavior-preserving locally; this is the code the daemon will call.
 
 **Interfaces:**
 - Consumes: Task 3 registry, Task 6 `listHosts`/`onHostsChange`/`closeHostLink`.
-- Produces: `GET /api/hosts` → `{ hosts: [{id,label,status,ompVersion,platform,lastSeenAt,allowAgentStart}], localAllowAgentStart }` with `local` first; `POST {label}` → `{host, token, command}` where `command` is `omp-web host login --url <origin>`; `PATCH {id, label?, allowAgentStart?}` (`id:"local"` only accepts `allowAgentStart`); `DELETE ?id=` revokes and calls `closeHostLink`. Channel `hosts` sends the `GET` body on subscribe and on every change.
+- Produces: `GET /api/hosts` → `{ hosts: [{id,label,status,ompVersion,platform,lastSeenAt,allowAgentStart}] }` with `local` first (`allowAgentStart` omitted for `local`); `POST {label}` → `{host, token, command}` where `command` is `omp-web host login --url <origin>`; `PATCH {id, label?, allowAgentStart?}` (`id:"local"` → 400); `DELETE ?id=` revokes and calls `closeHostLink`. Channel `hosts` sends the `GET` body on subscribe and on every change.
 - [ ] **Step 1: Write failing tests**: POST returns a token once and a later GET never contains `token` or `tokenHash`; DELETE then a link GET with that token → 401; PATCH `id:"local", label:"x"` → 400; a `hosts` subscription receives a frame when `onHostsChange` fires.
 - [ ] **Step 2: Run** → FAIL.
-- [ ] **Step 3: Implement** the route, channel and `HostsConfig` (list with status dot and copy above, Add host dialog that shows token + command once with copy buttons, rename, revoke via `ConfirmDialog`, `allowAgentStart` switch per host and for "This machine").
+- [ ] **Step 3: Implement** the route, channel and `HostsConfig` (list with status dot and copy above, Add host dialog that shows token + command once with copy buttons, rename, revoke via `ConfirmDialog`, `allowAgentStart` switch per remote host).
 - [ ] **Step 4: Run** tests → PASS; `npm run dev`: add a host, copy the command, run `omp-web host login` + `omp-web host --allow-http` against `http://127.0.0.1:30178` with a temp `HOME`, and see the host turn online in Settings.
 - [ ] **Step 5: Commit** `feat(hosts): manage linked hosts in Settings`.
 
@@ -284,21 +283,22 @@ Behavior-preserving locally; this is the code the daemon will call.
 - [ ] **Step 4: Run** tests → PASS; `npm run lint`; with the Task 8 setup, start a session on the linked host from the UI, stop the daemon mid-run and see the banner, restart it and see the run finish.
 - [ ] **Step 5: Commit** `feat(hosts): group the sidebar by host`.
 
-### Task 10: `start_session` server host tool
+### Task 10: Agent tools reach remote hosts
+
+omp-web already answers `list_sessions`, `new_session` and `send_to_session` itself (`lib/agent-tools.ts`, gated by the `agentToolsEnabled` web setting, #275). Extend them; add no new tool.
 
 **Files:**
-- Create: `lib/hosts/start-session-tool.ts`
-- Modify: `lib/rpc-manager.ts` (`set_host_tools` merge at 1787, `host_tool_call` at 810, `extension_ui_response` handling)
-- Test: `lib/hosts/start-session-tool.test.mjs`
+- Modify: `lib/agent-tools.ts`, `lib/rpc-manager.ts` (`createAgentToolOps`, and `extension_ui_response` handling for the server-owned confirm)
+- Test: `lib/agent-tools.test.mjs` (extend)
 
 **Interfaces:**
-- Consumes: `startRpcSession`, `getHost`, registry `allowAgentStart`/`localAllowAgentStart`.
-- Produces: tool definition `{ name: "start_session", description, parameters: { type:"object", required:["host","cwd","prompt"], properties: { host:{type:"string"}, cwd:{type:"string"}, prompt:{type:"string"}, model:{type:"string", description:"provider/modelId"} } } }`, registered by the wrapper after `ready` and merged into every `set_host_tools` the tab sends. `host` matches a host id or label case-insensitively, or `local`. Result text: `Started session <id> on <label>. Open: /?session=<id>`. When the host's allow flag is off, the wrapper emits a server-owned `extension_ui_request` `{method:"confirm", title:"Start a session on <host> in <cwd>?"}` through the same path omp's requests take (so the input-needed notification fires) and consumes the matching `extension_ui_response` instead of forwarding it to omp.
-- [ ] **Step 1: Write failing tests**: allow off + user confirms → session started and result names it; allow off + user declines → error result `"declined"`, no session; allow on → no confirm frame; unknown host → error result listing known host labels; offline host → error result `"<label> is offline"`; a tab's `set_host_tools([open_url])` sent to omp contains both `open_url` and `start_session`.
-- [ ] **Step 2: Run** → FAIL.
+- Consumes: `getHost`, `listHosts` (Task 6), `hostForSessionId`, `listSessionsAllHosts` (Task 7), registry `allowAgentStart` (Task 3).
+- Produces: `new_session` gains `host: { type: "string", description: "Host id or label from list_sessions; defaults to this machine." }`; `AgentToolCreateSessionInput` gains `hostId: string`; `AgentToolSessionSummary` gains `host: string` (the host label) and `list_sessions` covers every host. `host` matches an id or label case-insensitively; `"local"` and "This machine" mean the local host. `send_to_session` resolves its target through `hostForSessionId`. Creating a session on a remote host whose `allowAgentStart` is off first emits a server-owned `extension_ui_request` `{method:"confirm", title:"Start a session on <host> in <cwd>?"}` on the calling session through the same path omp's requests take (so the input-needed notification fires) and consumes the matching `extension_ui_response` instead of forwarding it to omp. Local creation keeps today's behavior.
+- [ ] **Step 1: Write failing tests**: remote host, allow off, user confirms → session created on that host; allow off, user declines → error result containing `declined`, no session; allow on → no confirm frame; unknown host → error result listing known host labels; offline host → error result `<label> is offline`; `list_sessions` with a remote session includes its host label; omitted `host` → local, no confirm.
+- [ ] **Step 2: Run** `node --experimental-strip-types --test lib/agent-tools.test.mjs` → FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** `npm test` → PASS.
-- [ ] **Step 5: Commit** `feat(hosts): let agents start sessions on a host`.
+- [ ] **Step 5: Commit** `feat(hosts): let agent tools start and reach sessions on a host`.
 
 ### Task 11: Documentation and acceptance
 
