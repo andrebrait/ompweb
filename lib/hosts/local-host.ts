@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from "fs";
+import { existsSync, realpathSync, statSync } from "fs";
 import { homedir } from "os";
 import { comparableProjectPath } from "../comparable-path";
 import { getAgentEnvOverrides } from "../omp/agent-env";
@@ -88,10 +88,18 @@ export function resolveSpawnCwd(recordedCwd?: string | null): string {
  * would let file tool calls edit an unexpected repo with no signal.
  */
 export function resolveSpawnCwdResult(recordedCwd?: string | null): { cwd: string; fellBack: boolean } {
-  if (recordedCwd && existsSync(recordedCwd)) return { cwd: recordedCwd, fellBack: false };
+  // A file at the path exists but cannot be a cwd: spawn() would fail with ENOTDIR.
+  const isDirectory = (path: string) => {
+    try {
+      return statSync(path).isDirectory();
+    } catch {
+      return false;
+    }
+  };
+  if (recordedCwd && isDirectory(recordedCwd)) return { cwd: recordedCwd, fellBack: false };
   try {
     const serverCwd = process.cwd();
-    if (serverCwd && existsSync(serverCwd)) return { cwd: serverCwd, fellBack: true };
+    if (serverCwd && isDirectory(serverCwd)) return { cwd: serverCwd, fellBack: true };
   } catch {
     // process.cwd() itself throws when the server's own cwd was removed.
   }
