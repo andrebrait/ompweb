@@ -29,11 +29,13 @@ test("a live session's place comes from the freshest source, with that source's 
   assert.deepEqual(livePlace("s", null, {}, new Map(), new Map(), selected), selected);
 });
 
-test("hostsCameOnline: only a link-up transition after the first snapshot counts", async () => {
+test("hostsCameOnline: a link-up transition, or a remote host already linked at the first snapshot", async () => {
   const { hostsCameOnline } = await jiti.import("./SessionSidebar-helpers.ts");
   const row = (id, status) => ({ id, status });
   const local = row("local", "online");
-  assert.equal(hostsCameOnline(null, [local, row("h1", "online")]), false, "first snapshot: load already fetched");
+  assert.equal(hostsCameOnline(null, [local]), false, "first snapshot, this machine only: the load has its sessions");
+  assert.equal(hostsCameOnline(null, [local, row("h1", "offline")]), false, "first snapshot, remote host offline");
+  assert.equal(hostsCameOnline(null, [local, row("h1", "online")]), true, "first snapshot, remote host linked after the load");
   assert.equal(hostsCameOnline([local, row("h1", "offline")], [local, row("h1", "online")]), true, "offline -> online");
   assert.equal(hostsCameOnline([local, row("h1", "needs-upgrade")], [local, row("h1", "omp-missing")]), true, "linked but unusable -> linked");
   assert.equal(hostsCameOnline([local], [local, row("h2", "online")]), true, "a new host appearing online");

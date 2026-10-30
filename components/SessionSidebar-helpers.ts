@@ -1,6 +1,6 @@
 import { isLinkUp, type HostStatus } from "@/lib/hosts/host";
 import type { SessionInfo } from "@/lib/types";
-import type { ProjectSortMode } from "@/lib/project-ordering";
+import { LOCAL_HOST_ID, type ProjectSortMode } from "@/lib/project-ordering";
 import { comparableProjectPath } from "@/lib/comparable-path";
 interface WorktreeEntry {
   path: string;
@@ -222,12 +222,14 @@ function livePlace(
   return (optimistic?.id === id ? optimistic : undefined) ?? running[id] ?? exited.get(id) ?? known.get(id) ?? selected;
 }
 /** True when a host is link-up in `next` but was not in `prev` (a host new to
- *  the list counts). No previous snapshot means the initial load covers it. */
+ *  the list counts). On the first snapshot (`prev` null) only a linked remote
+ *  host counts: the initial load already has this machine's sessions, but a
+ *  remote host may have linked after that load. */
 function hostsCameOnline(
   prev: ReadonlyArray<{ id: string; status: HostStatus }> | null,
   next: ReadonlyArray<{ id: string; status: HostStatus }>,
 ): boolean {
-  if (!prev) return false;
+  if (!prev) return next.some((host) => host.id !== LOCAL_HOST_ID && isLinkUp(host.status));
   const wasUp = new Set(prev.filter((host) => isLinkUp(host.status)).map((host) => host.id));
   return next.some((host) => isLinkUp(host.status) && !wasUp.has(host.id));
 }

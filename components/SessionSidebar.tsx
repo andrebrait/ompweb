@@ -391,13 +391,16 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
     }
   }, []);
 
-  // A host's sessions only exist server-side once its link is up, and nothing
-  // else tells the list so: refetch when a host comes online.
+  // A host's sessions and workspaces only exist server-side once its link is
+  // up, and nothing else tells the list so: refetch both when a host comes online.
   const prevHostsRef = useRef<typeof hosts>(null);
   useEffect(() => {
-    if (hosts && hostsCameOnline(prevHostsRef.current, hosts)) scheduleRefresh();
+    if (hosts && hostsCameOnline(prevHostsRef.current, hosts)) {
+      scheduleRefresh();
+      void loadProjects();
+    }
     if (hosts) prevHostsRef.current = hosts;
-  }, [hosts, scheduleRefresh]);
+  }, [hosts, loadProjects, scheduleRefresh]);
 
   useEffect(() => {
     // Live running status and session-list invalidations arrive on the shared
