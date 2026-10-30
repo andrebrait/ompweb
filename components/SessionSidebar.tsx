@@ -47,6 +47,7 @@ import {
   type WorktreeContext,
   type WorktreeEntry,
   type WorktreeState,
+  hostsCameOnline,
 } from "./SessionSidebar-helpers";
 import { OmpWebTitle, SIDEBAR_BUTTON_TRANSITION, SidebarIconButton, SidebarPortalMenu } from "./SessionSidebar-chrome";
 import { HostGroup, ProjectRow } from "./SessionSidebar-rows";
@@ -389,6 +390,14 @@ export const SessionSidebar = memo(function SessionSidebar({ selectedSessionId, 
       sessionRefreshTimerRef.current = null;
     }
   }, []);
+
+  // A host's sessions only exist server-side once its link is up, and nothing
+  // else tells the list so: refetch when a host comes online.
+  const prevHostsRef = useRef<typeof hosts>(null);
+  useEffect(() => {
+    if (hosts && hostsCameOnline(prevHostsRef.current, hosts)) scheduleRefresh();
+    if (hosts) prevHostsRef.current = hosts;
+  }, [hosts, scheduleRefresh]);
 
   useEffect(() => {
     // Live running status and session-list invalidations arrive on the shared

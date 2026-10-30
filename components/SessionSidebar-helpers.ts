@@ -1,3 +1,4 @@
+import { isLinkUp, type HostStatus } from "@/lib/hosts/host";
 import type { SessionInfo } from "@/lib/types";
 import type { ProjectSortMode } from "@/lib/project-ordering";
 import { comparableProjectPath } from "@/lib/comparable-path";
@@ -220,6 +221,16 @@ function livePlace(
 ): LivePlace {
   return (optimistic?.id === id ? optimistic : undefined) ?? running[id] ?? exited.get(id) ?? known.get(id) ?? selected;
 }
+/** True when a host is link-up in `next` but was not in `prev` (a host new to
+ *  the list counts). No previous snapshot means the initial load covers it. */
+function hostsCameOnline(
+  prev: ReadonlyArray<{ id: string; status: HostStatus }> | null,
+  next: ReadonlyArray<{ id: string; status: HostStatus }>,
+): boolean {
+  if (!prev) return false;
+  const wasUp = new Set(prev.filter((host) => isLinkUp(host.status)).map((host) => host.id));
+  return next.some((host) => isLinkUp(host.status) && !wasUp.has(host.id));
+}
 const MAX_PROJECT_SESSIONS = 5;
 export {
   EMPTY_PROJECT_SET,
@@ -231,6 +242,7 @@ export {
   buildSessionTree,
   displayCwd,
   formatRelativeTime,
+  hostsCameOnline,
   livePlace,
   loadExpandedProjects,
   loadProjectSortMode,
