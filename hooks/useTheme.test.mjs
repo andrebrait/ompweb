@@ -2,11 +2,9 @@ import "../tests/setup-dom.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test, { afterEach } from "node:test";
-import { act, cleanup, renderHook } from "@testing-library/react/pure.js";
-import { createJiti } from "jiti";
+const { act, cleanup, renderHook } = await import("@testing-library/react/pure.js");
 
-const jiti = createJiti(import.meta.url, { tsconfigPaths: true });
-const { nextThemePreference, resolveTheme, isDarkTheme, LIGHT_THEMES, DARK_THEMES, ALL_THEMES, useTheme } = await jiti.import("./useTheme.ts");
+const { nextThemePreference, resolveTheme, isDarkTheme, LIGHT_THEMES, DARK_THEMES, ALL_THEMES, useTheme } = await import("./useTheme.ts");
 
 afterEach(cleanup);
 
@@ -57,10 +55,9 @@ test("each theme's browser chrome color is its CSS --bg-panel, the top bar's col
   const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   for (const { id, panel } of ALL_THEMES) {
     const selector = id === "light" ? ":root" : id === "omp" ? "html.omp" : `html.theme-${id}`;
-    const start = css.search(new RegExp(`(^|, )${selector.replace(".", "\\.")} \\{`, "m"));
-    assert.notEqual(start, -1, `${id} has a CSS block`);
-    const block = css.slice(start, css.indexOf("}", start));
-    assert.equal(block.match(/--bg-panel:\s*(#[0-9A-Fa-f]{6})/)?.[1].toUpperCase(), panel, id);
+    // The first `:root` block holds the self-hosted font variables; take the one that sets --bg-panel.
+    const match = css.match(new RegExp(`(^|, )${selector.replace(".", "\\.")} \\{[^}]*--bg-panel:\\s*(#[0-9A-Fa-f]{6})`, "m"));
+    assert.equal(match?.[2].toUpperCase(), panel, id);
   }
 });
 
