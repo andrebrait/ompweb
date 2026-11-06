@@ -459,6 +459,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const trimmedValue = value.trimStart();
   const bashMode = attachedImages.length === 0 && attachedTextFiles.length === 0 && attachedUploads.length === 0 && trimmedValue.startsWith("!");
   const bashExcluded = bashMode && trimmedValue.startsWith("!!");
+  // Side questions stay separate from the main run's queue and Stop action.
+  const btwMode = /^\/btw(\s|$)/.test(trimmedValue);
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
   const [slashMatch, setSlashMatch] = useState<SlashQueryMatch | null>(null);
@@ -1139,9 +1141,10 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     if (!msg && !attachedImagesRef.current.length && !attachedTextFilesRef.current.length && !attachedUploadsRef.current.length) return;
     // `!cmd` runs right away during a run too, as in omp's terminal; it is never queued as text.
     const shellCommand = msg.startsWith("!") && !attachedImagesRef.current.length && !attachedTextFilesRef.current.length && !attachedUploadsRef.current.length;
-    if (submissionBlockedRef.current || (isStreaming && !shellCommand)) return;
+    if (submissionBlockedRef.current) return;
     onAudioUnlock?.();
     if (sendSideQuestion(msg, overrideText)) return;
+    if (isStreaming && !shellCommand) return;
     if (rejectsPendingUploads()) return;
     const composedMessage = composeMessageWithTextAttachments(msg, attachedTextFilesRef.current);
     if (!attachedImagesRef.current.length && !attachedTextFilesRef.current.length && !attachedUploadsRef.current.length && msg.startsWith("/") && onBuiltinCommand) {
@@ -1682,7 +1685,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const imageUploads = attachedUploads.filter((upload) => upload.previewUrl !== null);
   const fileUploads = attachedUploads.filter((upload) => upload.previewUrl === null);
   const primaryActionQueuesMessage =
-    isStreaming
+    isStreaming && !btwMode
     && (Boolean(value.trim()) || hasAttachments || dictationCapturing)
     && Boolean(onFollowUp);
   // The button follows the same Settings choice as Enter: soft keyboards have no
@@ -2983,7 +2986,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
             role="status"
             aria-live="polite"
             style={{
-              border: `1px solid ${bashMode ? "var(--tool-bg)" : "color-mix(in srgb, var(--border) 70%, transparent)"}`,
+              border: `1px solid ${btwMode ? "var(--accent)" : bashMode ? "var(--tool-bg)" : "color-mix(in srgb, var(--border) 70%, transparent)"}`,
               borderBottom: "none",
               borderRadius: queuedCount > 0 ? 0 : "var(--radius-card) var(--radius-card) 0 0",
               background: "var(--bg-panel)",
@@ -3007,8 +3010,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
             style={{
               display: "flex",
               flexDirection: "column",
-              background: "var(--bg)",
-              border: `1px solid ${bashMode ? "var(--tool-bg)" : "color-mix(in srgb, var(--border) 70%, transparent)"}`,
+              background: btwMode ? "color-mix(in srgb, var(--accent) 8%, var(--bg))" : "var(--bg)",
+              border: `1px solid ${btwMode ? "var(--accent)" : bashMode ? "var(--tool-bg)" : "color-mix(in srgb, var(--border) 70%, transparent)"}`,
               borderRadius: (queuedCount > 0 || Boolean(statusText)) ? "0 0 var(--radius-card) var(--radius-card)" : "var(--radius-card)",
               padding: "12px 12px 10px",
               boxShadow: "var(--shadow-card)",
@@ -3759,7 +3762,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                   : <ListChecks size={13} strokeWidth={2} aria-hidden="true" />}
                 {t(primaryActionMode === "steer" ? "chatInput.steer" : "chatInput.queue")}
               </button>
-            ) : isStreaming ? (
+            ) : isStreaming && !btwMode ? (
               <button
                 type="button"
                 className="composer-primary-action"
